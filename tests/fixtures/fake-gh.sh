@@ -11,6 +11,8 @@ case "$1 $2" in
          if [ -n "$FAKE_GH_ISSUE_EXTRA" ]; then printf '%s\n' "$FAKE_GH_ISSUE_EXTRA"; fi ;;
     esac ;;
   "issue comment"|"pr comment") echo "--- comment on #$3:" >> "$FAKE_GH_LOG"; cat >> "$FAKE_GH_LOG"; echo "https://github.com/owner/repo/issues/$3#issuecomment-1" ;;
+  "issue create") n=$(($(cat "$FAKE_GH_LOG.created" 2>/dev/null || echo 100) + 1)); echo "$n" > "$FAKE_GH_LOG.created"
+                  echo "--- created issue: $*" >> "$FAKE_GH_LOG"; echo "https://github.com/owner/repo/issues/$n" ;;
   "issue list")  printf '%s' "${FAKE_GH_ISSUES:-[]}" ;;
   "pr list")     printf '%s' "${FAKE_GH_PRS:-[]}" ;;
   "issue edit"|"label create") ;;

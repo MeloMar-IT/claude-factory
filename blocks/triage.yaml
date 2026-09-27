@@ -1,0 +1,55 @@
+name: Triage ticket (route by size)
+category: Claude
+description: "Sizes the ticket and routes it: ROUTE: SMALL (skip planning), FEATURE (plan first), SPLIT (create sub-issues) or NEEDS_INFO (ask questions). Wire the routes in your flow."
+vars:
+  github_repo: owner/repo
+  issue: ""
+  auto_subtasks: "no"
+steps:
+  - id: triage
+    type: claude
+    model: sonnet
+    permission_mode: dontAsk
+    allowed_tools: [Read, Glob, Grep, "Bash(git log*)", "Bash(ls*)"]
+    prompt: |
+      You triage tickets for an automated coding pipeline. Look at the codebase just enough
+      to judge the ticket below. Do NOT modify files.
+
+      {{steps.pull_ticket.output}}
+      {{task}}
+
+      Known lessons for this repo:
+      {{learnings}}
+
+      Decide one route and end your answer with exactly one of these lines:
+      ROUTE: SMALL        — a clear, local change (a few files); no plan needed
+      ROUTE: FEATURE      — clear but bigger; needs a plan first
+      ROUTE: SPLIT        — too big for one change; list 2-6 independent sub-tasks above the
+                            route line, one per line as: SUBTASK: <title> :: <one-paragraph description>
+      ROUTE: NEEDS_INFO   — critical information is missing; list the specific questions above
+
+      Before the route line, give a two-sentence justification.
+    fail_if: "^ROUTE: (?!SMALL|FEATURE|SPLIT|NEEDS_INFO)"
+
+  - id: split_ticket
+    type: shell
+    jump_only: true
+    description: Create one GitHub issue per SUBTASK line and link them from the ticket
+    run: |
+      R="$FACTORY_VAR_GITHUB_REPO"; N="$FACTORY_VAR_ISSUE"
+      label=""; [ "$FACTORY_VAR_AUTO_SUBTASKS" = yes ] && label="claude-factory"
+      created=""
+      printf '%s\n' "$FACTORY_OUT_TRIAGE" | grep '^SUBTASK:' > subtasks.txt || { echo "no SUBTASK lines"; exit 1; }
+      while IFS= read -r line; do
+        rest=${line#SUBTASK: }; title=${rest%% :: *}; desc=${rest#* :: }
+        body=$(printf 'Part of #%s\n\n%s\n\n<!-- claude-factory run=%s -->\n' "$N" "$desc" "$FACTORY_RUN_ID")
+        url=$(gh issue create --repo "$R" --title "$title" --body "$body" ${label:+--label "$label"})
+        created="$created
+      - $url"
+      done < subtasks.txt
+      rm -f subtasks.txt
+      { echo "🤖 **claude-factory** split this ticket into smaller ones:"; printf '%s\n' "$created"
+        [ -n "$label" ] && echo && echo "They are labelled \`claude-factory\` and will be picked up automatically."
+        echo; echo "<!-- claude-factory run=$FACTORY_RUN_ID -->"; } \
+        | gh issue comment "$N" --repo "$R" --body-file -
+    on_success: end

@@ -21,7 +21,8 @@ for (const line of prompt.split("\n")) {
 }
 // Canned answers for the built-in blocks, so whole flows can run offline.
 let canned;
-if (prompt.includes("PLAN_STATUS: NEEDS_INFO")) canned = process.env.FAKE_PLAN ?? "1. change feature.txt\nPLAN_STATUS: READY";
+if (prompt.includes("You triage tickets")) canned = process.env.FAKE_TRIAGE ?? "Small change.\nROUTE: SMALL";
+else if (prompt.includes("PLAN_STATUS: NEEDS_INFO")) canned = process.env.FAKE_PLAN ?? "1. change feature.txt\nPLAN_STATUS: READY";
 else if (prompt.includes("VERDICT: APPROVE")) canned = "Looks good.\nVERDICT: APPROVE";
 else if (prompt.includes("CI failed on this branch")) {
   writeFileSync("ci-fix.txt", "fixed\n");

@@ -1,0 +1,17 @@
+name: Pull ticket from Jira
+category: Jira
+description: "Reads Jira issue var ticket (e.g. PROJ-123): summary, description, comments. Needs env JIRA_BASE_URL, JIRA_EMAIL, JIRA_API_TOKEN. Output id is pull_ticket, so plan/code blocks use it."
+vars:
+  ticket: ""
+steps:
+  - id: pull_ticket
+    type: shell
+    run: |
+      case "$FACTORY_VAR_TICKET" in *[!A-Za-z0-9-]*|'') echo "set var ticket to a Jira key like PROJ-123"; exit 1;; esac
+      : "${JIRA_BASE_URL:?set JIRA_BASE_URL}" "${JIRA_EMAIL:?set JIRA_EMAIL}" "${JIRA_API_TOKEN:?set JIRA_API_TOKEN}"
+      curl -sfS -u "$JIRA_EMAIL:$JIRA_API_TOKEN" -H "Accept: application/json" \
+        "$JIRA_BASE_URL/rest/api/3/issue/$FACTORY_VAR_TICKET?fields=summary,description,comment,status" \
+      | jq -r '
+          def text: [.. | objects | select(.type == "text") | .text] | join(" ");
+          "# \(.key): \(.fields.summary)\nStatus: \(.fields.status.name // "?")\n\n\(.fields.description | if . then text else "" end)\n"
+          + ([.fields.comment.comments[]? | "\n--- comment by \(.author.displayName):\n\(.body | text)"] | join("\n"))'

@@ -1,0 +1,15 @@
+name: Pull ticket from Linear
+category: Linear
+description: "Reads Linear issue var ticket (e.g. ENG-123) with its comments. Needs env LINEAR_API_KEY. Output id is pull_ticket, so plan/code blocks use it."
+vars:
+  ticket: ""
+steps:
+  - id: pull_ticket
+    type: shell
+    run: |
+      case "$FACTORY_VAR_TICKET" in *[!A-Za-z0-9-]*|'') echo "set var ticket to a Linear id like ENG-123"; exit 1;; esac
+      : "${LINEAR_API_KEY:?set LINEAR_API_KEY}"
+      jq -n --arg id "$FACTORY_VAR_TICKET" '{query: "query($id: String!) { issue(id: $id) { identifier title description url state { name } comments { nodes { body user { name } } } } }", variables: {id: $id}}' \
+      | curl -sfS -H "Authorization: $LINEAR_API_KEY" -H "Content-Type: application/json" --data @- "${LINEAR_API_URL:-https://api.linear.app/graphql}" \
+      | jq -re '.data.issue | "# \(.identifier): \(.title)\n\(.url)\nState: \(.state.name)\n\n\(.description // "")\n"
+          + ([.comments.nodes[] | "\n--- comment by \(.user.name // "someone"):\n\(.body)"] | join("\n"))'

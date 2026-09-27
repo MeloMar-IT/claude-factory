@@ -82,6 +82,72 @@ write("github-issue", {
   });
 }
 
+// ── github-auto: triage decides small / feature / split / questions ──
+{
+  const s = [
+    ...steps("github-repo", "pull-ticket", "pull-repo", "triage", "plan", "push-plan", "code", "run-tests", "code-review", "commit", "push", "open-pr", "ci", "push-result", "learn"),
+  ];
+  patch(s, "triage", {
+    routes: [
+      { if: "^ROUTE: NEEDS_INFO", goto: "ask_for_info" },
+      { if: "^ROUTE: SPLIT", goto: "split_ticket" },
+      { if: "^ROUTE: SMALL", goto: "implement" },
+    ],
+  });
+  patch(s, "ask_for_info", { resume_from: "pull_ticket" });
+  patch(s, "address_review", { on_success: "run_tests" });
+  write("github-auto", {
+    title: "GitHub ticket → triage → the right amount of process",
+    lines: [
+      "factory run github-auto --var github_repo=owner/repo --var issue=42",
+      "",
+      "triage ─┬─ SMALL      → code → tests → review → PR → CI",
+      "        ├─ FEATURE    → plan → post plan → code → …",
+      "        ├─ SPLIT      → create sub-issues (labelled claude-factory if auto_subtasks=yes) → end",
+      "        └─ NEEDS_INFO → ask on the ticket → stop (resumes when answered)",
+    ],
+  }, {
+    description: "Triage the ticket, then small fix, full feature, split into sub-issues, or ask questions",
+    workspace: "empty",
+    defaults: { model: "sonnet", timeout_sec: 1800 },
+    limits: { max_cost_usd: 20 },
+    vars: { github_repo: "owner/repo", issue: "", test_cmd: "auto", auto_subtasks: "no" },
+    steps: s,
+  });
+}
+
+// ── jira-ticket / linear-ticket: tickets elsewhere, code in the local repo ──
+for (const [tool, label] of [["jira", "Jira"], ["linear", "Linear"]]) {
+  const s = [
+    ...steps(`${tool}-pull-ticket`, "plan"),
+    ...steps(`${tool}-push-plan`, "code", "run-tests", "code-review", "commit"),
+    { id: "push", type: "shell", run: 'git push -q -u origin HEAD && echo "pushed $(git branch --show-current)"' },
+    ...steps(`${tool}-push-result`),
+  ];
+  // Without GitHub there is nowhere to ask; stop so a human can look at the questions in the run.
+  patch(s, "ask_for_info", {
+    run: 'printf \'%s\n\' "$FACTORY_OUT_PLAN" | sed -E \'/^(PLAN_STATUS|ROUTE):/d\'',
+    on_success: "stop",
+    resume_from: "pull_ticket",
+    description: "Show Claude's questions and stop; answer on the ticket, then resume the run",
+  });
+  patch(s, "address_review", { on_success: "run_tests" });
+  write(`${tool}-ticket`, {
+    title: `${label} ticket → code in this repo → pushed branch`,
+    lines: [
+      `factory run ${tool}-ticket --var ticket=${tool === "jira" ? "PROJ-123" : "ENG-123"}   (from inside your repo)`,
+      tool === "jira" ? "needs env JIRA_BASE_URL, JIRA_EMAIL, JIRA_API_TOKEN" : "needs env LINEAR_API_KEY",
+    ],
+  }, {
+    description: `${label} ticket → plan (posted to ${label}) → code → tests → review → commit → push → result on ${label}`,
+    workspace: "worktree",
+    defaults: { model: "sonnet", timeout_sec: 1800 },
+    limits: { max_cost_usd: 15 },
+    vars: { ticket: "", test_cmd: "auto" },
+    steps: s,
+  });
+}
+
 // ── pr-feedback: address review comments on a factory PR ──
 write("pr-feedback", {
   title: "Address review comments on a pull request",

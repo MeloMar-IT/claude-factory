@@ -1,0 +1,17 @@
+name: Push finished result to Linear
+category: Linear
+description: Comments the branch and Claude's change summary on the Linear issue.
+vars:
+  ticket: ""
+steps:
+  - id: linear_push_result
+    type: shell
+    run: |
+      case "$FACTORY_VAR_TICKET" in *[!A-Za-z0-9-]*|'') echo "set var ticket to an issue key like PROJ-123"; exit 1;; esac
+      text=$(printf "✅ claude-factory finished: branch \`%s\`\n\n%s\n" "$(git branch --show-current)" "$FACTORY_OUT_IMPLEMENT")
+      api="${LINEAR_API_URL:-https://api.linear.app/graphql}"
+      # commentCreate needs the issue's UUID, so look it up first.
+      uuid=$(jq -n --arg id "$FACTORY_VAR_TICKET" '{query: "query($id: String!) { issue(id: $id) { id } }", variables: {id: $id}}' \
+        | curl -sfS -H "Authorization: $LINEAR_API_KEY" -H "Content-Type: application/json" --data @- "$api" | jq -re '.data.issue.id')
+      jq -n --arg issueId "$uuid" --arg body "$text" '{query: "mutation($issueId: String!, $body: String!) { commentCreate(input: {issueId: $issueId, body: $body}) { success } }", variables: {issueId: $issueId, body: $body}}' \
+        | curl -sfS -H "Authorization: $LINEAR_API_KEY" -H "Content-Type: application/json" --data @- "$api" | jq -re '"commented: \(.data.commentCreate.success)"'
