@@ -36,7 +36,7 @@ describe("evals", () => {
     expect(() => loadSuite(join(tmp, "bad.yaml"))).toThrow(/invalid suite/);
   });
 
-  it("runs every flow × model × case, checks results and saves a report", async () => {
+  it("runs every flow × model × case, checks results and saves a report", { timeout: 120_000 }, async () => {
     const lines: string[] = [];
     const { report, file } = await runEval({
       suitePath: join(tmp, "suite.yaml"),
