@@ -6,6 +6,7 @@ case "$1 $2" in
   "repo view")   echo "repo: owner/repo"; echo "default branch: main" ;;
   "issue view")
     case "$*" in *"-q .title"*) echo "Add a feature" ;;
+      *"--json comments,labels"*) printf '%s' "${FAKE_GH_COMMENTS:-{\"comments\":[]\}}" ;;
       *) printf '# #%s: Add a feature\nhttps://github.com/owner/repo/issues/%s\n\nPlease add feature.txt\n' "$3" "$3"
          if [ -n "$FAKE_GH_ISSUE_EXTRA" ]; then printf '%s\n' "$FAKE_GH_ISSUE_EXTRA"; fi ;;
     esac ;;
@@ -18,6 +19,7 @@ case "$1 $2" in
   "pr view")
     case "$*" in
       *reviewDecision*) echo "${FAKE_GH_REVIEW_DECISION:-}" ;;
+      *comments,reviews,commits*) printf '%s' "${FAKE_GH_PR_VIEW:-{\"comments\":[],\"reviews\":[],\"commits\":[]\}}" ;;
       *reviews,comments*) printf '%s\n' "${FAKE_GH_PR_COMMENTS:---- alice:\nplease rename x}" ;;
       *number,title,body*) echo "# PR #$3 Some change" ;;
       *url*) [ -f "$FAKE_GH_LOG.pr" ] && cat "$FAKE_GH_LOG.pr" || exit 1 ;;

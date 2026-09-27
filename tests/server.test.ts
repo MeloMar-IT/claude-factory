@@ -92,6 +92,54 @@ describe("ui server", () => {
     expect(list[0]!.runId).toBe(runId);
   });
 
+  const waitFor = async (runId: string, status: string) => {
+    for (let i = 0; i < 100; i++) {
+      const r = (await (await json("GET", `/api/runs/${runId}`)).json()) as { status: string };
+      if (r.status === status) return r;
+      await new Promise((ok) => setTimeout(ok, 100));
+    }
+    throw new Error(`run ${runId} never reached ${status}`);
+  };
+
+  it("approves a waiting run, and serves transcripts, diffs and stats", async () => {
+    const flow = `name: gated
+workspace: inplace
+steps:
+  - {id: talk, type: claude, prompt: "WRITE note.txt hi"}
+  - {id: gate, type: approval, message: "ok?"}
+  - {id: after, type: shell, run: echo after}
+`;
+    const { runId } = (await (await json("POST", "/api/runs", { yaml: flow, task: "t" })).json()) as { runId: string };
+    await waitFor(runId, "waiting");
+    expect((await json("POST", `/api/runs/${runId}/resume`, {})).status).toBe(202); // queued; the run refuses without a decision
+    await waitFor(runId, "waiting");
+    expect((await json("POST", `/api/runs/${runId}/approve`, { note: "go" })).status).toBe(202);
+    const done = (await waitFor(runId, "succeeded")) as unknown as { history: { id: string; output: string }[] };
+    expect(done.history.map((h) => h.id)).toEqual(["talk", "gate", "after"]);
+    expect(done.history[1]!.output).toBe("approved by ui: go");
+
+    const t = (await (await json("GET", `/api/runs/${runId}/transcript/0`)).json()) as { events: { kind: string; name?: string }[] };
+    expect(t.events.some((e) => e.kind === "tool" && e.name === "Write")).toBe(true);
+    expect(t.events.at(-1)!.kind).toBe("result");
+
+    const diff = (await (await json("GET", `/api/runs/${runId}/diff`)).json()) as { patch: string };
+    expect(diff.patch).toBe(""); // not a git repo
+
+    const stats = (await (await json("GET", "/api/stats")).json()) as { totals: { runs: number }; byFlow: { flow: string }[] };
+    expect(stats.totals.runs).toBeGreaterThanOrEqual(2);
+    expect(stats.byFlow.map((f) => f.flow)).toContain("gated");
+  });
+
+  it("reads and validates config", async () => {
+    const cfg = (await (await json("GET", "/api/config")).json()) as { concurrency: number };
+    expect(cfg.concurrency).toBe(2);
+    expect((await json("PUT", "/api/config", { concurrency: 0 })).status).toBe(400);
+    const saved = (await (await json("PUT", "/api/config", { ...cfg, daily_budget_usd: 5, notify: { macos: false } })).json()) as { daily_budget_usd: number };
+    expect(saved.daily_budget_usd).toBe(5);
+    const info = (await (await json("GET", "/api/info")).json()) as { dailyBudget: number };
+    expect(info.dailyBudget).toBe(5);
+  });
+
   it("drafts a flow via claude", async () => {
     // The fake claude echoes the prompt; not valid YAML, so we expect a validation error, not a crash.
     const r = (await (await json("POST", "/api/generate", { request: "tests then fix" })).json()) as { error?: string };

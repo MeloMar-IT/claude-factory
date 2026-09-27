@@ -7,7 +7,11 @@ import { resumeRun, runFlow, type RunSummary } from "./engine/runner.js";
 import { listBlocks } from "./flow/blocks.js";
 import { FACTORY_HOME, listFlows, loadFlow, resolveFlowPath } from "./flow/load.js";
 import { startServer } from "./server/server.js";
-import { parseInterval, watch } from "./watch.js";
+import { loadConfig, WatcherSchema } from "./config.js";
+import { Scheduler } from "./queue/scheduler.js";
+import { Watcher } from "./queue/watcher.js";
+import { installService, serviceStatus, uninstallService } from "./service.js";
+import { fileURLToPath } from "node:url";
 
 const USAGE = `claude-factory — run custom flows of headless Claude Code + shell steps
 
@@ -20,10 +24,13 @@ Usage:
   factory blocks [--repo <dir>]                  List reusable step blocks (the library)
   factory validate <flow|file.yaml>              Check a flow definition
   factory new <name> [--from <flow>] [--global]  Create your own flow (copies a template)
-  factory ui [--port 4777] [--no-open]           Web UI: build flows, start and watch runs
+  factory ui [--port 4777] [--no-open]           Web UI + queue + watchers from config.yaml
+  factory serve [--port 4777]                    Same without opening a browser (for services)
+  factory service install|uninstall|status       Keep \`factory serve\` running as a macOS login agent
   factory watch [flow] --var github_repo=o/r     Every 5 min, run the flow (default github-issue) on
         [--every 5m] [--label claude-factory]    each open issue with the label; results are marked
-        [--max 1] [--once]                       with factory:done / needs-info / failed labels
+        [--max 1] [--once] [--source pr-feedback]  with factory:* status labels; resumes runs when
+                                                 questions are answered or /approve is commented
 
 Run options:
   -t, --task <text>        Task description (or --task-file <path>); optional for ticket flows
@@ -81,6 +88,7 @@ async function main(argv: string[]): Promise<number> {
       global: { type: "boolean" },
       port: { type: "string", short: "p" },
       every: { type: "string" },
+      source: { type: "string" },
       label: { type: "string" },
       max: { type: "string" },
       once: { type: "boolean" },
@@ -165,43 +173,74 @@ async function main(argv: string[]): Promise<number> {
     }
 
     case "watch": {
-      const { flow } = loadFlow(arg ?? "github-issue", repo);
-      const max = Number(values.max ?? 1);
-      if (!Number.isInteger(max) || max < 1) throw new Error("--max must be a positive integer");
-      const controller = new AbortController();
+      const vars = parseVars(values.var);
+      const { github_repo, ...rest } = vars;
+      if (!github_repo || github_repo === "owner/repo") throw new Error("set the GitHub repo: --var github_repo=owner/repo");
+      const cfg = WatcherSchema.parse({
+        id: "cli",
+        source: values.source ?? "issues",
+        flow: arg ?? (values.source === "pr-feedback" ? "pr-feedback" : "github-issue"),
+        github_repo,
+        label: values.label ?? "claude-factory",
+        every: values.every ?? "5m",
+        max_per_tick: Number(values.max ?? 1),
+        vars: rest,
+      });
+      const config = loadConfig();
+      const runsDir = resolve(values["runs-dir"] ?? join(FACTORY_HOME, "runs"));
+      const log = (m: string) => process.stdout.write(m + "\n");
+      const scheduler = new Scheduler({ runsDir, config: () => config });
+      const watcher = new Watcher(cfg, { scheduler, runsDir, repo, dailyBudget: () => config.daily_budget_usd, log });
+      if (values.once) {
+        await watcher.tick();
+        if (watcher.status.lastError) throw new Error(watcher.status.lastError);
+        await scheduler.idle();
+        return 0;
+      }
       let stopping = false;
       process.on("SIGINT", () => {
-        if (stopping) process.exit(130);
+        if (stopping) {
+          for (const a of scheduler.queue().active) scheduler.cancel(a.runId);
+          log("cancelling running runs (they resume on the next start)…");
+          setTimeout(() => process.exit(130), 3000).unref();
+          return;
+        }
         stopping = true;
-        process.stdout.write("\nstopping… (cancelling the current run; press Ctrl+C again to force)\n");
-        controller.abort();
+        watcher.stop();
+        const n = scheduler.queue().active.length;
+        log(n ? `\nstopped watching; waiting for ${n} running run(s) — Ctrl+C again to cancel them` : "\nstopped");
+        void scheduler.idle().then(() => process.exit(0));
       });
-      await watch({
-        flow,
-        repo,
-        runsDir: resolve(values["runs-dir"] ?? join(FACTORY_HOME, "runs")),
-        vars: parseVars(values.var),
-        label: values.label ?? "claude-factory",
-        intervalMs: parseInterval(values.every ?? "5m"),
-        maxPerTick: max,
-        once: values.once,
-        signal: controller.signal,
-        log: (m) => process.stdout.write(m + "\n"),
-      });
-      return 0;
+      log(`watching ${github_repo} (${cfg.source}) every ${cfg.every} with flow ${cfg.flow} — Ctrl+C to stop`);
+      watcher.start();
+      return new Promise<number>(() => {});
     }
 
+    case "serve":
     case "ui": {
       const port = Number(values.port ?? 4777);
       if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("--port must be 1-65535");
-      const { url } = await startServer({
+      const { url, ctx } = await startServer({
         repo,
         port,
         runsDir: resolve(values["runs-dir"] ?? join(FACTORY_HOME, "runs")),
+        log: (m) => process.stdout.write(`${new Date().toISOString()} ${m}\n`),
       });
-      process.stdout.write(`claude-factory UI → ${url}\n  repo: ${repo}\n  Ctrl+C to stop\n`);
-      if (!values["no-open"] && process.platform === "darwin") execFile("open", [url]);
+      const n = ctx.config().watchers.filter((w) => w.enabled).length;
+      process.stdout.write(`claude-factory → ${url}\n  repo: ${repo}\n  watchers: ${n}\n  Ctrl+C to stop\n`);
+      if (cmd === "ui" && !values["no-open"] && process.platform === "darwin") execFile("open", [url]);
       return new Promise<number>(() => {}); // run until killed
+    }
+
+    case "service": {
+      const sub = arg ?? "status";
+      if (sub === "install") {
+        const port = Number(values.port ?? 4777);
+        process.stdout.write(installService({ cliPath: fileURLToPath(import.meta.url), port, repo }) + "\n");
+      } else if (sub === "uninstall") process.stdout.write(uninstallService() + "\n");
+      else if (sub === "status") process.stdout.write(serviceStatus() + "\n");
+      else throw new Error("usage: factory service install|uninstall|status");
+      return 0;
     }
 
     default:
