@@ -1,11 +1,9 @@
-import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runFlow } from "../src/engine/runner.js";
 import { listBlocks, parseBlock } from "../src/flow/blocks.js";
 import { loadFlow } from "../src/flow/load.js";
+import { fakeGithub } from "./helpers/fake-github.js";
 
 describe("block library", () => {
   it("all built-in blocks are valid", () => {
@@ -22,38 +20,14 @@ describe("block library", () => {
 });
 
 describe("github-issue flow (fake gh + claude)", { timeout: 30_000 }, () => {
+  let gh: ReturnType<typeof fakeGithub>;
   let tmp: string;
-  let ghLog: string;
-  const env = { ...process.env };
-
   beforeEach(() => {
-    tmp = mkdtempSync(join(tmpdir(), "factory-gh-"));
-    // A bare "GitHub" remote with one commit.
-    const seed = join(tmp, "seed");
-    const remote = join(tmp, "remote.git");
-    mkdirSync(seed);
-    const git = (cwd: string, ...a: string[]) => execFileSync("git", a, { cwd, stdio: "pipe" });
-    git(seed, "init", "-q", "-b", "main");
-    writeFileSync(join(seed, "README.md"), "hi\n");
-    git(seed, "add", ".");
-    git(seed, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init");
-    git(tmp, "clone", "-q", "--bare", seed, remote);
-
-    const bin = join(tmp, "bin");
-    mkdirSync(bin);
-    symlinkSync(resolve("tests/fixtures/fake-gh.sh"), join(bin, "gh"));
-    ghLog = join(tmp, "gh.log");
-    Object.assign(process.env, {
-      PATH: `${bin}:${process.env.PATH}`,
-      FAKE_GH_LOG: ghLog,
-      FAKE_GH_REMOTE: remote,
-      GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t",
-    });
+    gh = fakeGithub();
+    tmp = gh.tmp;
   });
-  afterEach(() => {
-    process.env = { ...env };
-    rmSync(tmp, { recursive: true, force: true });
-  });
+  afterEach(() => gh.restore());
+  const ghLog = () => gh.ghLog();
 
   const run = () =>
     runFlow(loadFlow("github-issue", tmp).flow, {
@@ -72,13 +46,13 @@ describe("github-issue flow (fake gh + claude)", { timeout: 30_000 }, () => {
       "check_repo", "pull_ticket", "pull_repo", "plan", "push_plan", "implement",
       "run_tests", "review", "commit", "push", "push_result",
     ]);
-    const log = readFileSync(ghLog, "utf8");
+    const log = ghLog();
     expect(log).toContain("claude-factory plan");
     expect(log).toContain("finished this ticket");
     expect(log).toContain("added feature.txt");
-    const branches = execFileSync("git", ["branch", "--list"], { cwd: join(tmp, "remote.git"), encoding: "utf8" });
+    const branches = gh.remoteGit("branch", "--list");
     expect(branches).toMatch(/factory\/issue-7-/);
-    const msg = execFileSync("git", ["log", "-1", "--format=%s", branches.match(/factory\/\S+/)![0]], { cwd: join(tmp, "remote.git"), encoding: "utf8" });
+    const msg = gh.remoteGit("log", "-1", "--format=%s", branches.match(/factory\/\S+/)![0]);
     expect(msg.trim()).toBe("Resolve #7");
   });
 
@@ -87,7 +61,7 @@ describe("github-issue flow (fake gh + claude)", { timeout: 30_000 }, () => {
     const s = await run();
     expect(s.status).toBe("stopped");
     expect(s.history.map((h) => h.id)).toEqual(["check_repo", "pull_ticket", "pull_repo", "plan", "ask_for_info"]);
-    const log = readFileSync(ghLog, "utf8");
+    const log = ghLog();
     expect(log).toContain("needs more information");
     expect(log).toContain("Which database should be used?");
     expect(log).not.toContain("PLAN_STATUS");

@@ -7,6 +7,7 @@ import { runFlow } from "./engine/runner.js";
 import { listBlocks } from "./flow/blocks.js";
 import { FACTORY_HOME, listFlows, loadFlow, resolveFlowPath } from "./flow/load.js";
 import { startServer } from "./server/server.js";
+import { parseInterval, watch } from "./watch.js";
 
 const USAGE = `claude-factory — run custom flows of headless Claude Code + shell steps
 
@@ -17,6 +18,9 @@ Usage:
   factory validate <flow|file.yaml>              Check a flow definition
   factory new <name> [--from <flow>] [--global]  Create your own flow (copies a template)
   factory ui [--port 4777] [--no-open]           Web UI: build flows, start and watch runs
+  factory watch [flow] --var github_repo=o/r     Every 5 min, run the flow (default github-issue) on
+        [--every 5m] [--label claude-factory]    each open issue with the label; results are marked
+        [--max 1] [--once]                       with factory:done / needs-info / failed labels
 
 Run options:
   -t, --task <text>        Task description (or --task-file <path>); optional for ticket flows
@@ -50,6 +54,10 @@ async function main(argv: string[]): Promise<number> {
       from: { type: "string" },
       global: { type: "boolean" },
       port: { type: "string", short: "p" },
+      every: { type: "string" },
+      label: { type: "string" },
+      max: { type: "string" },
+      once: { type: "boolean" },
       "no-open": { type: "boolean" },
       help: { type: "boolean", short: "h" },
     },
@@ -120,6 +128,33 @@ async function main(argv: string[]): Promise<number> {
       mkdirSync(dir, { recursive: true });
       writeFileSync(dest, template.replace(/^name:.*$/m, `name: ${arg}`));
       process.stdout.write(`created ${dest}\nedit it, then: factory run ${arg} --task "..."\n`);
+      return 0;
+    }
+
+    case "watch": {
+      const { flow } = loadFlow(arg ?? "github-issue", repo);
+      const max = Number(values.max ?? 1);
+      if (!Number.isInteger(max) || max < 1) throw new Error("--max must be a positive integer");
+      const controller = new AbortController();
+      let stopping = false;
+      process.on("SIGINT", () => {
+        if (stopping) process.exit(130);
+        stopping = true;
+        process.stdout.write("\nstopping… (cancelling the current run; press Ctrl+C again to force)\n");
+        controller.abort();
+      });
+      await watch({
+        flow,
+        repo,
+        runsDir: resolve(values["runs-dir"] ?? join(FACTORY_HOME, "runs")),
+        vars: parseVars(values.var),
+        label: values.label ?? "claude-factory",
+        intervalMs: parseInterval(values.every ?? "5m"),
+        maxPerTick: max,
+        once: values.once,
+        signal: controller.signal,
+        log: (m) => process.stdout.write(m + "\n"),
+      });
       return 0;
     }
 
