@@ -1,4 +1,26 @@
+import { accessSync, constants } from "node:fs";
+import { delimiter, join } from "node:path";
 import { runProcess } from "./process.js";
+
+/** Codex CLIs that ship inside apps (the ChatGPT desktop app bundles one). */
+const BUNDLED_CODEX = ["/Applications/ChatGPT.app/Contents/Resources/codex", "/Applications/Codex.app/Contents/Resources/codex"];
+
+const executable = (p: string) => {
+  try {
+    accessSync(p, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+/** FACTORY_CODEX_BIN, else `codex` on PATH, else the one bundled with the ChatGPT app. */
+export function resolveCodexBin(): string {
+  if (process.env.FACTORY_CODEX_BIN) return process.env.FACTORY_CODEX_BIN;
+  const onPath = (process.env.PATH ?? "").split(delimiter).some((d) => d && executable(join(d, "codex")));
+  if (onPath) return "codex";
+  return BUNDLED_CODEX.find(executable) ?? "codex";
+}
 
 export type CodexSandbox = "read-only" | "workspace-write" | "danger-full-access";
 
@@ -76,7 +98,7 @@ function describe(item: CodexItem): string | undefined {
 
 /** Run the OpenAI Codex CLI headlessly (`codex exec --json`). The prompt goes via stdin. */
 export async function runCodex(o: CodexRunOptions): Promise<CodexRunResult> {
-  const bin = o.codexBin ?? process.env.FACTORY_CODEX_BIN ?? "codex";
+  const bin = o.codexBin ?? resolveCodexBin();
   const prompt = o.systemPrompt ? `<instructions>\n${o.systemPrompt}\n</instructions>\n\n${o.prompt}` : o.prompt;
   let sessionId: string | undefined;
   let last = "";

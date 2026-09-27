@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Config } from "../config.js";
 import { runClaude } from "../steps/claude.js";
-import { runCodex } from "../steps/codex.js";
+import { resolveCodexBin, runCodex } from "../steps/codex.js";
 import { claudeProviderEnv, LOCAL_KINDS, providers, specOf, toTarget } from "./targets.js";
 
 export interface ProviderStatus {
@@ -41,16 +41,16 @@ async function getJson(url: string, headers: Record<string, string> = {}): Promi
 
 export async function agentStatuses(): Promise<AgentStatus[]> {
   const claudeBin = process.env.FACTORY_CLAUDE_BIN ?? "claude";
-  const codexBin = process.env.FACTORY_CODEX_BIN ?? "codex";
+  const codexBin = resolveCodexBin();
   const [cv, xv, xl] = await Promise.all([run(claudeBin, ["--version"]), run(codexBin, ["--version"]), run(codexBin, ["login", "status"])]);
   return [
     { agent: "claude", installed: cv.ok, version: cv.ok ? cv.out.split("\n")[0] : undefined, detail: cv.ok ? "Claude Code CLI" : "not found — install Claude Code" },
     {
       agent: "codex",
       installed: xv.ok,
-      version: xv.ok ? xv.out.split("\n")[0] : undefined,
+      version: xv.ok ? `${xv.out.split("\n")[0]}${codexBin !== "codex" ? ` (${codexBin})` : ""}` : undefined,
       loggedIn: xv.ok ? xl.ok && !/not logged in/i.test(xl.out) : undefined,
-      detail: !xv.ok ? "not found — npm i -g @openai/codex" : xl.ok && !/not logged in/i.test(xl.out) ? xl.out.split("\n")[0]! : "not logged in — run `codex login` (ChatGPT account) to use OpenAI models",
+      detail: !xv.ok ? "not found — npm i -g @openai/codex, or install the ChatGPT app" : xl.ok && !/not logged in/i.test(xl.out) ? xl.out.split("\n")[0]! : "not logged in — run `codex login` (ChatGPT account) to use OpenAI models",
     },
   ];
 }
