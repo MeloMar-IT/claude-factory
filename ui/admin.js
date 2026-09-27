@@ -102,6 +102,31 @@ export async function renderWatchers(main) {
       h("code", {}, "factory service install")));
 }
 
+// ── disk ──
+
+function diskSection(section) {
+  const days = input("7", { type: "number", min: 0, style: { width: "90px" } });
+  const purge = check(false, "Also delete run logs");
+  const paused = check(false, "Include stopped / waiting runs (they can't be resumed afterwards)");
+  const out = h("div");
+  const go = async (dryRun) => {
+    if (!dryRun && !confirm("Remove these workspaces now? Branches in your repos are kept.")) return;
+    try {
+      const r = await api.clean({ olderThanDays: Number(days.value), purge: purge.el.checked, includePaused: paused.el.checked, dryRun });
+      mount(out, h("p", { class: dryRun ? "muted" : "status ok", style: { margin: 0 } },
+        `${dryRun ? "Would remove" : "Removed"} ${r.workspaces.length} workspace(s)${r.runs.length ? ` and ${r.runs.length} run(s)` : ""} · ${r.freedMb} MB`,
+        r.kept.length ? ` · keeping ${r.kept.length} paused/running` : ""));
+    } catch (e) {
+      toast(e.message, "error");
+    }
+  };
+  return section("Disk",
+    h("p", { class: "muted", style: { margin: 0 } }, "Each run keeps its workspace (worktree or clone) so you can inspect or resume it. Clean up old ones here or with ", h("code", {}, "factory clean"), "."),
+    h("div", { class: "row" }, h("span", {}, "Runs finished more than"), days, h("span", {}, "days ago")),
+    purge.row, paused.row,
+    h("div", { class: "row" }, h("button", { onClick: () => go(true) }, "Preview"), h("button", { class: "danger", onClick: () => go(false) }, "Clean up"), out));
+}
+
 // ── settings ──
 
 export async function renderSettings(main) {
@@ -162,6 +187,7 @@ export async function renderSettings(main) {
     section("Bot identity",
       h("p", { class: "muted", style: { margin: 0 } }, "By default commits and comments are made as you (your git config and gh login)."),
       h("div", { class: "grid" }, f("Commit author name", botName), f("Commit author email", botEmail), f("Env var with the bot's GitHub token", botToken, "Used as GH_TOKEN for gh and git pushes."))),
+    diskSection(section),
     section("GitHub App (optional, preferred over a token)",
       h("div", { class: "grid" }, f("App ID", appId), f("Installation ID", instId), f("Private key file", keyPath))));
 }

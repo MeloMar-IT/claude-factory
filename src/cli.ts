@@ -8,6 +8,7 @@ import { listBlocks } from "./flow/blocks.js";
 import { FACTORY_HOME, listFlows, loadFlow, resolveFlowPath } from "./flow/load.js";
 import { startServer } from "./server/server.js";
 import { loadConfig, WatcherSchema } from "./config.js";
+import { cleanRuns } from "./clean.js";
 import { runEval } from "./evals.js";
 import { Scheduler } from "./queue/scheduler.js";
 import { Watcher } from "./queue/watcher.js";
@@ -23,6 +24,8 @@ Usage:
   factory reject <run-id> [--note "..."]         Reject it (the flow's on_failure path runs)
   factory eval <suite.yaml> [--flows a,b] [--models sonnet,opus]
                                                  Benchmark flows/models on sample tasks
+  factory clean [--older-than 7] [--purge] [--include-paused] [--dry-run]
+                                                 Remove old run workspaces/worktrees (branches kept)
   factory flows [--repo <dir>]                   List available flows
   factory blocks [--repo <dir>]                  List reusable step blocks (the library)
   factory validate <flow|file.yaml>              Check a flow definition
@@ -93,6 +96,10 @@ async function main(argv: string[]): Promise<number> {
       every: { type: "string" },
       source: { type: "string" },
       flows: { type: "string" },
+      "older-than": { type: "string" },
+      purge: { type: "boolean" },
+      "include-paused": { type: "boolean" },
+      "dry-run": { type: "boolean" },
       models: { type: "string" },
       label: { type: "string" },
       max: { type: "string" },
@@ -251,6 +258,24 @@ async function main(argv: string[]): Promise<number> {
       const rows = report.summary.map((s) =>
         `${s.variant.padEnd(28)} ${String(Math.round(s.passRate * 100) + "%").padStart(5)}  $${s.avgCostUsd.toFixed(3).padStart(7)}  ${s.avgMinutes.toFixed(1).padStart(5)}m  ${s.avgFixLoops.toFixed(1).padStart(5)}`);
       process.stdout.write(`\n${"variant".padEnd(28)}  pass   avg cost   time  loops\n${rows.join("\n")}\n\nreport: ${file}\n`);
+      return 0;
+    }
+
+    case "clean": {
+      const days = Number(values["older-than"] ?? 7);
+      if (!(days >= 0)) throw new Error("--older-than must be a number of days");
+      const r = cleanRuns({
+        runsDir: resolve(values["runs-dir"] ?? join(FACTORY_HOME, "runs")),
+        olderThanDays: days,
+        purge: values.purge,
+        includePaused: values["include-paused"],
+        dryRun: values["dry-run"],
+      });
+      const verb = values["dry-run"] ? "would remove" : "removed";
+      process.stdout.write(
+        `${verb} ${r.workspaces.length} workspace(s)${r.runs.length ? ` and ${r.runs.length} run(s)` : ""} · ${r.freedMb} MB\n` +
+          (r.kept.length ? `kept ${r.kept.length} paused/running run(s) — use --include-paused to clean them too\n` : ""),
+      );
       return 0;
     }
 

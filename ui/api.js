@@ -38,5 +38,6 @@ export const api = {
   tickWatcher: (id) => req("POST", `/api/watchers/${enc(id)}/tick`, {}),
   stats: () => req("GET", "/api/stats"),
   evals: () => req("GET", "/api/evals"),
+  clean: (opts) => req("POST", "/api/clean", opts),
   events: (id) => new EventSource(`/api/runs/${enc(id)}/events`),
 };
