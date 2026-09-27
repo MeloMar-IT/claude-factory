@@ -13,6 +13,9 @@ export interface ClaudeRunOptions {
   maxBudgetUsd?: number;
   timeoutMs?: number;
   signal?: AbortSignal;
+  env?: NodeJS.ProcessEnv;
+  /** Sandbox Claude's bash tool (writes limited to the workspace). */
+  sandbox?: boolean;
   onProgress?: (msg: string) => void;
 }
 
@@ -44,6 +47,9 @@ export function buildClaudeArgs(o: ClaudeRunOptions): string[] {
   if (o.systemPrompt) args.push("--append-system-prompt", o.systemPrompt);
   if (o.resumeSessionId) args.push("--resume", o.resumeSessionId);
   if (o.maxBudgetUsd) args.push("--max-budget-usd", String(o.maxBudgetUsd));
+  // Pushing is a flow decision (shell steps + protected-branch hook), never Claude's.
+  args.push("--disallowedTools", "Bash(git push*)");
+  if (o.sandbox) args.push("--settings", JSON.stringify({ sandbox: { enabled: true, autoAllowBashIfSandboxed: true } }));
   return args;
 }
 
@@ -60,6 +66,7 @@ export async function runClaude(o: ClaudeRunOptions): Promise<ClaudeRunResult> {
 
   const res = await runProcess(bin, buildClaudeArgs(o), {
     cwd: o.cwd,
+    env: o.env,
     stdin: o.prompt,
     timeoutMs: o.timeoutMs,
     signal: o.signal,

@@ -17,6 +17,8 @@ const stepId = z
   .string()
   .regex(/^[a-zA-Z][\w-]*$/, "step id must start with a letter and contain only letters, digits, _ or -");
 
+const varsRecord = z.record(z.string(), z.union([z.string(), z.number(), z.boolean()]).transform(String));
+
 const baseStep = {
   id: stepId,
   description: z.string().optional(),
@@ -30,6 +32,10 @@ const baseStep = {
   on_success: z.string().optional(),
   /** Where to go on failure: step id | next | end | fail | stop. Default: fail. */
   on_failure: z.string().optional(),
+  /** On success, the first route whose regex matches the output decides where to go (before on_success). */
+  routes: z.array(z.object({ if: z.string(), goto: z.string() }).strict()).optional(),
+  /** When a run that stopped at this step is resumed, restart at this step instead. */
+  resume_from: z.string().optional(),
   /** How often this step may run in one flow run (loop guard). */
   max_visits: z.number().int().positive().optional(),
   timeout_sec: z.number().positive().optional(),
@@ -47,6 +53,8 @@ export const ClaudeStepSchema = z
     /** Continue the Claude session of an earlier claude step (by id). */
     resume: z.string().optional(),
     max_budget_usd: z.number().positive().optional(),
+    /** Run Claude's bash tool in Claude Code's sandbox (writes limited to the workspace). Default: flow sandbox.claude. */
+    sandbox: z.boolean().optional(),
   })
   .strict();
 
@@ -55,10 +63,47 @@ export const ShellStepSchema = z
     ...baseStep,
     type: z.literal("shell"),
     run: z.string().min(1),
+    /** Run inside a Docker container (flow sandbox.docker_image) — use for steps that execute repo code. */
+    sandbox: z.boolean().optional(),
   })
   .strict();
 
-export const StepSchema = z.discriminatedUnion("type", [ClaudeStepSchema, ShellStepSchema]);
+/** Pauses the run until a human approves (→ on_success) or rejects (→ on_failure). */
+export const ApprovalStepSchema = z
+  .object({
+    ...baseStep,
+    type: z.literal("approval"),
+    message: z.string().min(1),
+  })
+  .strict();
+
+/** Runs the listed steps concurrently; succeeds when all of them succeed. */
+export const ParallelStepSchema = z
+  .object({
+    ...baseStep,
+    type: z.literal("parallel"),
+    steps: z.array(stepId).min(2),
+  })
+  .strict();
+
+/** Runs another flow inline, in the same workspace. */
+export const FlowStepSchema = z
+  .object({
+    ...baseStep,
+    type: z.literal("flow"),
+    flow: z.string().min(1),
+    /** Vars for the sub-flow; values may use {{vars.*}}, {{workdir}}, {{run.*}}. */
+    vars: z.record(z.string(), z.string()).optional(),
+  })
+  .strict();
+
+export const StepSchema = z.discriminatedUnion("type", [
+  ClaudeStepSchema,
+  ShellStepSchema,
+  ApprovalStepSchema,
+  ParallelStepSchema,
+  FlowStepSchema,
+]);
 
 export const DefaultsSchema = z
   .object({
@@ -71,6 +116,63 @@ export const DefaultsSchema = z
   })
   .strict();
 
+export const SandboxSchema = z
+  .object({
+    /** Default for claude steps: sandbox Claude's bash tool. */
+    claude: z.boolean().optional(),
+    /** Image for shell steps with `sandbox: true`, e.g. node:22. */
+    docker_image: z.string().optional(),
+  })
+  .strict();
+
+type AnyStep = z.infer<typeof StepSchema>;
+
+/**
+ * Check that jumps, routes, resume and parallel references point at known steps.
+ * `known` is the set of ids a reference may point at.
+ */
+export function checkStepRefs(steps: AnyStep[], known: Set<string>, addIssue: (path: (string | number)[], msg: string) => void) {
+  const reserved = RESERVED_TARGETS as readonly string[];
+  const byId = new Map(steps.map((s) => [s.id, s]));
+  steps.forEach((s, i) => {
+    const target = (t: string | undefined, path: (string | number)[]) => {
+      if (t && !reserved.includes(t) && !known.has(t)) addIssue(["steps", i, ...path], `unknown step "${t}"`);
+    };
+    target(s.on_success, ["on_success"]);
+    target(s.on_failure, ["on_failure"]);
+    s.routes?.forEach((r, j) => {
+      target(r.goto, ["routes", j, "goto"]);
+      try {
+        new RegExp(r.if);
+      } catch {
+        addIssue(["steps", i, "routes", j, "if"], `invalid regex: ${r.if}`);
+      }
+    });
+    if (s.resume_from && !known.has(s.resume_from)) addIssue(["steps", i, "resume_from"], `unknown step "${s.resume_from}"`);
+    for (const key of ["pass_if", "fail_if"] as const) {
+      const re = s[key];
+      if (!re) continue;
+      try {
+        new RegExp(re);
+      } catch {
+        addIssue(["steps", i, key], `invalid regex: ${re}`);
+      }
+    }
+    if (s.type === "claude" && s.resume) {
+      const t = byId.get(s.resume);
+      if (!t || t.type !== "claude") addIssue(["steps", i, "resume"], `resume must reference a claude step, got "${s.resume}"`);
+    }
+    if (s.type === "parallel") {
+      s.steps.forEach((ref, j) => {
+        const t = byId.get(ref);
+        if (!t) addIssue(["steps", i, "steps", j], `unknown step "${ref}"`);
+        else if (t.type !== "claude" && t.type !== "shell") addIssue(["steps", i, "steps", j], `parallel can only run claude or shell steps`);
+        else if (ref === s.id) addIssue(["steps", i, "steps", j], `a parallel step cannot run itself`);
+      });
+    }
+  });
+}
+
 export const FlowSchema = z
   .object({
     name: z.string().min(1),
@@ -81,53 +183,28 @@ export const FlowSchema = z
      */
     workspace: z.enum(["worktree", "inplace", "empty"]).default("worktree"),
     defaults: DefaultsSchema.default({}),
-    vars: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()]).transform(String)).default({}),
+    limits: z.object({ max_cost_usd: z.number().positive().optional() }).strict().default({}),
+    sandbox: SandboxSchema.default({}),
+    vars: varsRecord.default({}),
     steps: z.array(StepSchema).min(1),
   })
   .strict()
   .superRefine((flow, ctx) => {
-    const ids = new Map<string, number>();
+    const ids = new Set<string>();
     flow.steps.forEach((s, i) => {
-      if (ids.has(s.id)) {
-        ctx.addIssue({ code: "custom", path: ["steps", i, "id"], message: `duplicate step id "${s.id}"` });
-      }
+      if (ids.has(s.id)) ctx.addIssue({ code: "custom", path: ["steps", i, "id"], message: `duplicate step id "${s.id}"` });
       if ((RESERVED_TARGETS as readonly string[]).includes(s.id)) {
         ctx.addIssue({ code: "custom", path: ["steps", i, "id"], message: `"${s.id}" is a reserved word` });
       }
-      ids.set(s.id, i);
+      ids.add(s.id);
     });
-
-    flow.steps.forEach((s, i) => {
-      for (const key of ["on_success", "on_failure"] as const) {
-        const t = s[key];
-        if (t && !(RESERVED_TARGETS as readonly string[]).includes(t) && !ids.has(t)) {
-          ctx.addIssue({ code: "custom", path: ["steps", i, key], message: `unknown step "${t}"` });
-        }
-      }
-      for (const key of ["pass_if", "fail_if"] as const) {
-        const re = s[key];
-        if (re) {
-          try {
-            new RegExp(re);
-          } catch {
-            ctx.addIssue({ code: "custom", path: ["steps", i, key], message: `invalid regex: ${re}` });
-          }
-        }
-      }
-      if (s.type === "claude" && s.resume) {
-        const target = flow.steps[ids.get(s.resume) ?? -1];
-        if (!target || target.type !== "claude") {
-          ctx.addIssue({
-            code: "custom",
-            path: ["steps", i, "resume"],
-            message: `resume must reference a claude step, got "${s.resume}"`,
-          });
-        }
-      }
-    });
+    checkStepRefs(flow.steps, ids, (path, message) => ctx.addIssue({ code: "custom", path, message }));
   });
 
 export type Flow = z.infer<typeof FlowSchema>;
 export type Step = z.infer<typeof StepSchema>;
 export type ClaudeStep = z.infer<typeof ClaudeStepSchema>;
 export type ShellStep = z.infer<typeof ShellStepSchema>;
+export type ApprovalStep = z.infer<typeof ApprovalStepSchema>;
+export type ParallelStep = z.infer<typeof ParallelStepSchema>;
+export type FlowStep = z.infer<typeof FlowStepSchema>;

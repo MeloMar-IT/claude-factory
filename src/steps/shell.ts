@@ -1,3 +1,4 @@
+import { dockerCommand } from "../engine/guards.js";
 import { runProcess } from "./process.js";
 
 const MAX_OUTPUT = 20_000;
@@ -21,10 +22,20 @@ export async function runShell(o: {
   logFile: string;
   timeoutMs?: number;
   signal?: AbortSignal;
+  /** Run inside this Docker image with only the workspace mounted. */
+  dockerImage?: string;
 }): Promise<ShellRunResult> {
-  const res = await runProcess("/bin/sh", ["-c", o.command], {
+  const env: NodeJS.ProcessEnv = { ...NO_COLOR_ENV, ...o.env };
+  let cmd = "/bin/sh";
+  let args = ["-c", o.command];
+  if (o.dockerImage) {
+    env.FACTORY_WORKDIR = "/work";
+    const names = Object.keys(env).filter((k) => /^(FACTORY_|NO_COLOR$|CI$)/.test(k) && env[k] !== undefined);
+    ({ cmd, args } = dockerCommand(o.dockerImage, o.cwd, o.command, names));
+  }
+  const res = await runProcess(cmd, args, {
     cwd: o.cwd,
-    env: { ...NO_COLOR_ENV, ...o.env },
+    env,
     timeoutMs: o.timeoutMs,
     signal: o.signal,
     logFile: o.logFile,

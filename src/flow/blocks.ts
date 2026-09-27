@@ -3,7 +3,7 @@ import { basename, extname, join } from "node:path";
 import { parse } from "yaml";
 import { z } from "zod";
 import { FACTORY_HOME, flowDir, type FlowScope } from "./load.js";
-import { StepSchema } from "./schema.js";
+import { checkStepRefs, StepSchema } from "./schema.js";
 
 /**
  * A block is a reusable set of steps ("model") you can drop into any flow,
@@ -22,19 +22,10 @@ export const BlockSchema = z
   })
   .strict()
   .superRefine((block, ctx) => {
+    // Blocks must be self-contained: references may only point at the block's own steps.
     const ids = new Set(block.steps.map((s) => s.id));
-    const reserved = ["next", "end", "fail", "stop"];
-    block.steps.forEach((s, i) => {
-      for (const key of ["on_success", "on_failure"] as const) {
-        const t = s[key];
-        if (t && !reserved.includes(t) && !ids.has(t)) {
-          ctx.addIssue({ code: "custom", path: ["steps", i, key], message: `blocks may only jump to their own steps, got "${t}"` });
-        }
-      }
-      if (s.type === "claude" && s.resume && !ids.has(s.resume)) {
-        ctx.addIssue({ code: "custom", path: ["steps", i, "resume"], message: `blocks may only resume their own steps` });
-      }
-    });
+    checkStepRefs(block.steps, ids, (path, message) =>
+      ctx.addIssue({ code: "custom", path, message: message.replace(/^unknown step/, "blocks may only jump to their own steps, got") }));
   });
 
 export type Block = z.infer<typeof BlockSchema>;
