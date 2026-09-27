@@ -1,60 +1,9 @@
 import { h } from "./dom.js";
+import { area, field, insertAtCursor, list, select, setKey, text } from "./fields.js";
+import { STEP_TYPES, stepBody, stepAdvanced } from "./step-types.js";
 
-const PERMISSION_MODES = ["acceptEdits", "auto", "bypassPermissions", "default", "dontAsk", "plan"];
+export const PERMISSION_MODES = ["acceptEdits", "auto", "bypassPermissions", "default", "dontAsk", "plan"];
 const MODELS = ["sonnet", "opus", "haiku"];
-
-// ── bound inputs: each writes into obj[key] (deleting when empty) and calls onChange ──
-
-function setKey(obj, key, v) {
-  if (v === "" || v == null || (Array.isArray(v) && !v.length)) delete obj[key];
-  else obj[key] = v;
-}
-
-function text(obj, key, onChange, { placeholder, mono, list, type = "text", onCommit } = {}) {
-  return h("input", {
-    type, placeholder, list, class: mono ? "mono" : null,
-    value: obj[key] ?? "",
-    onInput: (e) => {
-      const raw = e.target.value;
-      setKey(obj, key, type === "number" ? (raw === "" ? "" : Number(raw)) : raw);
-      onChange();
-    },
-    onChange: onCommit,
-  });
-}
-
-function area(obj, key, onChange, { rows = 4, placeholder } = {}) {
-  return h("textarea", {
-    rows, placeholder, value: obj[key] ?? "",
-    onInput: (e) => { setKey(obj, key, e.target.value); onChange(); },
-  });
-}
-
-function select(obj, key, options, onChange, { emptyLabel } = {}) {
-  const opts = emptyLabel != null ? [["", emptyLabel], ...options] : options;
-  return h("select", { onChange: (e) => { setKey(obj, key, e.target.value); onChange(); } },
-    opts.map(([v, l]) => h("option", { value: v, selected: (obj[key] ?? "") === v }, l)));
-}
-
-function list(obj, key, onChange, placeholder) {
-  return h("input", {
-    placeholder, class: "mono", value: (obj[key] ?? []).join(", "),
-    onInput: (e) => {
-      setKey(obj, key, e.target.value.split(",").map((s) => s.trim()).filter(Boolean));
-      onChange();
-    },
-  });
-}
-
-const field = (label, input, hint) => h("label", { class: "field" }, h("span", {}, label), input, hint ? h("small", {}, hint) : null);
-
-function insertAtCursor(textarea, snippet) {
-  const { selectionStart: a, selectionEnd: b, value } = textarea;
-  textarea.value = value.slice(0, a) + snippet + value.slice(b);
-  textarea.selectionStart = textarea.selectionEnd = a + snippet.length;
-  textarea.dispatchEvent(new Event("input"));
-  textarea.focus();
-}
 
 function uniqueId(flow, base) {
   const ids = new Set(flow.steps.map((s) => s.id));
@@ -66,7 +15,9 @@ function uniqueId(flow, base) {
 
 function renameStep(flow, from, to) {
   for (const s of flow.steps) {
-    for (const k of ["on_success", "on_failure", "resume"]) if (s[k] === from) s[k] = to;
+    for (const k of ["on_success", "on_failure", "resume", "resume_from"]) if (s[k] === from) s[k] = to;
+    for (const r of s.routes ?? []) if (r.goto === from) r.goto = to;
+    if (s.type === "parallel") s.steps = (s.steps ?? []).map((id) => (id === from ? to : id));
   }
 }
 
@@ -94,6 +45,14 @@ function settingsCard(flow, onChange, rerender) {
         field("Budget / step ($)", text(d, "max_budget_usd", onChange, { type: "number" }))),
       h("div", { style: { marginTop: "10px" } },
         field("Allowed tools", list(d, "allowed_tools", onChange, 'Read, Edit, Write, Bash(npm *)'), "Comma-separated. Shell commands Claude may run without asking."))),
+    h("details", { open: !!(flow.limits?.max_cost_usd || flow.sandbox?.claude || flow.sandbox?.docker_image) },
+      h("summary", {}, "Safety: budget & sandbox"),
+      h("div", { class: "grid" },
+        field("Max cost per run ($)", text((flow.limits ??= {}), "max_cost_usd", onChange, { type: "number", placeholder: "no limit" }), "The run fails once it has spent this much."),
+        field("Docker image for sandboxed shell steps", text((flow.sandbox ??= {}), "docker_image", onChange, { mono: true, placeholder: "e.g. node:22 (global default in Settings)" }))),
+      h("label", { class: "row", style: { gap: "6px", fontSize: "12.5px", marginTop: "8px" } },
+        h("input", { type: "checkbox", style: { width: "auto" }, checked: !!flow.sandbox.claude, onChange: (e) => { setKey(flow.sandbox, "claude", e.target.checked || ""); onChange(); } }),
+        h("span", {}, "Sandbox Claude's bash tool (writes limited to the workspace)"))),
     h("details", { open: vars.length > 0 },
       h("summary", {}, `Variables (${vars.length})`),
       h("div", { class: "kv" },
@@ -128,32 +87,7 @@ function stepCard(flow, step, i, ctx) {
   const earlier = flow.steps.filter((s) => s !== step).map((s) => s.id);
   const prevId = step.id;
 
-  let body;
-  if (step.type === "claude") {
-    const prompt = area(step, "prompt", onChange, { rows: 7, placeholder: "What should Claude do? Use {{task}} for the run's task." });
-    const chips = ["{{task}}", ...vars.map((v) => `{{vars.${v}}}`), ...earlier.map((id) => `{{steps.${id}.output}}`)];
-    body = [
-      field("Prompt", prompt),
-      h("div", { class: "chips" }, chips.map((c) => h("button", { class: "chip", type: "button", onClick: () => insertAtCursor(prompt, c) }, c))),
-      h("div", { class: "grid" },
-        field("Model", text(step, "model", onChange, { list: "models", placeholder: flow.defaults?.model ?? "(default)" })),
-        field("Permissions", select(step, "permission_mode", PERMISSION_MODES.map((m) => [m, m]), onChange, { emptyLabel: `${flow.defaults?.permission_mode ?? "acceptEdits"} (default)` })),
-        field("Continue session of", select(step, "resume", priorClaude, onChange, { emptyLabel: "— new session —" }))),
-      field("Allowed tools", list(step, "allowed_tools", onChange, flow.defaults?.allowed_tools?.join(", ") || "(flow default)")),
-      h("details", {},
-        h("summary", {}, "Advanced"),
-        h("div", { class: "grid" },
-          field("Extra system prompt", area(step, "system_prompt", onChange, { rows: 2 })),
-          field("Budget ($)", text(step, "max_budget_usd", onChange, { type: "number" })))),
-    ];
-  } else {
-    const run = area(step, "run", onChange, { rows: 3, placeholder: "npm test" });
-    body = [
-      field("Command", run, "Exit code 0 = success. Task and step outputs are in $FACTORY_TASK / $FACTORY_OUT_<STEP_ID>."),
-      h("div", { class: "chips" }, ["{{workdir}}", ...vars.map((v) => `{{vars.${v}}}`)].map((c) => h("button", { class: "chip", type: "button", onClick: () => insertAtCursor(run, c) }, c))),
-    ];
-  }
-
+  const body = stepBody(flow, step, i, { onChange, rerender, vars, earlier, priorClaude });
   return h("div", { class: `card${selected === i ? " selected" : ""}${step.jump_only ? " jump-only" : ""}`, id: `step-${i}`, onFocusin: () => selected !== i && onSelect(i, false) },
     h("div", { class: "card-head" },
       h("span", { class: "num" }, `${i + 1}`),
@@ -166,7 +100,7 @@ function stepCard(flow, step, i, ctx) {
           rerender();
         },
       }),
-      h("span", { class: `pill ${step.type}` }, step.type === "claude" ? "◆ claude" : "$ shell"),
+      h("span", { class: `pill ${step.type}` }, `${STEP_TYPES[step.type]?.icon ?? "?"} ${step.type}`),
       h("span", { class: "spacer" }),
       h("button", { class: "icon", title: "Move up", disabled: i === 0, onClick: () => move(-1) }, "↑"),
       h("button", { class: "icon", title: "Move down", disabled: i === flow.steps.length - 1, onClick: () => move(1) }, "↓"),
@@ -188,14 +122,13 @@ function stepCard(flow, step, i, ctx) {
         h("span", { class: "muted" }, "— skipped in normal order, e.g. an “ask for info” or “fix” handler")),
       h("div", { class: "grid" },
         field("Pass only if output matches", text(step, "pass_if", onChange, { mono: true, placeholder: "regex, e.g. ^VERDICT: APPROVE" })),
-        field("Fail if output matches", text(step, "fail_if", onChange, { mono: true, placeholder: "regex" })))));
+        field("Fail if output matches", text(step, "fail_if", onChange, { mono: true, placeholder: "regex" }))),
+      stepAdvanced(flow, step, { onChange, rerender, targets: targetOptions(flow, step, "next").slice(1) })));
 }
 
 function insertBar(flow, at, { rerender, onSelect, onLibrary }) {
   const add = (type) => {
-    const step = type === "claude"
-      ? { id: uniqueId(flow, "claude"), type, prompt: "" }
-      : { id: uniqueId(flow, "shell"), type, run: "" };
+    const step = { id: uniqueId(flow, type), ...structuredClone(STEP_TYPES[type].blank) };
     flow.steps.splice(at, 0, step);
     onSelect(at);
     rerender();
@@ -203,6 +136,9 @@ function insertBar(flow, at, { rerender, onSelect, onLibrary }) {
   return h("div", { class: "insert" },
     h("button", { class: "small", onClick: () => add("claude") }, "+ Claude step"),
     h("button", { class: "small", onClick: () => add("shell") }, "+ Shell step"),
+    h("select", { class: "small-select", title: "More step types", onChange: (e) => { if (e.target.value) add(e.target.value); } },
+      h("option", { value: "" }, "+ more…"),
+      ["approval", "parallel", "flow"].map((t) => h("option", { value: t }, `${STEP_TYPES[t].icon} ${STEP_TYPES[t].label}`))),
     h("button", { class: "small", onClick: () => onLibrary?.(at) }, "+ From library"));
 }
 

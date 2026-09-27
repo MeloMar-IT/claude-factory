@@ -50,6 +50,7 @@ export class Scheduler {
   private pending: QueuedJob[] = [];
   private active = new Map<string, Active>();
   private recent = new Map<string, Active>(); // finished, kept briefly for late subscribers
+  /** Viewers of runs that are not running right now; attached when the run starts. */
   private pendingListeners = new Map<string, Set<(e: RunEvent) => void>>();
 
   constructor(private o: SchedulerOptions) {
@@ -146,13 +147,14 @@ export class Scheduler {
       live.listeners.add(fn);
       return () => live.listeners.delete(fn);
     }
-    if (this.isQueued(runId)) {
-      const set = this.pendingListeners.get(runId) ?? new Set();
-      set.add(fn);
-      this.pendingListeners.set(runId, set);
-      return () => set.delete(fn);
-    }
-    return () => {};
+    // Not running now: stay subscribed, so a later resume (UI, CLI or watcher) streams to this viewer.
+    const set = this.pendingListeners.get(runId) ?? new Set();
+    set.add(fn);
+    this.pendingListeners.set(runId, set);
+    return () => {
+      set.delete(fn);
+      if (!set.size) this.pendingListeners.delete(runId);
+    };
   }
 
   private persist() {

@@ -4,6 +4,8 @@ import { debounce, h, modal, mount, toast } from "./dom.js";
 import { cleanFlow, renderEditor } from "./editor.js";
 import { renderGraph } from "./graph.js";
 import { insertBlock, pickBlock, renderLibrary, saveStepAsBlock } from "./library.js";
+import { renderSettings, renderWatchers } from "./admin.js";
+import { renderDashboard } from "./dashboard.js";
 import { renderRunDetail, renderRunsList } from "./runs.js";
 
 const sidebar = document.getElementById("sidebar");
@@ -46,6 +48,10 @@ function tryParse(text) {
 
 async function refreshFlows() {
   S.flows = await api.flows();
+  // Names for the sub-flow picker in the editor.
+  let dl = document.getElementById("flow-names");
+  if (!dl) document.body.append((dl = h("datalist", { id: "flow-names" })));
+  mount(dl, S.flows.map((f) => h("option", { value: f.name })));
   renderSidebar();
 }
 
@@ -359,6 +365,9 @@ async function route() {
   document.querySelectorAll("[data-nav]").forEach((a) => a.classList.toggle("active", a.dataset.nav === (section === "new" ? "flows" : section)));
   try {
     if (section === "library") await renderLibrary(main);
+    else if (section === "dashboard") await renderDashboard(main);
+    else if (section === "watchers") await renderWatchers(main);
+    else if (section === "settings") await renderSettings(main);
     else if (section === "runs" && arg) S.cleanup = renderRunDetail(main, arg);
     else if (section === "runs") await renderRunsList(main);
     else if (section === "new") S.cur && !S.cur.name ? renderFlowView() : openNew();

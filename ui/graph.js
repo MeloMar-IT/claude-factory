@@ -16,8 +16,13 @@ function targetIndex(steps, i, target) {
   return j === -1 ? -2 : j; // -2: dangling reference
 }
 
+const ICON = { claude: "◆", shell: "$", approval: "✋", parallel: "⇉", flow: "⧉" };
+
 function subtitle(s) {
   if (s.type === "shell") return "$ " + (s.run ?? "").split("\n")[0];
+  if (s.type === "approval") return s.message ?? "";
+  if (s.type === "parallel") return (s.steps ?? []).join(" + ");
+  if (s.type === "flow") return `flow: ${s.flow ?? ""}`;
   return (s.model ? `${s.model} · ` : "") + (s.resume ? `↺ ${s.resume}` : (s.prompt ?? "").split("\n")[0]);
 }
 
@@ -38,6 +43,8 @@ export function renderGraph(flow, { selected, onSelect } = {}) {
     const fail = targetIndex(steps, i, s.on_failure ?? "fail");
     edges.push({ from: i, to: ok, kind: "ok", label: s.on_success });
     if (s.on_failure) edges.push({ from: i, to: fail, kind: "fail", label: s.on_failure });
+    for (const r of s.routes ?? []) edges.push({ from: i, to: targetIndex(steps, i, r.goto), kind: "route", label: r.if });
+    if (s.type === "parallel") for (const id of s.steps ?? []) edges.push({ from: i, to: steps.findIndex((x) => x.id === id), kind: "par" });
   });
 
   // Straight edges go down the middle; everything else gets its own lane on the right.
@@ -54,7 +61,7 @@ export function renderGraph(flow, { selected, onSelect } = {}) {
   const height = y(steps.length) + H + TOP;
   const cx = X + W / 2;
   const defs = svg("defs", {},
-    ["ok", "fail", "seq"].map((k) =>
+    ["ok", "fail", "seq", "route", "par"].map((k) =>
       svg("marker", { id: `arrow-${k}`, viewBox: "0 0 10 10", refX: "9", refY: "5", markerWidth: "7", markerHeight: "7", orient: "auto-start-reverse" },
         svg("path", { d: "M0,0 L10,5 L0,10 z", class: `arrow ${k}` }))));
 
@@ -64,21 +71,21 @@ export function renderGraph(flow, { selected, onSelect } = {}) {
   const arcEls = arcs.map((e) => {
     const x0 = X + W;
     const lx = x0 + 24 + e.lane * LANE;
-    const y0 = y(e.from) + H / 2 + (e.kind === "fail" ? 8 : -8);
+    const y0 = y(e.from) + H / 2 + ({ fail: 8, route: 0, par: 0 }[e.kind] ?? -8);
     const y1 = y(e.to) + H / 2 + (e.to > e.from ? -8 : 8);
     const r = 8;
     const dir = y1 > y0 ? 1 : -1;
     const d = `M${x0},${y0} L${lx - r},${y0} Q${lx},${y0} ${lx},${y0 + r * dir} L${lx},${y1 - r * dir} Q${lx},${y1} ${lx - r},${y1} L${x0 + 2},${y1}`;
     return svg("g", {},
       svg("path", { class: `edge ${e.kind}`, d, "marker-end": `url(#arrow-${e.kind})` }),
-      svg("title", {}, `${steps[e.from].id} ${e.kind === "ok" ? "on success" : "on failure"} → ${e.to === steps.length ? "end" : steps[e.to]?.id}`));
+      svg("title", {}, `${steps[e.from].id} ${{ ok: "on success", fail: "on failure", route: `if /${e.label}/`, par: "runs in parallel" }[e.kind]} → ${e.to === steps.length ? "end" : steps[e.to]?.id}`));
   });
 
   const nodes = steps.map((s, i) =>
     svg("g", { class: `node${selected === i ? " sel" : ""}${s.jump_only ? " jump" : ""}`, transform: `translate(${X},${y(i)})`, onClick: () => onSelect?.(i) },
       svg("rect", { width: W, height: H, rx: 8 }),
       svg("rect", { class: `bar ${s.type}`, width: 4, height: H - 12, x: 6, y: 6, rx: 2 }),
-      svg("text", { x: 18, y: 20, "font-weight": 600, "font-size": 13 }, clip(`${s.type === "claude" ? "◆" : "$"} ${s.id ?? "?"}`, 26)),
+      svg("text", { x: 18, y: 20, "font-weight": 600, "font-size": 13 }, clip(`${ICON[s.type] ?? "?"} ${s.id ?? "?"}`, 26)),
       svg("text", { x: 18, y: 37, class: "sub" }, clip(subtitle(s), 28)),
       s.on_success === "stop" || s.on_failure === "stop"
         ? svg("text", { x: W - 8, y: 20, "text-anchor": "end", class: "sub stop" }, "■ stop") : null,
@@ -94,6 +101,8 @@ export function renderGraph(flow, { selected, onSelect } = {}) {
     h("div", { class: "legend" },
       h("span", {}, h("i", { style: { borderColor: "var(--muted)" } }), "next"),
       h("span", {}, h("i", { style: { borderColor: "var(--ok)" } }), "on success"),
-      h("span", {}, h("i", { style: { borderColor: "var(--fail)", borderTopStyle: "dashed" } }), "on failure")),
+      h("span", {}, h("i", { style: { borderColor: "var(--fail)", borderTopStyle: "dashed" } }), "on failure"),
+      h("span", {}, h("i", { style: { borderColor: "var(--route)" } }), "route"),
+      h("span", {}, h("i", { style: { borderColor: "var(--muted)", borderTopStyle: "dotted" } }), "parallel")),
     dangling.length ? h("p", { class: "status bad" }, `${dangling.length} jump(s) point to missing steps`) : null);
 }

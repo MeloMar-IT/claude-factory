@@ -43,7 +43,7 @@ export function computeStats(runs: RunSummary[], days = 30, now = new Date()): S
       f.minutes += (new Date(r.finishedAt).getTime() - new Date(r.startedAt).getTime()) / 60_000;
     }
     byFlow.set(r.flow, f);
-    const repoKey = r.vars?.github_repo && r.vars.github_repo !== "owner/repo" ? r.vars.github_repo : r.repo;
+    const repoKey = r.vars?.github_repo && r.vars.github_repo !== "owner/repo" ? r.vars.github_repo : (r.repo ?? "(older runs)");
     const rp = byRepo.get(repoKey) ?? { runs: 0, costUsd: 0 };
     rp.runs++;
     rp.costUsd += r.totalCostUsd;
