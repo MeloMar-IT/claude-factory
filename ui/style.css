@@ -22,6 +22,7 @@
 }
 
 @media (prefers-color-scheme: dark) {
+  .pill.stopped { background: #3b2f12; color: #fbbf24; }
   :root {
     --bg: #141412;
     --panel: #1c1c1a;
@@ -104,6 +105,7 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent-soft
 .pill.ok, .pill.succeeded { background: var(--ok-soft); color: var(--ok); }
 .pill.fail, .pill.failed { background: var(--fail-soft); color: var(--fail); }
 .pill.running { background: var(--run-soft); color: var(--run); }
+.pill.stopped { background: #fef3c7; color: #92400e; }
 .pill.cancelled { background: var(--panel-2); color: var(--muted); }
 
 /* ── editor ── */
@@ -120,6 +122,7 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent-soft
 .editor { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 20px; align-items: start; }
 .graph-pane { position: sticky; top: 72px; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; max-height: calc(100vh - 92px); overflow: auto; }
 .card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; display: grid; gap: 10px; }
+.card.jump-only { border-style: dashed; }
 .card.selected { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .card-head { display: flex; align-items: center; gap: 8px; }
 .card-head .num { font-family: var(--mono); color: var(--muted); font-size: 12px; width: 22px; }
@@ -147,6 +150,8 @@ details[open] > summary { margin-bottom: 10px; }
 .graph .node.sel rect { stroke: var(--accent); stroke-width: 2; }
 .graph .node .bar.claude { fill: var(--claude); }
 .graph .node .bar.shell { fill: var(--shell); }
+.graph .node.jump rect:first-child { stroke-dasharray: 5 3; fill: transparent; }
+.graph .sub.stop { fill: #b45309; font-weight: 600; }
 .graph .terminal rect { fill: none; stroke: var(--border); stroke-dasharray: 4 3; }
 .graph .edge { fill: none; stroke-width: 1.6; }
 .graph .edge.ok { stroke: var(--ok); }
@@ -184,6 +189,17 @@ details[open] > summary { margin-bottom: 10px; }
 .empty { text-align: center; padding: 60px 20px; color: var(--muted); }
 .spinner { width: 14px; height: 14px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; display: inline-block; }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── block library ── */
+.block-group { margin-bottom: 18px; }
+.block-group h3 { margin-bottom: 8px; }
+.block-grid { display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); }
+.block-card { display: grid; gap: 6px; text-align: left; align-content: start; width: 100%; padding: 10px 12px; border-radius: var(--radius); background: var(--panel); }
+button.block-card:not(:disabled):hover { border-color: var(--accent); background: var(--panel); }
+.block-card .d { font-size: 12.5px; }
+.block-item { display: grid; gap: 6px; align-content: start; }
+.block-item pre { background: var(--panel-2); border-radius: 8px; padding: 10px; overflow: auto; max-height: 300px; margin: 6px 0 0; }
+.modal:has(.block-grid) { width: min(900px, 100%); }
 
 /* ── modal / toast ── */
 .backdrop { position: fixed; inset: 0; background: rgb(0 0 0 / .4); display: grid; place-items: center; z-index: 50; padding: 16px; }

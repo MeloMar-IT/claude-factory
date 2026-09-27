@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { Flow, Step } from "../flow/schema.js";
 import { runClaude } from "../steps/claude.js";
 import { runShell } from "../steps/shell.js";
-import { outputEnvName, render, type TemplateContext } from "./template.js";
+import { outputEnvName, render, varEnvName, type TemplateContext } from "./template.js";
 import { prepareWorkspace } from "./workspace.js";
 
 const DEFAULT_MAX_VISITS = 5;
@@ -31,7 +31,7 @@ export interface RunSummary {
   runId: string;
   flow: string;
   task: string;
-  status: "running" | "succeeded" | "failed" | "cancelled";
+  status: "running" | "succeeded" | "failed" | "cancelled" | "stopped";
   reason?: string;
   runDir: string;
   workdir?: string;
@@ -93,7 +93,7 @@ export async function runFlow(flow: Flow, opts: RunOptions): Promise<RunSummary>
     writeFileSync(join(runDir, "run.json"), JSON.stringify(summary, null, 2));
     opts.onUpdate?.(summary);
   };
-  const finish = (status: "succeeded" | "failed" | "cancelled", reason?: string) => {
+  const finish = (status: Exclude<RunSummary["status"], "running">, reason?: string) => {
     summary.status = status;
     summary.reason = reason;
     summary.finishedAt = new Date().toISOString();
@@ -120,12 +120,20 @@ export async function runFlow(flow: Flow, opts: RunOptions): Promise<RunSummary>
     run: { id: runId, dir: runDir, branch: summary.branch ?? "" },
     steps: {},
   };
+  const vars = ctx.vars as Record<string, string>;
+  const varEnv = Object.fromEntries(Object.entries(vars).map(([k, v]) => [varEnvName(k), v]));
   const outputEnv: Record<string, string> = {};
   const visits = new Map<string, number>();
   const indexOf = new Map(flow.steps.map((s, i) => [s.id, i]));
   const d = flow.defaults;
 
-  let idx = 0;
+  /** First step at or after i that is part of the normal top-to-bottom order. */
+  const sequential = (i: number) => {
+    while (i < flow.steps.length && flow.steps[i]!.jump_only) i++;
+    return i;
+  };
+
+  let idx = sequential(0);
   while (idx < flow.steps.length) {
     if (opts.signal?.aborted) return finish("cancelled", "cancelled by user");
     const step = flow.steps[idx]!;
@@ -164,7 +172,14 @@ export async function runFlow(flow: Flow, opts: RunOptions): Promise<RunSummary>
         const r = await runShell({
           command: render(step.run, ctx, SHELL_TEMPLATE_ROOTS),
           cwd: workdir,
-          env: { FACTORY_TASK: opts.task, FACTORY_RUN_ID: runId, FACTORY_WORKDIR: workdir, ...outputEnv },
+          env: {
+            FACTORY_TASK: opts.task,
+            FACTORY_RUN_ID: runId,
+            FACTORY_WORKDIR: workdir,
+            FACTORY_BRANCH: summary.branch ?? "",
+            ...varEnv,
+            ...outputEnv,
+          },
           logFile,
           timeoutMs,
           signal: opts.signal,
@@ -208,7 +223,8 @@ export async function runFlow(flow: Flow, opts: RunOptions): Promise<RunSummary>
     const target = rec.ok ? (step.on_success ?? "next") : (step.on_failure ?? "fail");
     if (target === "end") return finish("succeeded");
     if (target === "fail") return finish("failed", `step "${step.id}" failed${rec.error ? `: ${rec.error}` : ""}`);
-    idx = target === "next" ? idx + 1 : indexOf.get(target)!;
+    if (target === "stop") return finish("stopped", `stopped at step "${step.id}" — needs attention`);
+    idx = target === "next" ? sequential(idx + 1) : indexOf.get(target)!;
   }
   return finish("succeeded");
 }

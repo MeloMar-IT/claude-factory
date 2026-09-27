@@ -1,0 +1,13 @@
+name: Push plan to ticket
+category: GitHub
+description: Posts the plan from the "plan" step as a comment on the GitHub issue.
+vars:
+  github_repo: owner/repo
+  issue: ""
+steps:
+  - id: push_plan
+    type: shell
+    run: |
+      { echo "🤖 **claude-factory plan**"; echo
+        printf '%s\n' "$FACTORY_OUT_PLAN" | sed '/^PLAN_STATUS:/d'; } \
+        | gh issue comment "$FACTORY_VAR_ISSUE" --repo "$FACTORY_VAR_GITHUB_REPO" --body-file -

@@ -1,0 +1,33 @@
+name: Code review (fix until approved)
+category: Claude
+description: Opus reviews the uncommitted changes; if it requests changes, Claude addresses them and it reviews again (max 3 rounds).
+steps:
+  - id: review
+    type: claude
+    model: opus
+    max_visits: 3
+    permission_mode: dontAsk
+    allowed_tools: [Read, Glob, Grep, "Bash(git diff*)", "Bash(git status*)", "Bash(git log*)"]
+    prompt: |
+      You are a strict senior code reviewer. Review the uncommitted changes
+      (`git status`, `git diff`, `git diff --cached`) for this work:
+
+      {{steps.pull_ticket.output}}
+      {{task}}
+
+      Check correctness, edge cases, security, readability and test coverage.
+      Be specific: file, line, problem, fix. End your answer with exactly one line:
+      VERDICT: APPROVE   or   VERDICT: CHANGES
+    pass_if: "^VERDICT: APPROVE\\s*$"
+    on_failure: address_review
+
+  - id: address_review
+    type: claude
+    jump_only: true
+    permission_mode: acceptEdits
+    allowed_tools: [Read, Edit, Write, Glob, Grep, "Bash(npm *)", "Bash(npx *)", "Bash(git diff*)"]
+    prompt: |
+      A reviewer requested changes. Address every point:
+
+      {{steps.review.output}}
+    on_success: review

@@ -1,0 +1,15 @@
+name: Pull ticket from GitHub
+category: GitHub
+description: "Fetches the GitHub issue set in var issue (title, body, labels, comments). Later steps use {{steps.pull_ticket.output}}."
+vars:
+  github_repo: owner/repo
+  issue: ""
+steps:
+  - id: pull_ticket
+    type: shell
+    description: Read the GitHub issue as plain text
+    run: |
+      case "$FACTORY_VAR_ISSUE" in ''|*[!0-9]*) echo "set the 'issue' variable to an issue number (got '$FACTORY_VAR_ISSUE')"; exit 1;; esac
+      gh issue view "$FACTORY_VAR_ISSUE" --repo "$FACTORY_VAR_GITHUB_REPO" --json number,title,body,url,labels,comments --jq '
+        "# #\(.number): \(.title)\n\(.url)\nLabels: \([.labels[].name] | join(", "))\n\n\(.body)\n"
+        + ([.comments[] | "\n--- comment by \(.author.login):\n\(.body)"] | join("\n"))'

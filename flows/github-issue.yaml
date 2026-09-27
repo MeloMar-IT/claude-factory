@@ -1,0 +1,206 @@
+# ─── GitHub ticket → code → pushed branch ─────────────────────────────
+# Built from the block library (blocks/*.yaml). Run it with:
+#   factory run github-issue --var github_repo=owner/repo --var issue=42
+# or from the UI (▶ Run, then fill in github_repo and issue).
+#
+# check repo → pull ticket → clone → plan ─┬─ unclear → ask on ticket → stop
+#                                          └─ ready → post plan → code
+#   → tests ⟲ fix → review ⟲ address (→ tests) → commit → push → report on ticket
+# ───────────────────────────────────────────────────────────────────────
+name: github-issue
+description: GitHub ticket → plan (or ask for info) → code → tests → review → commit, push, report
+workspace: empty
+defaults:
+  model: sonnet
+  timeout_sec: 1800
+vars:
+  github_repo: owner/repo
+  issue: ""
+  test_cmd: npm test
+steps:
+  - id: check_repo
+    type: shell
+    description: Verify the repo exists and show your permission
+    run: |
+      gh repo view "$FACTORY_VAR_GITHUB_REPO" --json nameWithOwner,defaultBranchRef,viewerPermission \
+        --jq '"repo: \(.nameWithOwner)\ndefault branch: \(.defaultBranchRef.name)\nyour permission: \(.viewerPermission)"'
+  - id: pull_ticket
+    type: shell
+    description: Read the GitHub issue as plain text
+    run: |
+      case "$FACTORY_VAR_ISSUE" in ''|*[!0-9]*) echo "set the 'issue' variable to an issue number (got '$FACTORY_VAR_ISSUE')"; exit 1;; esac
+      gh issue view "$FACTORY_VAR_ISSUE" --repo "$FACTORY_VAR_GITHUB_REPO" --json number,title,body,url,labels,comments --jq '
+        "# #\(.number): \(.title)\n\(.url)\nLabels: \([.labels[].name] | join(", "))\n\n\(.body)\n"
+        + ([.comments[] | "\n--- comment by \(.author.login):\n\(.body)"] | join("\n"))'
+  - id: pull_repo
+    type: shell
+    description: Clone (or fast-forward) and create a factory/ branch
+    run: |
+      if [ -d .git ]; then git pull -q --ff-only; else gh repo clone "$FACTORY_VAR_GITHUB_REPO" . -- -q; fi
+      branch="factory/${FACTORY_VAR_ISSUE:+issue-$FACTORY_VAR_ISSUE-}$FACTORY_RUN_ID"
+      git checkout -q -b "$branch"
+      echo "branch: $branch"
+      git log --oneline -1
+  - id: plan
+    type: claude
+    model: opus
+    permission_mode: dontAsk
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Bash(git log*)
+      - Bash(ls*)
+    prompt: |
+      You are the architect. Read the codebase and plan the work for the ticket below.
+      Do NOT modify any files.
+
+      Ticket:
+      {{steps.pull_ticket.output}}
+
+      Extra instructions: {{task}}
+
+      If the ticket is clear enough, write a concise, concrete plan (files to touch,
+      approach, tests to add), then end with exactly this line:
+      PLAN_STATUS: READY
+
+      If critical information is missing, do not guess. List the specific questions
+      that must be answered first, then end with exactly this line:
+      PLAN_STATUS: NEEDS_INFO
+    pass_if: "^PLAN_STATUS: READY\\s*$"
+    on_failure: ask_for_info
+  - id: ask_for_info
+    type: shell
+    jump_only: true
+    description: Post Claude's questions on the ticket, then stop the run
+    run: |
+      printf '%s\n' "$FACTORY_OUT_PLAN" | grep -q '^PLAN_STATUS: NEEDS_INFO' || { echo "planning failed (no questions to ask)"; exit 1; }
+      { echo "🤖 **claude-factory** needs more information before it can work on this ticket:"; echo
+        printf '%s\n' "$FACTORY_OUT_PLAN" | sed '/^PLAN_STATUS:/d'; } \
+        | gh issue comment "$FACTORY_VAR_ISSUE" --repo "$FACTORY_VAR_GITHUB_REPO" --body-file -
+    on_success: stop
+  - id: push_plan
+    type: shell
+    run: |
+      { echo "🤖 **claude-factory plan**"; echo
+        printf '%s\n' "$FACTORY_OUT_PLAN" | sed '/^PLAN_STATUS:/d'; } \
+        | gh issue comment "$FACTORY_VAR_ISSUE" --repo "$FACTORY_VAR_GITHUB_REPO" --body-file -
+  - id: implement
+    type: claude
+    permission_mode: acceptEdits
+    allowed_tools:
+      - Read
+      - Edit
+      - Write
+      - Glob
+      - Grep
+      - Bash(npm *)
+      - Bash(npx *)
+      - Bash(git status*)
+      - Bash(git diff*)
+    prompt: |
+      Implement the work described below. Keep changes focused and add or update tests.
+
+      Ticket:
+      {{steps.pull_ticket.output}}
+
+      Plan:
+      {{steps.plan.output}}
+
+      Extra instructions: {{task}}
+
+      When you are done, summarise what you changed in a few bullet points.
+  - id: run_tests
+    type: shell
+    run: "{{vars.test_cmd}}"
+    on_failure: fix_tests
+  - id: fix_tests
+    type: claude
+    jump_only: true
+    max_visits: 3
+    permission_mode: acceptEdits
+    allowed_tools:
+      - Read
+      - Edit
+      - Write
+      - Glob
+      - Grep
+      - Bash(npm *)
+      - Bash(npx *)
+      - Bash(git diff*)
+    prompt: |
+      The tests failed. Fix the code so they pass (change tests only if they are wrong).
+
+      Test output (tail):
+      {{steps.run_tests.output}}
+    on_success: run_tests
+  - id: review
+    type: claude
+    model: opus
+    max_visits: 3
+    permission_mode: dontAsk
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Bash(git diff*)
+      - Bash(git status*)
+      - Bash(git log*)
+    prompt: |
+      You are a strict senior code reviewer. Review the uncommitted changes
+      (`git status`, `git diff`, `git diff --cached`) for this work:
+
+      {{steps.pull_ticket.output}}
+      {{task}}
+
+      Check correctness, edge cases, security, readability and test coverage.
+      Be specific: file, line, problem, fix. End your answer with exactly one line:
+      VERDICT: APPROVE   or   VERDICT: CHANGES
+    pass_if: "^VERDICT: APPROVE\\s*$"
+    on_failure: address_review
+  - id: address_review
+    type: claude
+    jump_only: true
+    permission_mode: acceptEdits
+    allowed_tools:
+      - Read
+      - Edit
+      - Write
+      - Glob
+      - Grep
+      - Bash(npm *)
+      - Bash(npx *)
+      - Bash(git diff*)
+    prompt: |
+      A reviewer requested changes. Address every point:
+
+      {{steps.review.output}}
+    on_success: run_tests
+  - id: commit
+    type: shell
+    run: |
+      git add -A
+      if git diff --cached --quiet; then echo "nothing to commit"; exit 1; fi
+      if [ -n "$FACTORY_VAR_ISSUE" ]; then msg="Resolve #$FACTORY_VAR_ISSUE"; else msg="factory: $(printf '%s' "$FACTORY_TASK" | head -1)"; fi
+      git commit -q -m "$msg" -m "Automated by claude-factory (run $FACTORY_RUN_ID)"
+      git log --oneline -1
+  - id: push
+    type: shell
+    run: |
+      git push -q -u origin HEAD
+      echo "pushed $(git branch --show-current)"
+  - id: push_result
+    type: shell
+    run: |
+      branch=$(git branch --show-current)
+      {
+        echo "✅ **claude-factory finished this ticket**"
+        echo
+        echo "Branch: [\`$branch\`](https://github.com/$FACTORY_VAR_GITHUB_REPO/compare/$branch?expand=1) — open a pull request from there."
+        echo
+        echo "### Changes"
+        printf '%s\n' "$FACTORY_OUT_IMPLEMENT"
+        echo
+        echo "### Commits"
+        git log --oneline origin/HEAD..HEAD 2>/dev/null || git log --oneline -3
+      } | gh issue comment "$FACTORY_VAR_ISSUE" --repo "$FACTORY_VAR_GITHUB_REPO" --body-file -

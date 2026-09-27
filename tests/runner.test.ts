@@ -84,6 +84,43 @@ steps:
     }
   });
 
+  it("skips jump_only steps in normal order and can stop a run", async () => {
+    const ok = await run(`
+name: t
+workspace: inplace
+steps:
+  - {id: a, type: shell, run: "true", on_failure: handler}
+  - {id: handler, type: shell, run: "echo handled", jump_only: true, on_success: stop}
+  - {id: b, type: shell, run: "true"}
+`);
+    expect(ok.status).toBe("succeeded");
+    expect(ok.history.map((h) => h.id)).toEqual(["a", "b"]);
+
+    const stopped = await run(`
+name: t
+workspace: inplace
+steps:
+  - {id: a, type: shell, run: "false", on_failure: handler}
+  - {id: handler, type: shell, run: "echo handled", jump_only: true, on_success: stop}
+  - {id: b, type: shell, run: "true"}
+`);
+    expect(stopped.status).toBe("stopped");
+    expect(stopped.history.map((h) => h.id)).toEqual(["a", "handler"]);
+  });
+
+  it("exposes vars as env and supports an empty workspace", async () => {
+    const s = await run(`
+name: t
+workspace: empty
+vars: {github_repo: "o/r"}
+steps:
+  - {id: a, type: shell, run: 'echo "$FACTORY_VAR_GITHUB_REPO"; ls -A | wc -l'}
+`);
+    expect(s.status).toBe("succeeded");
+    expect(s.history[0]!.output.split("\n").map((l) => l.trim())).toEqual(["o/r", "0", ""]);
+    expect(s.workdir).toBe(join(s.runDir, "workspace"));
+  });
+
   it("stops runaway loops with max_visits", async () => {
     const s = await run(`
 name: t

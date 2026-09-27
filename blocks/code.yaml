@@ -1,0 +1,20 @@
+name: Do coding
+category: Claude
+description: Claude implements the plan (or the task) and summarises its changes.
+steps:
+  - id: implement
+    type: claude
+    permission_mode: acceptEdits
+    allowed_tools: [Read, Edit, Write, Glob, Grep, "Bash(npm *)", "Bash(npx *)", "Bash(git status*)", "Bash(git diff*)"]
+    prompt: |
+      Implement the work described below. Keep changes focused and add or update tests.
+
+      Ticket:
+      {{steps.pull_ticket.output}}
+
+      Plan:
+      {{steps.plan.output}}
+
+      Extra instructions: {{task}}
+
+      When you are done, summarise what you changed in a few bullet points.

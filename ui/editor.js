@@ -82,7 +82,7 @@ function settingsCard(flow, onChange, rerender) {
   return h("div", { class: "card" },
     h("div", { class: "grid" },
       field("Name", text(flow, "name", onChange, { mono: true, placeholder: "my-flow" }), "Also the file name"),
-      field("Workspace", select(flow, "workspace", [["worktree", "git worktree (isolated branch)"], ["inplace", "in place (edit repo directly)"]], onChange))),
+      field("Workspace", select(flow, "workspace", [["worktree", "git worktree of local repo (isolated branch)"], ["empty", "empty folder (clone from GitHub in a step)"], ["inplace", "in place (edit repo directly)"]], onChange))),
     field("Description", text(flow, "description", onChange, { placeholder: "What this flow does" })),
     h("details", {},
       h("summary", {}, "Defaults for all claude steps"),
@@ -109,7 +109,7 @@ function settingsCard(flow, onChange, rerender) {
 // ── step card ──
 
 function targetOptions(flow, self, fallback) {
-  const base = [["next", "next step"], ["end", "end (success)"], ["fail", "fail run"]];
+  const base = [["next", "next step"], ["end", "end (success)"], ["fail", "fail run"], ["stop", "stop (needs a human)"]];
   const steps = flow.steps.filter((s) => s !== self).map((s) => [s.id, `→ ${s.id}`]);
   return [["", `${fallback} (default)`], ...base.filter(([v]) => v !== fallback), ...steps];
 }
@@ -154,7 +154,7 @@ function stepCard(flow, step, i, ctx) {
     ];
   }
 
-  return h("div", { class: `card${selected === i ? " selected" : ""}`, id: `step-${i}`, onFocusin: () => selected !== i && onSelect(i, false) },
+  return h("div", { class: `card${selected === i ? " selected" : ""}${step.jump_only ? " jump-only" : ""}`, id: `step-${i}`, onFocusin: () => selected !== i && onSelect(i, false) },
     h("div", { class: "card-head" },
       h("span", { class: "num" }, `${i + 1}`),
       text(step, "id", onChange, {
@@ -170,6 +170,7 @@ function stepCard(flow, step, i, ctx) {
       h("span", { class: "spacer" }),
       h("button", { class: "icon", title: "Move up", disabled: i === 0, onClick: () => move(-1) }, "↑"),
       h("button", { class: "icon", title: "Move down", disabled: i === flow.steps.length - 1, onClick: () => move(1) }, "↓"),
+      h("button", { class: "icon", title: "Save as reusable block", onClick: () => ctx.onSaveBlock?.(step) }, "☆"),
       h("button", { class: "icon", title: "Duplicate", onClick: () => { flow.steps.splice(i + 1, 0, { ...structuredClone(step), id: uniqueId(flow, step.id) }); rerender(); } }, "⧉"),
       h("button", { class: "icon", title: "Delete step", onClick: () => { flow.steps.splice(i, 1); rerender(); } }, "🗑")),
     field("Description", text(step, "description", onChange, { placeholder: "optional" })),
@@ -180,12 +181,17 @@ function stepCard(flow, step, i, ctx) {
         field("On failure →", select(step, "on_failure", targetOptions(flow, step, "fail").slice(1), () => { onChange(); }, { emptyLabel: "fail run (default)" })),
         field("Max visits", text(step, "max_visits", onChange, { type: "number", placeholder: String(flow.defaults?.max_visits ?? 5) })),
         field("Timeout (sec)", text(step, "timeout_sec", onChange, { type: "number", placeholder: flow.defaults?.timeout_sec ? String(flow.defaults.timeout_sec) : "none" }))),
+      h("label", { class: "row", style: { gap: "6px", fontSize: "12.5px" } },
+        h("input", { type: "checkbox", style: { width: "auto" }, checked: !!step.jump_only,
+          onChange: (e) => { setKey(step, "jump_only", e.target.checked || ""); rerender(); } }),
+        h("span", {}, "Only reachable via jumps"),
+        h("span", { class: "muted" }, "— skipped in normal order, e.g. an “ask for info” or “fix” handler")),
       h("div", { class: "grid" },
         field("Pass only if output matches", text(step, "pass_if", onChange, { mono: true, placeholder: "regex, e.g. ^VERDICT: APPROVE" })),
         field("Fail if output matches", text(step, "fail_if", onChange, { mono: true, placeholder: "regex" })))));
 }
 
-function insertBar(flow, at, rerender, onSelect) {
+function insertBar(flow, at, { rerender, onSelect, onLibrary }) {
   const add = (type) => {
     const step = type === "claude"
       ? { id: uniqueId(flow, "claude"), type, prompt: "" }
@@ -196,19 +202,19 @@ function insertBar(flow, at, rerender, onSelect) {
   };
   return h("div", { class: "insert" },
     h("button", { class: "small", onClick: () => add("claude") }, "+ Claude step"),
-    h("button", { class: "small", onClick: () => add("shell") }, "+ Shell step"));
+    h("button", { class: "small", onClick: () => add("shell") }, "+ Shell step"),
+    h("button", { class: "small", onClick: () => onLibrary?.(at) }, "+ From library"));
 }
 
 /** Visual editor for a flow object. Field edits call onChange; structural edits call rerender. */
 export function renderEditor(flow, ctx) {
   flow.steps ??= [];
-  const { rerender, onSelect } = ctx;
   return h("div", { class: "steps" },
     h("datalist", { id: "models" }, MODELS.map((m) => h("option", { value: m }))),
-    settingsCard(flow, ctx.onChange, rerender),
+    settingsCard(flow, ctx.onChange, ctx.rerender),
     h("h3", { style: { margin: "22px 0 4px" } }, `Steps (${flow.steps.length})`),
-    insertBar(flow, 0, rerender, onSelect),
-    flow.steps.map((s, i) => [stepCard(flow, s, i, ctx), insertBar(flow, i + 1, rerender, onSelect)]));
+    insertBar(flow, 0, ctx),
+    flow.steps.map((s, i) => [stepCard(flow, s, i, ctx), insertBar(flow, i + 1, ctx)]));
 }
 
 /** Strip empty values so the YAML stays tidy. */

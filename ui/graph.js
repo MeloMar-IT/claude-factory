@@ -2,10 +2,16 @@ import { h, svg } from "./dom.js";
 
 const W = 200, H = 48, GAP = 34, X = 16, TOP = 12, LANE = 18;
 
+/** Next step in top-to-bottom order (jump_only steps are skipped). */
+function nextSequential(steps, i) {
+  while (i < steps.length && steps[i].jump_only) i++;
+  return i;
+}
+
 function targetIndex(steps, i, target) {
-  if (target === "next") return i + 1; // may equal steps.length → END
+  if (target === "next") return nextSequential(steps, i + 1); // may equal steps.length → END
   if (target === "end") return steps.length;
-  if (target === "fail") return -1;
+  if (target === "fail" || target === "stop") return -1;
   const j = steps.findIndex((s) => s.id === target);
   return j === -1 ? -2 : j; // -2: dangling reference
 }
@@ -69,12 +75,14 @@ export function renderGraph(flow, { selected, onSelect } = {}) {
   });
 
   const nodes = steps.map((s, i) =>
-    svg("g", { class: `node${selected === i ? " sel" : ""}`, transform: `translate(${X},${y(i)})`, onClick: () => onSelect?.(i) },
+    svg("g", { class: `node${selected === i ? " sel" : ""}${s.jump_only ? " jump" : ""}`, transform: `translate(${X},${y(i)})`, onClick: () => onSelect?.(i) },
       svg("rect", { width: W, height: H, rx: 8 }),
       svg("rect", { class: `bar ${s.type}`, width: 4, height: H - 12, x: 6, y: 6, rx: 2 }),
       svg("text", { x: 18, y: 20, "font-weight": 600, "font-size": 13 }, clip(`${s.type === "claude" ? "◆" : "$"} ${s.id ?? "?"}`, 26)),
       svg("text", { x: 18, y: 37, class: "sub" }, clip(subtitle(s), 28)),
-      svg("title", {}, s.description ?? s.id ?? "")));
+      s.on_success === "stop" || s.on_failure === "stop"
+        ? svg("text", { x: W - 8, y: 20, "text-anchor": "end", class: "sub stop" }, "■ stop") : null,
+      svg("title", {}, (s.jump_only ? "[only via jumps] " : "") + (s.description ?? s.id ?? ""))));
 
   const end = svg("g", { class: "terminal", transform: `translate(${X},${y(steps.length)})` },
     svg("rect", { width: W, height: H, rx: 24 }),

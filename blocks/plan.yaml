@@ -1,0 +1,38 @@
+name: Plan work (asks for info if unclear)
+category: Claude
+description: Claude reads the code and ticket and writes a plan. If the ticket is too unclear, it posts its questions on the ticket and stops the run.
+steps:
+  - id: plan
+    type: claude
+    model: opus
+    permission_mode: dontAsk
+    allowed_tools: [Read, Glob, Grep, "Bash(git log*)", "Bash(ls*)"]
+    prompt: |
+      You are the architect. Read the codebase and plan the work for the ticket below.
+      Do NOT modify any files.
+
+      Ticket:
+      {{steps.pull_ticket.output}}
+
+      Extra instructions: {{task}}
+
+      If the ticket is clear enough, write a concise, concrete plan (files to touch,
+      approach, tests to add), then end with exactly this line:
+      PLAN_STATUS: READY
+
+      If critical information is missing, do not guess. List the specific questions
+      that must be answered first, then end with exactly this line:
+      PLAN_STATUS: NEEDS_INFO
+    pass_if: "^PLAN_STATUS: READY\\s*$"
+    on_failure: ask_for_info
+
+  - id: ask_for_info
+    type: shell
+    jump_only: true
+    description: Post Claude's questions on the ticket, then stop the run
+    run: |
+      printf '%s\n' "$FACTORY_OUT_PLAN" | grep -q '^PLAN_STATUS: NEEDS_INFO' || { echo "planning failed (no questions to ask)"; exit 1; }
+      { echo "🤖 **claude-factory** needs more information before it can work on this ticket:"; echo
+        printf '%s\n' "$FACTORY_OUT_PLAN" | sed '/^PLAN_STATUS:/d'; } \
+        | gh issue comment "$FACTORY_VAR_ISSUE" --repo "$FACTORY_VAR_GITHUB_REPO" --body-file -
+    on_success: stop

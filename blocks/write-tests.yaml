@@ -1,0 +1,15 @@
+name: Write tests
+category: Claude
+description: Claude adds automated tests for the change using the project's existing test setup.
+steps:
+  - id: write_tests
+    type: claude
+    permission_mode: acceptEdits
+    allowed_tools: [Read, Edit, Write, Glob, Grep, "Bash(npm *)", "Bash(npx *)", "Bash(git diff*)"]
+    prompt: |
+      Write or extend automated tests that cover the current changes (see `git diff`)
+      and the task below. Use the project's existing test framework and conventions.
+      Cover edge cases. Do not change production code.
+
+      Task: {{task}}
+      {{steps.pull_ticket.output}}

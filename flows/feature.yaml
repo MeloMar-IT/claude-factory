@@ -5,8 +5,11 @@
 #
 # Step fields (all types):
 #   id            unique name; referenced by jumps and templates
-#   on_success    step id | next | end | fail        (default: next)
-#   on_failure    step id | next | end | fail        (default: fail)
+#   on_success    step id | next | end | fail | stop (default: next)
+#   on_failure    step id | next | end | fail | stop (default: fail)
+#                 stop = halt the run as "stopped" (waiting on a human)
+#   jump_only     true = skipped in top-to-bottom order; only reached by a jump
+#                 (use for handlers like "ask for more info")
 #   pass_if       regex the output must match to count as success
 #   fail_if       regex that turns a match in the output into a failure
 #   max_visits    loop guard: max times this step may run (default: 5)
@@ -20,7 +23,11 @@
 # Templates (claude prompts):  {{task}} {{vars.x}} {{workdir}} {{run.id}}
 #   {{steps.<id>.output}} {{steps.<id>.ok}} {{steps.<id>.exit_code}}
 # Shell `run` may only use {{vars.*}} {{workdir}} {{run.*}}. Untrusted text
-# is passed as env vars instead: $FACTORY_TASK, $FACTORY_OUT_<STEP_ID>.
+# is passed as env vars instead: $FACTORY_TASK, $FACTORY_OUT_<STEP_ID>,
+# $FACTORY_VAR_<NAME>, $FACTORY_RUN_ID, $FACTORY_BRANCH.
+#
+# workspace: worktree (git worktree of the local repo) | inplace | empty
+# Reusable step blocks live in blocks/ — insert them from the UI library.
 #
 # Make your own:  factory new my-flow            (copies this file)
 # ────────────────────────────────────────────────────────────────────────
@@ -42,7 +49,8 @@ steps:
   - id: plan
     type: claude
     model: opus
-    permission_mode: plan
+    permission_mode: dontAsk          # read-only: only the tools below are allowed
+    allowed_tools: [Read, Glob, Grep, "Bash(git log*)"]
     prompt: |
       You are the architect. Read the codebase and write a concise, concrete
       implementation plan (files to touch, approach, tests to add) for:

@@ -3,6 +3,7 @@ import { api } from "./api.js";
 import { debounce, h, modal, mount, toast } from "./dom.js";
 import { cleanFlow, renderEditor } from "./editor.js";
 import { renderGraph } from "./graph.js";
+import { insertBlock, pickBlock, renderLibrary, saveStepAsBlock } from "./library.js";
 import { renderRunDetail, renderRunsList } from "./runs.js";
 
 const sidebar = document.getElementById("sidebar");
@@ -161,6 +162,18 @@ function drawBody() {
         changed();
       },
       onSelect: (i, scroll = true) => select(i, scroll),
+      onLibrary: async (at) => {
+        const picked = await pickBlock().catch((e) => toast(e.message, "error"));
+        if (!picked?.block) return;
+        const { count, renamed } = insertBlock(c.obj, picked.block, at);
+        c.selected = at;
+        c.yaml = YAML.stringify(cleanFlow(c.obj), { lineWidth: 0 });
+        drawBody();
+        changed();
+        toast(`Inserted “${picked.block.name}” (${count} step${count > 1 ? "s" : ""})` +
+          (renamed.length ? ` — renamed ${renamed.map(([a, b]) => `${a}→${b}`).join(", ")}` : ""));
+      },
+      onSaveBlock: (step) => saveStepAsBlock(c.obj, step).catch((e) => toast(e.message, "error")),
     }));
 }
 
@@ -247,12 +260,13 @@ async function runDialog() {
   if (!c.validation?.ok) return toast("Fix the errors before running", "error");
   const flow = c.validation.flow;
   const runId = await modal(`Run ${flow.name}`, (close) => {
+    const usesTask = /\{\{\s*task\s*\}\}|FACTORY_TASK/.test(c.yaml);
     const task = h("textarea", { rows: 5, placeholder: "Describe the task, e.g. “Add a --json flag to the export command”" });
     const repo = h("input", { class: "mono", value: S.info.repo });
     const vars = Object.entries(flow.vars).map(([k, v]) => [k, h("input", { class: "mono", value: v })]);
     const err = h("p", { class: "status bad", style: { margin: 0 } });
     const start = h("button", { class: "primary", onClick: async () => {
-      if (!task.value.trim()) return (err.textContent = "Describe the task first.");
+      if (!task.value.trim() && flow.workspace !== "empty" && !confirm("Run without a task description?")) return;
       start.disabled = true;
       try {
         const body = {
@@ -268,9 +282,12 @@ async function runDialog() {
     } }, "▶ Start run");
     task.addEventListener("keydown", (e) => e.key === "Enter" && (e.metaKey || e.ctrlKey) && start.click());
     return h("div", { style: { display: "grid", gap: "12px" } },
-      h("label", { class: "field" }, h("span", {}, "Task"), task),
-      h("label", { class: "field" }, h("span", {}, "Repository"), repo,
-        h("small", {}, flow.workspace === "worktree" ? "Runs in a fresh git worktree + branch — your checkout is not touched." : "⚠ in-place: Claude edits this directory directly.")),
+      h("label", { class: "field" }, h("span", {}, flow.workspace === "empty" ? "Extra instructions (optional)" : "Task"), task,
+        !usesTask ? h("small", {}, "This flow doesn't use the task text.") : null),
+      flow.workspace === "empty"
+        ? h("small", { class: "muted" }, "Runs in a fresh empty folder — the flow fetches its own code (e.g. clones from GitHub).")
+        : h("label", { class: "field" }, h("span", {}, "Repository"), repo,
+            h("small", {}, flow.workspace === "worktree" ? "Runs in a fresh git worktree + branch — your checkout is not touched." : "⚠ in-place: Claude edits this directory directly.")),
       vars.length ? h("div", { class: "grid" }, vars.map(([k, el]) => h("label", { class: "field" }, h("span", { class: "mono" }, k), el))) : null,
       c.dirty ? h("small", { class: "muted" }, "Runs your unsaved edits.") : null,
       err,
@@ -341,7 +358,8 @@ async function route() {
   S.cleanup = null;
   document.querySelectorAll("[data-nav]").forEach((a) => a.classList.toggle("active", a.dataset.nav === (section === "new" ? "flows" : section)));
   try {
-    if (section === "runs" && arg) S.cleanup = renderRunDetail(main, arg);
+    if (section === "library") await renderLibrary(main);
+    else if (section === "runs" && arg) S.cleanup = renderRunDetail(main, arg);
     else if (section === "runs") await renderRunsList(main);
     else if (section === "new") S.cur && !S.cur.name ? renderFlowView() : openNew();
     else if (section === "flows" && arg) await openFlow(arg);

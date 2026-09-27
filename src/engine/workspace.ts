@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 
 export interface Workspace {
@@ -18,8 +19,18 @@ export function repoRoot(dir: string): string | undefined {
   }
 }
 
-export function prepareWorkspace(mode: "worktree" | "inplace", repo: string, runDir: string, runId: string): Workspace {
+export function prepareWorkspace(
+  mode: "worktree" | "inplace" | "empty",
+  repo: string,
+  runDir: string,
+  runId: string,
+): Workspace {
   if (mode === "inplace") return { workdir: repo };
+  if (mode === "empty") {
+    const workdir = join(runDir, "workspace");
+    mkdirSync(workdir, { recursive: true });
+    return { workdir };
+  }
 
   const root = repoRoot(repo);
   if (!root) throw new Error(`workspace "worktree" needs a git repository, but ${repo} is not one`);

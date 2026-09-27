@@ -7,7 +7,7 @@ const minimal = (steps: string) => `name: t\nsteps:\n${steps}`;
 
 describe("flow schema", () => {
   it("parses the built-in flows", () => {
-    for (const f of ["feature", "quick"]) {
+    for (const f of ["feature", "quick", "github-issue"]) {
       const flow = parseFlow(readFileSync(`flows/${f}.yaml`, "utf8"), f);
       expect(flow.name).toBe(f);
     }

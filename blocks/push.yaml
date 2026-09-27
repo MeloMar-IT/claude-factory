@@ -1,0 +1,9 @@
+name: Push code
+category: Git
+description: Pushes the current branch to origin.
+steps:
+  - id: push
+    type: shell
+    run: |
+      git push -q -u origin HEAD
+      echo "pushed $(git branch --show-current)"

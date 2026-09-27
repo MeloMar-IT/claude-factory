@@ -1,0 +1,23 @@
+name: Run tests (fix until green)
+category: Checks
+description: Runs the test command; on failure Claude fixes the code and tests run again (max 3 fixes).
+vars:
+  test_cmd: npm test
+steps:
+  - id: run_tests
+    type: shell
+    run: "{{vars.test_cmd}}"
+    on_failure: fix_tests
+
+  - id: fix_tests
+    type: claude
+    jump_only: true
+    max_visits: 3
+    permission_mode: acceptEdits
+    allowed_tools: [Read, Edit, Write, Glob, Grep, "Bash(npm *)", "Bash(npx *)", "Bash(git diff*)"]
+    prompt: |
+      The tests failed. Fix the code so they pass (change tests only if they are wrong).
+
+      Test output (tail):
+      {{steps.run_tests.output}}
+    on_success: run_tests

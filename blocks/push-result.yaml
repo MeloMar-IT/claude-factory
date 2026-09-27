@@ -1,0 +1,22 @@
+name: Push finished result to ticket
+category: GitHub
+description: Comments on the issue with the branch (and a link to open a PR), Claude's change summary and the commits.
+vars:
+  github_repo: owner/repo
+  issue: ""
+steps:
+  - id: push_result
+    type: shell
+    run: |
+      branch=$(git branch --show-current)
+      {
+        echo "✅ **claude-factory finished this ticket**"
+        echo
+        echo "Branch: [\`$branch\`](https://github.com/$FACTORY_VAR_GITHUB_REPO/compare/$branch?expand=1) — open a pull request from there."
+        echo
+        echo "### Changes"
+        printf '%s\n' "$FACTORY_OUT_IMPLEMENT"
+        echo
+        echo "### Commits"
+        git log --oneline origin/HEAD..HEAD 2>/dev/null || git log --oneline -3
+      } | gh issue comment "$FACTORY_VAR_ISSUE" --repo "$FACTORY_VAR_GITHUB_REPO" --body-file -

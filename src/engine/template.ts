@@ -35,7 +35,14 @@ export function render(template: string, ctx: TemplateContext, allowed?: readonl
   });
 }
 
+const envSuffix = (name: string) => name.toUpperCase().replace(/[^A-Z0-9]/g, "_");
+
 /** Env var name for a step's output, e.g. "run-tests" -> FACTORY_OUT_RUN_TESTS. */
 export function outputEnvName(stepId: string): string {
-  return "FACTORY_OUT_" + stepId.toUpperCase().replace(/[^A-Z0-9]/g, "_");
+  return "FACTORY_OUT_" + envSuffix(stepId);
+}
+
+/** Env var name for a flow variable, e.g. "github_repo" -> FACTORY_VAR_GITHUB_REPO. */
+export function varEnvName(name: string): string {
+  return "FACTORY_VAR_" + envSuffix(name);
 }

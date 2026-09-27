@@ -1,7 +1,8 @@
 import { z } from "zod";
 
 /** Reserved transition targets. Anything else must be a step id. */
-export const RESERVED_TARGETS = ["next", "end", "fail"] as const;
+/** next: following step · end: succeed · fail: fail · stop: halt as "stopped" (needs a human). */
+export const RESERVED_TARGETS = ["next", "end", "fail", "stop"] as const;
 
 export const PERMISSION_MODES = [
   "acceptEdits",
@@ -23,9 +24,11 @@ const baseStep = {
   pass_if: z.string().optional(),
   /** Regex; step fails if its output matches. */
   fail_if: z.string().optional(),
-  /** Where to go on success: step id | next | end | fail. Default: next. */
+  /** Skipped in top-to-bottom order; only entered via a jump (e.g. an error handler). */
+  jump_only: z.boolean().optional(),
+  /** Where to go on success: step id | next | end | fail | stop. Default: next. */
   on_success: z.string().optional(),
-  /** Where to go on failure: step id | next | end | fail. Default: fail. */
+  /** Where to go on failure: step id | next | end | fail | stop. Default: fail. */
   on_failure: z.string().optional(),
   /** How often this step may run in one flow run (loop guard). */
   max_visits: z.number().int().positive().optional(),
@@ -72,8 +75,11 @@ export const FlowSchema = z
   .object({
     name: z.string().min(1),
     description: z.string().optional(),
-    /** worktree: isolated git worktree + branch per run. inplace: work directly in the repo. */
-    workspace: z.enum(["worktree", "inplace"]).default("worktree"),
+    /**
+     * worktree: isolated git worktree + branch of the local repo per run.
+     * inplace: work directly in the repo. empty: fresh empty dir (e.g. clone from GitHub in a step).
+     */
+    workspace: z.enum(["worktree", "inplace", "empty"]).default("worktree"),
     defaults: DefaultsSchema.default({}),
     vars: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()]).transform(String)).default({}),
     steps: z.array(StepSchema).min(1),

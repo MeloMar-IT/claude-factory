@@ -1,0 +1,12 @@
+name: Commit code
+category: Git
+description: "Commits all changes. Message: Resolve #<issue> when an issue is set, otherwise the task."
+steps:
+  - id: commit
+    type: shell
+    run: |
+      git add -A
+      if git diff --cached --quiet; then echo "nothing to commit"; exit 1; fi
+      if [ -n "$FACTORY_VAR_ISSUE" ]; then msg="Resolve #$FACTORY_VAR_ISSUE"; else msg="factory: $(printf '%s' "$FACTORY_TASK" | head -1)"; fi
+      git commit -q -m "$msg" -m "Automated by claude-factory (run $FACTORY_RUN_ID)"
+      git log --oneline -1

@@ -9,7 +9,8 @@
   "files": [
     "dist",
     "flows",
-    "ui"
+    "ui",
+    "blocks"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json && chmod +x dist/cli.js",

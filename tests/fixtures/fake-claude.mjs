@@ -19,13 +19,22 @@ for (const line of prompt.split("\n")) {
   const s = line.match(/^SAY (.*)$/);
   if (s) result = s[1];
 }
+// Canned answers for the built-in blocks, so whole flows can run offline.
+let canned;
+if (prompt.includes("PLAN_STATUS: NEEDS_INFO")) canned = process.env.FAKE_PLAN ?? "1. change feature.txt\nPLAN_STATUS: READY";
+else if (prompt.includes("VERDICT: APPROVE")) canned = "Looks good.\nVERDICT: APPROVE";
+else if (prompt.includes("Implement the work")) {
+  writeFileSync("feature.txt", "implemented\n");
+  canned = "- added feature.txt";
+}
+
 const resumed = args[args.indexOf("--resume") + 1];
 const isError = prompt.includes("ERROR");
 emit({
   type: "result",
   subtype: isError ? "error_during_execution" : "success",
   is_error: isError,
-  result: `${result}\nPROMPT<<${prompt}>>`,
+  result: canned ?? `${result}\nPROMPT<<${prompt}>>`,
   session_id: args.includes("--resume") ? resumed : `sess-${Math.random().toString(36).slice(2, 8)}`,
   total_cost_usd: 0.01,
   num_turns: 1,

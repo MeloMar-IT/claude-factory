@@ -1,0 +1,12 @@
+name: Define GitHub repo
+category: GitHub
+description: Sets which GitHub repo the flow works on (var github_repo) and checks that you have access.
+vars:
+  github_repo: owner/repo
+steps:
+  - id: check_repo
+    type: shell
+    description: Verify the repo exists and show your permission
+    run: |
+      gh repo view "$FACTORY_VAR_GITHUB_REPO" --json nameWithOwner,defaultBranchRef,viewerPermission \
+        --jq '"repo: \(.nameWithOwner)\ndefault branch: \(.defaultBranchRef.name)\nyour permission: \(.viewerPermission)"'

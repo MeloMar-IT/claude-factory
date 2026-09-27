@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import { execFile } from "node:child_process";
 import { parseArgs } from "node:util";
 import { runFlow } from "./engine/runner.js";
+import { listBlocks } from "./flow/blocks.js";
 import { FACTORY_HOME, listFlows, loadFlow, resolveFlowPath } from "./flow/load.js";
 import { startServer } from "./server/server.js";
 
@@ -12,12 +13,13 @@ const USAGE = `claude-factory — run custom flows of headless Claude Code + she
 Usage:
   factory run <flow> --task "<text>" [options]   Run a flow against a repo
   factory flows [--repo <dir>]                   List available flows
+  factory blocks [--repo <dir>]                  List reusable step blocks (the library)
   factory validate <flow|file.yaml>              Check a flow definition
   factory new <name> [--from <flow>] [--global]  Create your own flow (copies a template)
   factory ui [--port 4777] [--no-open]           Web UI: build flows, start and watch runs
 
 Run options:
-  -t, --task <text>        Task description (or --task-file <path>)
+  -t, --task <text>        Task description (or --task-file <path>); optional for ticket flows
   -r, --repo <dir>         Target repository (default: current directory)
   -v, --var key=value      Override a flow variable (repeatable)
       --runs-dir <dir>     Where run logs/worktrees go (default: ${join(FACTORY_HOME, "runs")})
@@ -64,11 +66,11 @@ async function main(argv: string[]): Promise<number> {
     case "run": {
       if (!arg) throw new Error("usage: factory run <flow> --task \"...\"");
       const task = values.task ?? (values["task-file"] ? readFileSync(values["task-file"], "utf8") : undefined);
-      if (!task?.trim()) throw new Error("a task is required: --task \"...\" or --task-file <path>");
+      // The task is optional: e.g. GitHub flows take their work from the ticket.
       if (!existsSync(repo)) throw new Error(`repo not found: ${repo}`);
       const { flow } = loadFlow(arg, repo);
       const summary = await runFlow(flow, {
-        task: task.trim(),
+        task: task?.trim() ?? "",
         repo,
         runsDir: resolve(values["runs-dir"] ?? join(FACTORY_HOME, "runs")),
         vars: parseVars(values.var),
@@ -90,6 +92,14 @@ async function main(argv: string[]): Promise<number> {
       for (const f of listFlows(repo)) {
         const desc = f.error ? `INVALID — ${f.error.split("\n")[1]?.trim() ?? f.error}` : (f.description ?? "");
         process.stdout.write(`${f.name.padEnd(18)} ${desc}\n${"".padEnd(18)} ${f.path}\n`);
+      }
+      return 0;
+    }
+
+    case "blocks": {
+      for (const b of listBlocks(repo)) {
+        const label = b.block ? `${b.block.category} · ${b.block.name}` : `INVALID — ${b.error?.split("\n")[1]?.trim()}`;
+        process.stdout.write(`${b.id.padEnd(16)} ${label}  [${b.scope}]\n`);
       }
       return 0;
     }

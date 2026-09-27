@@ -3,6 +3,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { createRequire } from "node:module";
 import { dirname, extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { blockDir, listBlocks, parseBlock } from "../flow/blocks.js";
 import { flowDir, listFlows, parseFlow, resolveFlowPath, type FlowScope } from "../flow/load.js";
 import { generateFlow } from "./generate.js";
 import { RunManager } from "./runs.js";
@@ -118,6 +119,31 @@ export function startServer(opts: ServerOptions): Promise<{ url: string; close: 
       throw new HttpError(405, "method not allowed");
     }
 
+    if (seg[0] === "blocks") {
+      const id = seg[1];
+      if (!id && method === "GET") return send(res, 200, listBlocks(opts.repo));
+      if (!id || !NAME_RE.test(id)) throw new HttpError(400, "invalid block id");
+      const listing = listBlocks(opts.repo).find((b) => b.id === id);
+      if (method === "PUT") {
+        const body = await readJson(req);
+        const yaml = str(body, "yaml");
+        const scope = str(body, "scope") as FlowScope;
+        if (scope !== "repo" && scope !== "global") throw new HttpError(400, 'scope must be "repo" or "global"');
+        parseBlock(yaml);
+        const dir = blockDir(scope, opts.repo);
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(join(dir, `${id}.yaml`), yaml);
+        return send(res, 200, { id, scope });
+      }
+      if (method === "DELETE") {
+        if (!listing) throw new HttpError(404, `block "${id}" not found`);
+        if (listing.scope === "builtin") throw new HttpError(403, "built-in blocks cannot be deleted");
+        rmSync(listing.path);
+        return send(res, 200, { deleted: listing.path });
+      }
+      throw new HttpError(405, "method not allowed");
+    }
+
     if (seg[0] === "validate" && method === "POST") {
       const body = await readJson(req);
       try {
@@ -139,7 +165,7 @@ export function startServer(opts: ServerOptions): Promise<{ url: string; close: 
       if (!id && method === "GET") return send(res, 200, runs.list());
       if (!id && method === "POST") {
         const body = await readJson(req);
-        const task = str(body, "task").trim();
+        const task = str(body, "task", false).trim();
         const repo = resolve(str(body, "repo", false) || opts.repo);
         if (!existsSync(repo)) throw new HttpError(400, `repo not found: ${repo}`);
         const vars: Record<string, string> = {};
