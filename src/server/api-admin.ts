@@ -1,3 +1,4 @@
+import { agentStatuses, providerStatuses, testSpec } from "../agents/health.js";
 import { CONFIG_PATH, saveConfig } from "../config.js";
 import { spentToday } from "../engine/state.js";
 import { cleanRuns } from "../clean.js";
@@ -53,6 +54,21 @@ export const adminRoutes: Route = async (ctx, req, res, seg, method) => {
       dryRun: body.dryRun !== false,
       isActive: (id) => scheduler.isActive(id) || scheduler.isQueued(id),
     })), true;
+  }
+
+  if (seg[0] === "providers" && method === "GET") {
+    const [agents, providers] = await Promise.all([agentStatuses(), providerStatuses(ctx.config())]);
+    return send(res, 200, { agents, providers }), true;
+  }
+
+  if (seg[0] === "providers" && seg[1] === "test" && method === "POST") {
+    const body = await readJson(req);
+    if (typeof body.spec !== "string" || !body.spec.trim() || body.spec.length > 200) throw new HttpError(400, "spec required");
+    try {
+      return send(res, 200, await testSpec(body.spec, ctx.config(), { claudeBin: opts.claudeBin })), true;
+    } catch (e) {
+      throw new HttpError(400, (e as Error).message);
+    }
   }
 
   if (seg[0] === "evals" && method === "GET") return send(res, 200, listEvalReports()), true;

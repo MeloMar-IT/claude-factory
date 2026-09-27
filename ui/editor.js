@@ -3,7 +3,6 @@ import { area, field, insertAtCursor, list, select, setKey, text } from "./field
 import { STEP_TYPES, stepBody, stepAdvanced } from "./step-types.js";
 
 export const PERMISSION_MODES = ["acceptEdits", "auto", "bypassPermissions", "default", "dontAsk", "plan"];
-const MODELS = ["sonnet", "opus", "haiku"];
 
 function uniqueId(flow, base) {
   const ids = new Set(flow.steps.map((s) => s.id));
@@ -36,9 +35,11 @@ function settingsCard(flow, onChange, rerender) {
       field("Workspace", select(flow, "workspace", [["worktree", "git worktree of local repo (isolated branch)"], ["empty", "empty folder (clone from GitHub in a step)"], ["inplace", "in place (edit repo directly)"]], onChange))),
     field("Description", text(flow, "description", onChange, { placeholder: "What this flow does" })),
     h("details", {},
-      h("summary", {}, "Defaults for all claude steps"),
+      h("summary", {}, "Defaults for all agent steps"),
       h("div", { class: "grid" },
-        field("Model", text(d, "model", onChange, { list: "models", placeholder: "(CLI default)" })),
+        field("Model", text(d, "model", onChange, { list: "models", mono: true, placeholder: "(router / default)" }), "e.g. sonnet, codex, ollama:qwen3-coder"),
+        field("Agent", select(d, "agent", [["claude", "Claude Code"], ["codex", "Codex (ChatGPT)"]], onChange, { emptyLabel: "from model spec" })),
+        field("Provider", text(d, "provider", onChange, { list: "provider-names", mono: true, placeholder: "from model spec" })),
         field("Permission mode", select(d, "permission_mode", PERMISSION_MODES.map((m) => [m, m]), onChange, { emptyLabel: "acceptEdits (default)" })),
         field("Timeout (sec)", text(d, "timeout_sec", onChange, { type: "number" })),
         field("Max visits / step", text(d, "max_visits", onChange, { type: "number", placeholder: "5" })),
@@ -134,7 +135,7 @@ function insertBar(flow, at, { rerender, onSelect, onLibrary }) {
     rerender();
   };
   return h("div", { class: "insert" },
-    h("button", { class: "small", onClick: () => add("claude") }, "+ Claude step"),
+    h("button", { class: "small", onClick: () => add("claude") }, "+ Agent step"),
     h("button", { class: "small", onClick: () => add("shell") }, "+ Shell step"),
     h("select", { class: "small-select", title: "More step types", onChange: (e) => { if (e.target.value) add(e.target.value); } },
       h("option", { value: "" }, "+ more…"),
@@ -146,7 +147,6 @@ function insertBar(flow, at, { rerender, onSelect, onLibrary }) {
 export function renderEditor(flow, ctx) {
   flow.steps ??= [];
   return h("div", { class: "steps" },
-    h("datalist", { id: "models" }, MODELS.map((m) => h("option", { value: m }))),
     settingsCard(flow, ctx.onChange, ctx.rerender),
     h("h3", { style: { margin: "22px 0 4px" } }, `Steps (${flow.steps.length})`),
     insertBar(flow, 0, ctx),

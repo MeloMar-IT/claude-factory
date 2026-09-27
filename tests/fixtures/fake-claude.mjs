@@ -18,6 +18,11 @@ for (const line of prompt.split("\n")) {
   }
   const s = line.match(/^SAY (.*)$/);
   if (s) result = s[1];
+  if (line === "SHOWENV") result = `base=${process.env.ANTHROPIC_BASE_URL ?? ""} token=${process.env.ANTHROPIC_AUTH_TOKEN ?? ""} haiku=${process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL ?? ""} args=${args.join(" ")}`;
+}
+if (prompt.includes("CLAUDE_LIMIT")) {
+  emit({ type: "result", subtype: "success", is_error: true, result: "Claude AI usage limit reached|1760000000", session_id: "s", total_cost_usd: 0, num_turns: 1 });
+  process.exit(1);
 }
 // Canned answers for the built-in blocks, so whole flows can run offline.
 let canned;

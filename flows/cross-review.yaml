@@ -1,0 +1,78 @@
+# Two agents on one task: Claude writes the code, Codex (ChatGPT) reviews it,
+# Claude fixes what Codex found. Needs the Codex CLI: npm i -g @openai/codex && codex login
+name: cross-review
+description: Claude codes → tests → Codex reviews ⟲ Claude fixes → commit
+
+workspace: worktree
+
+defaults:
+  model: sonnet
+  permission_mode: acceptEdits
+  allowed_tools: [Read, Edit, Write, Glob, Grep, "Bash(npm *)", "Bash(npx *)"]
+
+vars:
+  test_cmd: auto
+
+steps:
+  - id: implement
+    type: claude
+    prompt: |
+      {{task}}
+
+      Things learned from earlier runs in this repo:
+      {{learnings}}
+
+  - id: run_tests
+    type: shell
+    sandbox: true
+    run: |
+      cmd="$FACTORY_VAR_TEST_CMD"
+      if [ -z "$cmd" ] || [ "$cmd" = auto ]; then cmd=$("$FACTORY_TOOLS/detect-commands" test); fi
+      if [ -z "$cmd" ]; then echo "no test command found; skipping"; exit 0; fi
+      sh -c "$cmd"
+    on_failure: fix_tests
+
+  - id: fix_tests
+    type: claude
+    jump_only: true
+    max_visits: 3
+    prompt: |
+      The tests failed. Fix the code so they pass.
+      {{steps.run_tests.output}}
+    on_success: run_tests
+
+  - id: cross_review
+    type: claude
+    agent: codex
+    max_visits: 3
+    permission_mode: dontAsk
+    allowed_tools: [Read, Glob, Grep]
+    prompt: |
+      You are a strict senior code reviewer from a different team. Another AI wrote the
+      uncommitted changes in this repository (see `git status` and `git diff HEAD`) for this task:
+
+      {{task}}
+
+      Report only real problems, each with file, line, problem and fix. End with exactly one line:
+      VERDICT: APPROVE   or   VERDICT: CHANGES
+    pass_if: "^VERDICT: APPROVE\\s*$"
+    on_failure: address_cross_review
+
+  - id: address_cross_review
+    type: claude
+    agent: claude
+    jump_only: true
+    prompt: |
+      A reviewer (a different AI) requested changes. Address every point you agree with;
+      for points you disagree with, say why in one line each.
+
+      {{steps.cross_review.output}}
+    on_success: run_tests
+
+  - id: commit
+    type: shell
+    run: |
+      git add -A
+      if git diff --cached --quiet; then echo "nothing to commit"; exit 1; fi
+      git commit -q -m "factory: $(printf '%s' "$FACTORY_TASK" | head -1)" -m "Written by Claude, reviewed by Codex (claude-factory run $FACTORY_RUN_ID)"
+      git log --oneline -1

@@ -16,6 +16,8 @@ export interface ClaudeRunOptions {
   env?: NodeJS.ProcessEnv;
   /** Sandbox Claude's bash tool (writes limited to the workspace). */
   sandbox?: boolean;
+  /** Load no MCP servers (keeps the prompt small for local models). */
+  noMcp?: boolean;
   onProgress?: (msg: string) => void;
 }
 
@@ -25,6 +27,8 @@ export interface ClaudeRunResult {
   sessionId?: string;
   costUsd?: number;
   numTurns?: number;
+  inputTokens?: number;
+  outputTokens?: number;
   error?: string;
 }
 
@@ -36,6 +40,7 @@ interface StreamEvent {
   session_id?: string;
   total_cost_usd?: number;
   num_turns?: number;
+  usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number };
   message?: { content?: Array<{ type?: string; name?: string; input?: Record<string, unknown> }> };
 }
 
@@ -49,6 +54,7 @@ export function buildClaudeArgs(o: ClaudeRunOptions): string[] {
   if (o.maxBudgetUsd) args.push("--max-budget-usd", String(o.maxBudgetUsd));
   // Pushing is a flow decision (shell steps + protected-branch hook), never Claude's.
   args.push("--disallowedTools", "Bash(git push*)");
+  if (o.noMcp) args.push("--strict-mcp-config");
   if (o.sandbox) args.push("--settings", JSON.stringify({ sandbox: { enabled: true, autoAllowBashIfSandboxed: true } }));
   return args;
 }
@@ -103,6 +109,8 @@ export async function runClaude(o: ClaudeRunOptions): Promise<ClaudeRunResult> {
     sessionId: final.session_id,
     costUsd: final.total_cost_usd,
     numTurns: final.num_turns,
+    inputTokens: final.usage ? (final.usage.input_tokens ?? 0) + (final.usage.cache_read_input_tokens ?? 0) + (final.usage.cache_creation_input_tokens ?? 0) : undefined,
+    outputTokens: final.usage?.output_tokens,
     error: ok ? undefined : `claude result: ${final.subtype ?? "error"}`,
   };
 }

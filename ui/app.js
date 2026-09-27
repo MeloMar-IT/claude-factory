@@ -5,6 +5,7 @@ import { cleanFlow, renderEditor } from "./editor.js";
 import { renderGraph } from "./graph.js";
 import { insertBlock, pickBlock, renderLibrary, saveStepAsBlock } from "./library.js";
 import { renderSettings, renderWatchers } from "./admin.js";
+import { refreshModelLists, renderModels } from "./models.js";
 import { renderDashboard } from "./dashboard.js";
 import { renderRunDetail, renderRunsList } from "./runs.js";
 
@@ -368,6 +369,7 @@ async function route() {
     else if (section === "dashboard") await renderDashboard(main);
     else if (section === "watchers") await renderWatchers(main);
     else if (section === "settings") await renderSettings(main);
+    else if (section === "models") await renderModels(main);
     else if (section === "runs" && arg) S.cleanup = renderRunDetail(main, arg);
     else if (section === "runs") await renderRunsList(main);
     else if (section === "new") S.cur && !S.cur.name ? renderFlowView() : openNew();
@@ -391,4 +393,5 @@ document.addEventListener("keydown", (e) => {
 S.info = await api.info();
 document.getElementById("repo").textContent = S.info.repo;
 await refreshFlows();
+void refreshModelLists();
 route();

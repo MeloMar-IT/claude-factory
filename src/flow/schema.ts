@@ -13,6 +13,9 @@ export const PERMISSION_MODES = [
   "plan",
 ] as const;
 
+/** Coding agent CLI that runs a claude-type step. */
+export const AGENTS = ["claude", "codex"] as const;
+
 const stepId = z
   .string()
   .regex(/^[a-zA-Z][\w-]*$/, "step id must start with a letter and contain only letters, digits, _ or -");
@@ -46,7 +49,12 @@ export const ClaudeStepSchema = z
     ...baseStep,
     type: z.literal("claude"),
     prompt: z.string().min(1),
+    /** Model spec: sonnet · codex · codex:gpt-5 · ollama:qwen3-coder · codex:ollama:gpt-oss:20b */
     model: z.string().optional(),
+    /** claude (Claude Code, default) or codex (OpenAI Codex CLI). */
+    agent: z.enum(AGENTS).optional(),
+    /** Provider name from config (anthropic, openai, ollama, lmstudio, or your own). */
+    provider: z.string().optional(),
     system_prompt: z.string().optional(),
     permission_mode: z.enum(PERMISSION_MODES).optional(),
     allowed_tools: z.array(z.string()).optional(),
@@ -108,6 +116,8 @@ export const StepSchema = z.discriminatedUnion("type", [
 export const DefaultsSchema = z
   .object({
     model: z.string().optional(),
+    agent: z.enum(AGENTS).optional(),
+    provider: z.string().optional(),
     permission_mode: z.enum(PERMISSION_MODES).optional(),
     allowed_tools: z.array(z.string()).optional(),
     max_visits: z.number().int().positive().optional(),

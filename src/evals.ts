@@ -46,6 +46,7 @@ export interface EvalResult {
   passed: boolean;
   checkOutput?: string;
   costUsd: number;
+  tokens: number;
   minutes: number;
   fixLoops: number;
 }
@@ -55,6 +56,7 @@ export interface VariantSummary {
   runs: number;
   passRate: number;
   avgCostUsd: number;
+  avgTokens: number;
   avgMinutes: number;
   avgFixLoops: number;
 }
@@ -75,12 +77,19 @@ export function loadSuite(path: string): Suite {
   return res.data;
 }
 
-/** Force one model on every claude step. */
+/** Force one model spec (e.g. sonnet, codex:gpt-5, ollama:qwen3-coder) on every agent step. */
 export function withModel(flow: Flow, model: string): Flow {
   const f = structuredClone(flow);
   f.name = `${flow.name}@${model}`;
   f.defaults.model = model;
-  for (const s of f.steps) if (s.type === "claude") s.model = model;
+  delete f.defaults.agent;
+  delete f.defaults.provider;
+  for (const s of f.steps) {
+    if (s.type !== "claude") continue;
+    s.model = model;
+    delete s.agent;
+    delete s.provider;
+  }
   return f;
 }
 
@@ -118,6 +127,7 @@ function summarize(results: EvalResult[]): VariantSummary[] {
     runs: rs.length,
     passRate: round(rs.filter((r) => r.passed).length / rs.length, 3),
     avgCostUsd: round(avg(rs.map((r) => r.costUsd))),
+    avgTokens: Math.round(avg(rs.map((r) => r.tokens ?? 0))),
     avgMinutes: round(avg(rs.map((r) => r.minutes)), 2),
     avgFixLoops: round(avg(rs.map((r) => r.fixLoops)), 2),
   }));
@@ -140,7 +150,9 @@ export async function runEval(o: {
     const { flow } = loadFlow(name, suiteDir);
     return models?.length ? models.map((m) => withModel(flow, m)) : [flow];
   });
-  const scheduler = new Scheduler({ runsDir: o.runsDir, config: () => o.config, claudeBin: o.claudeBin });
+  // Routing rules would override the model under test.
+  const config = models?.length ? { ...o.config, router: { ...o.config.router, rules: [] } } : o.config;
+  const scheduler = new Scheduler({ runsDir: o.runsDir, config: () => config, claudeBin: o.claudeBin });
   const repos = new Map<string, string>();
   const startedAt = new Date().toISOString();
   const jobs: Promise<EvalResult>[] = [];
@@ -164,6 +176,7 @@ export async function runEval(o: {
           const res: EvalResult = {
             variant: flow.name, case: c.name, attempt, runId, status: s.status, passed, checkOutput,
             costUsd: s.totalCostUsd,
+            tokens: s.history.reduce((n, h) => n + (h.tokens ? h.tokens.input + h.tokens.output : 0), 0),
             minutes: s.finishedAt ? (new Date(s.finishedAt).getTime() - new Date(s.startedAt).getTime()) / 60_000 : 0,
             fixLoops: s.history.reduce((n, h) => n + (h.visit > 1 ? 1 : 0), 0),
           };

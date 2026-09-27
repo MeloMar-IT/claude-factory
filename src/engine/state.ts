@@ -14,6 +14,9 @@ export interface StepRecord {
   exitCode?: number | null;
   sessionId?: string;
   costUsd?: number;
+  /** Agent step target, e.g. "codex:openai:gpt-5". */
+  agent?: string;
+  tokens?: { input: number; output: number };
   startedAt: string;
   durationMs: number;
   logFile: string;

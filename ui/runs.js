@@ -54,7 +54,8 @@ function transcriptView(events) {
     if (e.kind === "raw") return h("pre", { class: "mono" }, e.text || "(no output)");
     if (e.kind === "text") return h("div", { class: "tx-text" }, e.text);
     if (e.kind === "result") return h("div", { class: `tx-result${e.isError ? " bad" : ""}` },
-      h("b", {}, e.isError ? "✘ Result" : "✔ Result"), e.costUsd ? h("span", { class: "muted mono" }, ` · $${e.costUsd.toFixed(4)} · ${e.turns} turns`) : null,
+      h("b", {}, e.isError ? "✘ Result" : "✔ Result"),
+      e.costUsd ? h("span", { class: "muted mono" }, ` · $${e.costUsd.toFixed(4)} · ${e.turns} turns`) : e.tokens ? h("span", { class: "muted mono" }, ` · ${Math.round(e.tokens / 1000)}k tokens`) : null,
       h("div", {}, e.text));
     const edit = e.name === "Edit" && e.input.old_string != null;
     return h("details", { class: `tx-tool${e.isError ? " bad" : ""}` },
@@ -85,11 +86,11 @@ function stepsView(runId, summary) {
         h("span", { class: `pill ${s.ok ? "ok" : "fail"}` }, s.ok ? "✔" : "✘"),
         h("b", { class: "mono" }, s.id),
         s.visit > 1 ? h("span", { class: "pill" }, `visit ${s.visit}`) : null,
-        h("span", { class: "muted" }, s.type),
+        h("span", { class: "muted" }, s.agent ? s.agent : s.type),
         h("span", { class: "spacer" }),
         s.error ? h("span", { class: "status bad" }, s.error.slice(0, 60)) : null,
         h("span", { class: "muted mono" }, secs(s.durationMs)),
-        s.costUsd ? h("span", { class: "muted mono" }, money(s.costUsd)) : null),
+        s.costUsd ? h("span", { class: "muted mono" }, money(s.costUsd)) : s.tokens ? h("span", { class: "muted mono", title: "no per-token cost (local model or subscription)" }, `${Math.round((s.tokens.input + s.tokens.output) / 1000)}k tok`) : null),
       body);
   }));
 }

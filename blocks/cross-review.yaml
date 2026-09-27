@@ -1,0 +1,36 @@
+name: Cross-review by a second agent (Codex)
+category: Agents
+description: Codex (ChatGPT) reviews the uncommitted changes read-only; Claude addresses its findings and Codex reviews again (max 3 rounds). A second model family catches different mistakes.
+steps:
+  - id: cross_review
+    type: claude
+    agent: codex
+    max_visits: 3
+    # dontAsk + read-only tools → Codex runs in its read-only sandbox.
+    permission_mode: dontAsk
+    allowed_tools: [Read, Glob, Grep]
+    prompt: |
+      You are a strict senior code reviewer from a different team. Another AI wrote the
+      uncommitted changes in this repository (see `git status` and `git diff HEAD`) for this work:
+
+      {{steps.pull_ticket.output}}
+      {{task}}
+
+      Check correctness, edge cases, security, readability and test coverage. Report only real
+      problems, each with file, line, problem and fix. End your answer with exactly one line:
+      VERDICT: APPROVE   or   VERDICT: CHANGES
+    pass_if: "^VERDICT: APPROVE\\s*$"
+    on_failure: address_cross_review
+
+  - id: address_cross_review
+    type: claude
+    agent: claude
+    jump_only: true
+    permission_mode: acceptEdits
+    allowed_tools: [Read, Edit, Write, Glob, Grep, "Bash(npm *)", "Bash(npx *)", "Bash(git diff*)"]
+    prompt: |
+      A reviewer (a different AI) requested changes. Address every point you agree with; for
+      points you disagree with, say why in one line each.
+
+      {{steps.cross_review.output}}
+    on_success: cross_review

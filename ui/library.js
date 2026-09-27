@@ -3,7 +3,7 @@ import { api } from "./api.js";
 import { h, modal, mount, toast } from "./dom.js";
 
 const RESERVED = ["next", "end", "fail", "stop"];
-const CATEGORY_ORDER = ["GitHub", "Git", "Claude", "Checks"];
+const CATEGORY_ORDER = ["GitHub", "Git", "Claude", "Agents", "Checks"];
 
 function byCategory(blocks) {
   const groups = new Map();

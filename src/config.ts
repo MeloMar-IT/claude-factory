@@ -19,8 +19,53 @@ const WatcherSchema = z
   })
   .strict();
 
+export const PROVIDER_KINDS = ["anthropic", "openai", "ollama", "lmstudio", "anthropic-compatible"] as const;
+
+/** Where an agent's model runs. anthropic/anthropic-compatible serve Claude Code, openai serves Codex, local ones serve both. */
+const ProviderSchema = z
+  .object({
+    kind: z.enum(PROVIDER_KINDS),
+    base_url: z.string().url().optional(),
+    /** Env var holding the API key (anthropic-compatible). */
+    api_key_env: z.string().regex(/^[A-Z_][A-Z0-9_]*$/).optional(),
+    /** Model used when a step names the provider but no model. */
+    default_model: z.string().optional(),
+    /** USD per million tokens, for providers that report tokens but no cost (Codex with an API key). */
+    price: z.object({ input_per_mtok: z.number().nonnegative(), output_per_mtok: z.number().nonnegative() }).strict().optional(),
+  })
+  .strict();
+
+const RouterRuleSchema = z
+  .object({
+    /** Regex on the step id. */
+    step: z.string().optional(),
+    /** Regex on the flow name. */
+    flow: z.string().optional(),
+    /** Only from this visit on (2 = retries / fix loops). */
+    min_visit: z.number().int().positive().optional(),
+    /** Model spec, e.g. sonnet, codex, codex:gpt-5, ollama:qwen3-coder. */
+    model: z.string().min(1),
+  })
+  .strict();
+
+const RouterSchema = z
+  .object({
+    /** First matching rule picks the model for agent steps that don't name one. */
+    rules: z.array(RouterRuleSchema).default([]),
+    /** Tried in order when an agent step hits a rate/usage limit, or (for free targets) when a budget is used up. */
+    fallback: z.array(z.string().min(1)).default([]),
+    fallback_on: z.array(z.enum(["rate_limit", "budget"])).default(["rate_limit", "budget"]),
+  })
+  .strict()
+  .prefault({});
+
 export const ConfigSchema = z
   .object({
+    /** Model spec for agent steps with no model anywhere (flow, step or router). */
+    default_model: z.string().optional(),
+    /** Extra or overridden providers; anthropic, openai, ollama and lmstudio are built in. */
+    providers: z.record(z.string().regex(/^[a-z][\w-]*$/), ProviderSchema).default({}),
+    router: RouterSchema,
     /** Stop starting new work once today's spend reaches this. */
     daily_budget_usd: z.number().positive().optional(),
     /** Max runs executing at the same time (across all repos). */
@@ -65,6 +110,8 @@ export const ConfigSchema = z
 
 export type Config = z.infer<typeof ConfigSchema>;
 export type WatcherConfig = z.infer<typeof WatcherSchema>;
+export type ProviderConfig = z.infer<typeof ProviderSchema>;
+export type RouterConfig = z.infer<typeof RouterSchema>;
 export { WatcherSchema };
 
 export const CONFIG_PATH = () => join(process.env.FACTORY_HOME ?? FACTORY_HOME, "config.yaml");

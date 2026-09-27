@@ -17,6 +17,7 @@ import {
   type Scope,
   type StepResult,
 } from "./execute.js";
+import { fallbackTargets } from "../agents/targets.js";
 import { identityEnv, protectedBranchEnv, TOOLS_DIR } from "./guards.js";
 import { appendLiveLog, loadRun, saveRun, spentToday, type RunStatus, type RunSummary } from "./state.js";
 import { render } from "./template.js";
@@ -29,6 +30,7 @@ const DEFAULT_MAX_VISITS = 5;
 interface CommonOptions {
   runsDir: string;
   claudeBin?: string;
+  codexBin?: string;
   signal?: AbortSignal;
   log?: (msg: string) => void;
   /** Called whenever run.json is written. */
@@ -168,6 +170,7 @@ async function drive(
     baseEnv,
     logsDir: join(summary.runDir, "logs"),
     claudeBin: opts.claudeBin,
+    codexBin: opts.codexBin,
     signal: opts.signal,
     log,
     save,
@@ -257,11 +260,18 @@ async function loop(engine: Engine, scope: Scope, startAt: string | null, runsDi
     if (engine.signal?.aborted) return { outcome: "cancelled", reason: "cancelled by user", ...here() };
 
     const runCap = summary.flowDef.limits.max_cost_usd;
-    if (runCap !== undefined && summary.totalCostUsd >= runCap) {
-      return { outcome: "failed", reason: `run budget of $${runCap} reached`, ...here() };
-    }
-    if (config.daily_budget_usd !== undefined && spentToday(runsDir) >= config.daily_budget_usd) {
-      return { outcome: "stopped", reason: `daily budget of $${config.daily_budget_usd} reached — resume tomorrow`, ...here() };
+    const overRun = runCap !== undefined && summary.totalCostUsd >= runCap;
+    const overDay = config.daily_budget_usd !== undefined && spentToday(runsDir) >= config.daily_budget_usd;
+    if ((overRun || overDay) && !engine.budgetFallback) {
+      const free = config.router.fallback_on.includes("budget") ? fallbackTargets(config, (t) => t.free)[0] : undefined;
+      if (free) {
+        engine.budgetFallback = free;
+        engine.log(`⚠ ${overRun ? "run" : "daily"} budget reached — agent steps continue on ${free.label}`);
+      } else if (overRun) {
+        return { outcome: "failed", reason: `run budget of $${runCap} reached`, ...here() };
+      } else {
+        return { outcome: "stopped", reason: `daily budget of $${config.daily_budget_usd} reached — resume tomorrow`, ...here() };
+      }
     }
 
     const visit = (visits[step.id] = (visits[step.id] ?? 0) + 1);

@@ -256,8 +256,8 @@ async function main(argv: string[]): Promise<number> {
         log: (m) => process.stdout.write(m + "\n"),
       });
       const rows = report.summary.map((s) =>
-        `${s.variant.padEnd(28)} ${String(Math.round(s.passRate * 100) + "%").padStart(5)}  $${s.avgCostUsd.toFixed(3).padStart(7)}  ${s.avgMinutes.toFixed(1).padStart(5)}m  ${s.avgFixLoops.toFixed(1).padStart(5)}`);
-      process.stdout.write(`\n${"variant".padEnd(28)}  pass   avg cost   time  loops\n${rows.join("\n")}\n\nreport: ${file}\n`);
+        `${s.variant.padEnd(34)} ${String(Math.round(s.passRate * 100) + "%").padStart(5)}  $${s.avgCostUsd.toFixed(3).padStart(7)}  ${String(Math.round((s.avgTokens ?? 0) / 1000) + "k").padStart(6)}  ${s.avgMinutes.toFixed(1).padStart(5)}m  ${s.avgFixLoops.toFixed(1).padStart(5)}`);
+      process.stdout.write(`\n${"variant".padEnd(34)}  pass   avg cost  tokens   time  loops\n${rows.join("\n")}\n\nreport: ${file}\n`);
       return 0;
     }
 

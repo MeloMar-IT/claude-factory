@@ -2,7 +2,8 @@ import { join } from "node:path";
 import type { Config } from "../config.js";
 import { loadFlow } from "../flow/load.js";
 import type { Flow, Step } from "../flow/schema.js";
-import { runClaude } from "../steps/claude.js";
+import { runAgentStep } from "../agents/run.js";
+import type { Target } from "../agents/targets.js";
 import { runShell } from "../steps/shell.js";
 import type { RunSummary, StepRecord } from "./state.js";
 import { outputEnvName, render, varEnvName, type TemplateContext } from "./template.js";
@@ -44,7 +45,10 @@ export interface Engine {
   baseEnv: Record<string, string>;
   logsDir: string;
   claudeBin?: string;
+  codexBin?: string;
   signal?: AbortSignal;
+  /** Set once a budget is used up and a free fallback exists: all agent steps run there. */
+  budgetFallback?: Target;
   log: (msg: string) => void;
   save: () => void;
   /** Remaining budget in USD for the next claude call (undefined = unlimited). */
@@ -60,7 +64,7 @@ export interface ApprovalDecision {
   note?: string;
 }
 
-export type StepResult = Pick<StepRecord, "ok" | "output" | "error" | "exitCode" | "sessionId" | "costUsd">;
+export type StepResult = Pick<StepRecord, "ok" | "output" | "error" | "exitCode" | "sessionId" | "costUsd" | "agent" | "tokens">;
 
 export function stepEnv(scope: Scope, engine: Engine): Record<string, string> {
   const env: Record<string, string> = { ...engine.baseEnv };
@@ -95,11 +99,13 @@ export function recordStep(step: Step, scope: Scope, engine: Engine, res: StepRe
     error: res.error ?? "",
     exit_code: res.exitCode ?? "",
     session_id: res.sessionId ?? "",
+    agent: res.agent ?? "",
     visit,
   };
   engine.save();
   const secs = (rec.durationMs / 1000).toFixed(1);
-  engine.log(`${res.ok ? "✔" : "✘"} ${rec.id} (${secs}s${res.costUsd ? `, $${res.costUsd.toFixed(4)}` : ""})${res.error ? ` — ${res.error}` : ""}`);
+  const tok = res.tokens ? `, ${Math.round((res.tokens.input + res.tokens.output) / 1000)}k tok` : "";
+  engine.log(`${res.ok ? "✔" : "✘"} ${rec.id} (${secs}s${res.costUsd ? `, $${res.costUsd.toFixed(4)}` : ""}${tok})${res.error ? ` — ${res.error}` : ""}`);
   return rec;
 }
 
@@ -116,28 +122,8 @@ export async function executeStep(step: Step, scope: Scope, engine: Engine, logF
   ctx.run.history = historySummary(engine.summary);
 
   switch (step.type) {
-    case "claude": {
-      const resumeFrom = step.resume ? ctx.steps[step.resume]?.session_id : undefined;
-      const caps = [step.max_budget_usd ?? d.max_budget_usd, engine.remainingBudget()].filter((n): n is number => n !== undefined);
-      const r = await runClaude({
-        prompt: render(step.prompt, ctx),
-        systemPrompt: step.system_prompt ? render(step.system_prompt, ctx) : undefined,
-        cwd: engine.summary.workdir!,
-        env: stepEnv(scope, engine),
-        logFile,
-        claudeBin: engine.claudeBin,
-        model: step.model ?? d.model,
-        permissionMode: step.permission_mode ?? d.permission_mode ?? DEFAULT_PERMISSION_MODE,
-        allowedTools: step.allowed_tools ?? d.allowed_tools,
-        resumeSessionId: typeof resumeFrom === "string" && resumeFrom ? resumeFrom : undefined,
-        maxBudgetUsd: caps.length ? Math.max(0.01, Math.min(...caps)) : undefined,
-        sandbox: step.sandbox ?? scope.flow.sandbox.claude ?? engine.config.sandbox.claude,
-        timeoutMs,
-        signal: engine.signal,
-        onProgress: (m) => engine.log(`    · ${m}`),
-      });
-      return { ok: r.ok, output: r.output, error: r.error, sessionId: r.sessionId, costUsd: r.costUsd };
-    }
+    case "claude":
+      return runAgentStep(step, scope, engine, logFile, timeoutMs);
 
     case "shell": {
       const image = scope.flow.sandbox.docker_image ?? engine.config.sandbox.docker_image;

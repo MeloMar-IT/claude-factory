@@ -5,7 +5,7 @@ const PERMISSION_MODES = ["acceptEdits", "auto", "bypassPermissions", "default",
 
 /** Per step type: icon, label and the fields of a new step. */
 export const STEP_TYPES = {
-  claude: { icon: "◆", label: "Claude", blank: { type: "claude", prompt: "" } },
+  claude: { icon: "◆", label: "Agent (Claude Code or Codex)", blank: { type: "claude", prompt: "" } },
   shell: { icon: "$", label: "Shell", blank: { type: "shell", run: "" } },
   approval: { icon: "✋", label: "Approval (wait for a human)", blank: { type: "approval", message: "Continue?" } },
   parallel: { icon: "⇉", label: "Parallel (run steps at once)", blank: { type: "parallel", steps: [] } },
@@ -20,12 +20,13 @@ export function stepBody(flow, step, i, { onChange, rerender, vars, earlier, pri
   const d = flow.defaults ?? {};
   switch (step.type) {
     case "claude": {
-      const prompt = area(step, "prompt", onChange, { rows: 7, placeholder: "What should Claude do? Use {{task}} for the run's task." });
+      const prompt = area(step, "prompt", onChange, { rows: 7, placeholder: "What should the agent do? Use {{task}} for the run's task." });
       return [
         field("Prompt", prompt),
         chips(prompt, ["{{task}}", "{{learnings}}", "{{run.history}}", ...vars.map((v) => `{{vars.${v}}}`), ...earlier.map((id) => `{{steps.${id}.output}}`)]),
         h("div", { class: "grid" },
-          field("Model", text(step, "model", onChange, { list: "models", placeholder: d.model ?? "(default)" })),
+          field("Model", text(step, "model", onChange, { list: "models", mono: true, placeholder: d.model ?? "(router / default)" }), "sonnet · codex · ollama:qwen3-coder"),
+          field("Agent", select(step, "agent", [["claude", "Claude Code"], ["codex", "Codex (ChatGPT)"]], onChange, { emptyLabel: d.agent ? `${d.agent} (flow default)` : "from model" })),
           field("Permissions", select(step, "permission_mode", PERMISSION_MODES.map((m) => [m, m]), onChange, { emptyLabel: `${d.permission_mode ?? "acceptEdits"} (default)` })),
           field("Continue session of", select(step, "resume", priorClaude, onChange, { emptyLabel: "— new session —" }))),
         field("Allowed tools", list(step, "allowed_tools", onChange, d.allowed_tools?.join(", ") || "(flow default)")),
@@ -33,8 +34,9 @@ export function stepBody(flow, step, i, { onChange, rerender, vars, earlier, pri
           h("summary", {}, "Advanced"),
           h("div", { class: "grid" },
             field("Extra system prompt", area(step, "system_prompt", onChange, { rows: 2 })),
-            field("Budget ($)", text(step, "max_budget_usd", onChange, { type: "number" }))),
-          checkbox(step, "sandbox", "Sandbox Claude's bash tool for this step", onChange, flow.sandbox?.claude)),
+            field("Budget ($)", text(step, "max_budget_usd", onChange, { type: "number" }), "Claude Code only"),
+            field("Provider", text(step, "provider", onChange, { list: "provider-names", mono: true, placeholder: d.provider ?? "from model" }), "anthropic, openai, ollama, lmstudio or your own")),
+          checkbox(step, "sandbox", "Sandbox the agent's shell commands for this step", onChange, flow.sandbox?.claude)),
       ];
     }
     case "shell": {
