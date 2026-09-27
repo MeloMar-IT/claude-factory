@@ -1,0 +1,32 @@
+{
+  "name": "claude-factory",
+  "version": "0.1.0",
+  "description": "AI coding factory: run custom YAML flows of headless Claude Code CLI and shell steps",
+  "type": "module",
+  "bin": {
+    "factory": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "flows"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsx src/cli.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "yaml": "^2.9.1",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.3",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.2"
+  }
+}

@@ -1,0 +1,34 @@
+# Minimal flow: one Claude step, then verify with tests (one retry).
+# See feature.yaml for the full flow format reference.
+name: quick
+description: single claude pass → tests, one fix attempt
+
+workspace: worktree
+
+defaults:
+  model: sonnet
+  permission_mode: acceptEdits
+  allowed_tools: [Read, Edit, Write, Glob, Grep, "Bash(npm *)"]
+
+vars:
+  test_cmd: npm test
+
+steps:
+  - id: do
+    type: claude
+    prompt: "{{task}}"
+
+  - id: test
+    type: shell
+    run: "{{vars.test_cmd}}"
+    on_success: end
+    on_failure: fix
+
+  - id: fix
+    type: claude
+    resume: do
+    max_visits: 1
+    prompt: |
+      Tests failed. Fix it.
+      {{steps.test.output}}
+    on_success: test

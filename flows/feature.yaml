@@ -1,0 +1,108 @@
+# ─── claude-factory flow ────────────────────────────────────────────────
+# A flow is a list of steps run top to bottom. Each step either calls the
+# local Claude Code CLI headlessly (type: claude) or runs a shell command
+# (type: shell). Jumps between steps give you loops and gates.
+#
+# Step fields (all types):
+#   id            unique name; referenced by jumps and templates
+#   on_success    step id | next | end | fail        (default: next)
+#   on_failure    step id | next | end | fail        (default: fail)
+#   pass_if       regex the output must match to count as success
+#   fail_if       regex that turns a match in the output into a failure
+#   max_visits    loop guard: max times this step may run (default: 5)
+#   timeout_sec   kill the step after N seconds
+#
+# claude steps:  prompt, model, system_prompt, permission_mode,
+#                allowed_tools, max_budget_usd,
+#                resume: <step id>  → continue that step's Claude session
+# shell steps:   run  (exit code 0 = success)
+#
+# Templates (claude prompts):  {{task}} {{vars.x}} {{workdir}} {{run.id}}
+#   {{steps.<id>.output}} {{steps.<id>.ok}} {{steps.<id>.exit_code}}
+# Shell `run` may only use {{vars.*}} {{workdir}} {{run.*}}. Untrusted text
+# is passed as env vars instead: $FACTORY_TASK, $FACTORY_OUT_<STEP_ID>.
+#
+# Make your own:  factory new my-flow            (copies this file)
+# ────────────────────────────────────────────────────────────────────────
+name: feature
+description: plan → implement → test/fix loop → review gate → commit
+
+workspace: worktree        # isolated git worktree + branch per run
+
+defaults:
+  model: sonnet
+  permission_mode: acceptEdits
+  allowed_tools: [Read, Edit, Write, Glob, Grep, "Bash(npm *)", "Bash(npx *)", "Bash(git status*)", "Bash(git diff*)"]
+  timeout_sec: 1800
+
+vars:
+  test_cmd: npm test
+
+steps:
+  - id: plan
+    type: claude
+    model: opus
+    permission_mode: plan
+    prompt: |
+      You are the architect. Read the codebase and write a concise, concrete
+      implementation plan (files to touch, approach, tests to add) for:
+
+      {{task}}
+
+      Do not modify any files.
+
+  - id: implement
+    type: claude
+    prompt: |
+      Implement the following plan. Add or update tests. Keep changes focused.
+
+      Task: {{task}}
+
+      Plan:
+      {{steps.plan.output}}
+
+  - id: test
+    type: shell
+    run: "{{vars.test_cmd}}"
+    on_success: review
+    on_failure: fix
+
+  - id: fix
+    type: claude
+    resume: implement        # keep the implementer's context
+    max_visits: 3
+    prompt: |
+      The tests failed. Fix the code (not the tests, unless they are wrong).
+
+      Test output (tail):
+      {{steps.test.output}}
+    on_success: test
+
+  - id: review
+    type: claude
+    model: opus
+    allowed_tools: [Read, Glob, Grep, "Bash(git diff*)", "Bash(git status*)"]
+    prompt: |
+      You are a strict code reviewer. Review the uncommitted changes
+      (`git diff`, `git status`) for this task: {{task}}
+
+      Check correctness, edge cases, security and test coverage.
+      End your answer with exactly one line:
+      VERDICT: APPROVE   or   VERDICT: CHANGES
+    pass_if: "^VERDICT: APPROVE\\s*$"
+    on_failure: address_review
+    max_visits: 3
+
+  - id: address_review
+    type: claude
+    resume: implement
+    prompt: |
+      A reviewer requested changes. Address them:
+
+      {{steps.review.output}}
+    on_success: test
+
+  - id: commit
+    type: shell
+    run: |
+      git add -A && git commit -q -m "factory: $FACTORY_TASK" && git log --oneline -1
