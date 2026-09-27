@@ -8,16 +8,24 @@ const WatcherSchema = z
   .object({
     id: z.string().regex(/^[\w-]+$/),
     enabled: z.boolean().default(true),
-    /** issues: labelled issues → flow. pr-feedback: new review comments on factory PRs → flow. */
-    source: z.enum(["issues", "pr-feedback"]).default("issues"),
+    /**
+     * issues: labelled issues → flow. pr-feedback: new review comments on factory PRs → flow.
+     * ci-failures: CI red on the default branch → ci-fix. schedule: run a chore every `every`.
+     */
+    source: z.enum(["issues", "pr-feedback", "ci-failures", "schedule"]).default("issues"),
     flow: z.string().default("github-issue"),
     github_repo: z.string().regex(/^[\w.-]+\/[\w.-]+$/, "owner/repo"),
     label: z.string().default("claude-factory"),
     every: z.string().default("5m"),
     max_per_tick: z.number().int().positive().default(1),
     vars: z.record(z.string(), z.string()).default({}),
+    /** schedule: what the chore should do (the run's task). */
+    task: z.string().max(5000).optional(),
+    /** ci-failures: branch to watch (default: the repo's default branch). */
+    branch: z.string().regex(/^[\w./-]+$/).optional(),
   })
-  .strict();
+  .strict()
+  .refine((w) => w.source !== "schedule" || !!w.task?.trim(), { message: "a schedule watcher needs a task", path: ["task"] });
 
 export const PROVIDER_KINDS = ["anthropic", "openai", "ollama", "lmstudio", "anthropic-compatible"] as const;
 
@@ -72,6 +80,8 @@ export const ConfigSchema = z
     concurrency: z.number().int().positive().default(2),
     /** Pushes to these branches are refused (glob patterns). */
     protected_branches: z.array(z.string()).default(["main", "master", "develop", "release/*"]),
+    /** Block pushes whose new commits add secrets (API keys, private keys, .env files). */
+    secret_scan: z.boolean().default(true),
     notify: z
       .object({
         macos: z.boolean().default(true),

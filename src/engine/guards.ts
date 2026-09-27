@@ -5,8 +5,10 @@ import { fileURLToPath } from "node:url";
 import type { Config } from "../config.js";
 import { FACTORY_HOME } from "../flow/load.js";
 
+const ZERO = "0000000000000000000000000000000000000000";
+
 const PRE_PUSH = `#!/bin/sh
-# Installed by claude-factory: refuse pushes to protected branches.
+# Installed by claude-factory: refuse pushes to protected branches, and pushes that add secrets.
 while read local_ref local_sha remote_ref remote_sha; do
   branch=\${remote_ref#refs/heads/}
   set -f
@@ -16,17 +18,25 @@ while read local_ref local_sha remote_ref remote_sha; do
     esac
   done
   set +f
+  if [ -n "$FACTORY_SECRET_SCAN" ] && [ "$local_sha" != "${ZERO}" ]; then
+    if [ "$remote_sha" = "${ZERO}" ]; then
+      "$FACTORY_SECRET_SCAN" "$local_sha" --not --remotes || exit 1
+    else
+      "$FACTORY_SECRET_SCAN" "$remote_sha..$local_sha" || exit 1
+    fi
+  fi
 done
 exit 0
 `;
 
 /**
  * Env that makes every git command in the run use our pre-push hook, which refuses
- * pushes to protected branches. (GIT_CONFIG_* applies to all git processes, including
- * the ones Claude starts.) Note: this replaces the repo's own git hooks during runs.
+ * pushes to protected branches and (with secretScan) pushes whose new commits contain
+ * secrets. GIT_CONFIG_* applies to all git processes, including the ones agents start.
+ * Note: this replaces the repo's own git hooks during runs.
  */
-export function protectedBranchEnv(patterns: string[]): Record<string, string> {
-  if (!patterns.length) return {};
+export function protectedBranchEnv(patterns: string[], secretScan = false): Record<string, string> {
+  if (!patterns.length && !secretScan) return {};
   const dir = join(process.env.FACTORY_HOME ?? FACTORY_HOME, "hooks");
   mkdirSync(dir, { recursive: true });
   const hook = join(dir, "pre-push");
@@ -37,6 +47,7 @@ export function protectedBranchEnv(patterns: string[]): Record<string, string> {
     GIT_CONFIG_KEY_0: "core.hooksPath",
     GIT_CONFIG_VALUE_0: dir,
     FACTORY_PROTECTED_BRANCHES: patterns.join(" "),
+    ...(secretScan ? { FACTORY_SECRET_SCAN: join(TOOLS_DIR, "secret-scan") } : {}),
   };
 }
 

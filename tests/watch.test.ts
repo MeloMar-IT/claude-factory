@@ -13,6 +13,8 @@ describe("parseInterval", () => {
     expect(parseInterval("30s")).toBe(30_000);
     expect(parseInterval("1h")).toBe(3_600_000);
     expect(parseInterval("2")).toBe(120_000);
+    expect(parseInterval("7d")).toBe(604_800_000);
+    expect(() => parseInterval("30d")).toThrow(/at most/);
     expect(() => parseInterval("1s")).toThrow(/at least 10s/);
     expect(() => parseInterval("soon")).toThrow(/invalid interval/);
   });
@@ -157,6 +159,52 @@ describe("watcher", () => {
     await w.tick(); // the same comment must not trigger again
     await settle();
     expect(scheduler.list().filter((s) => s.flow === "pr-feedback")).toHaveLength(1);
+  });
+
+  it("opens a ci-fix run when CI is red on the default branch, once per CI run", async () => {
+    const ciRun = (id: number, workflowName: string, conclusion: string) =>
+      ({ databaseId: id, workflowName, status: "completed", conclusion, headSha: `abc${id}def0`, url: `https://ci/${id}` });
+    process.env.FAKE_GH_RUNS = JSON.stringify([ciRun(7, "CI", "failure"), ciRun(6, "CI", "success"), ciRun(5, "Lint", "success"), ciRun(4, "Lint", "failure")]);
+    const w = watcher({ source: "ci-failures", vars: { test_cmd: "test -f main-fix.txt" } });
+    await w.tick();
+    await settle();
+    expect(w.status.lastError).toBeUndefined();
+    const runs = scheduler.list().filter((s) => s.flow === "ci-fix");
+    expect(runs).toHaveLength(1); // Lint's latest run is green: its old failure is ignored
+    expect(runs[0]!.vars).toMatchObject({ ci_run: "7", ci_workflow: "CI", github_repo: "acme/app" });
+    expect(runs[0]!.task).toBe("Fix failing CI: CI on main (abc7def)");
+    expect(runs[0]!.status).toBe("succeeded");
+    expect(gh.ghLog()).toMatch(/gh run view 7 --repo acme\/app --log-failed/);
+    expect(gh.ghLog()).toContain("gh pr create");
+    const branch = gh.remoteGit("for-each-ref", "--format=%(refname:short)", "refs/heads/factory/").trim();
+    expect(gh.remoteGit("show", `${branch}:main-fix.txt`)).toBe("fixed\n");
+
+    await w.tick(); // same failed CI run → nothing new
+    await settle();
+    expect(scheduler.list().filter((s) => s.flow === "ci-fix")).toHaveLength(1);
+  });
+
+  it("runs a scheduled chore once per period, and ends quietly when there is nothing to do", async () => {
+    const w = watcher({ source: "schedule", every: "1h", task: "Update deps", vars: { test_cmd: "test -f chore.txt" } });
+    await w.tick();
+    await settle();
+    await w.tick(); // within the hour → no second run
+    await settle();
+    const chores = scheduler.list().filter((s) => s.flow === "chore");
+    expect(chores).toHaveLength(1);
+    expect(chores[0]!).toMatchObject({ status: "succeeded", task: "Update deps" });
+    expect(chores[0]!.history.map((h) => h.id)).toContain("open_pr");
+
+    const idle = watcher({ id: "idle", source: "schedule", every: "1h", task: "SKIP_CHORE" });
+    await idle.tick();
+    await settle();
+    const quiet = scheduler.list().find((s) => s.vars.chore_watcher === "idle")!;
+    expect(quiet.status).toBe("succeeded");
+    expect(quiet.history.at(-1)!.id).toBe("implement");
+  });
+
+  it("requires a task for schedule watchers", () => {
+    expect(() => WatcherSchema.parse({ id: "s", github_repo: "a/b", source: "schedule" })).toThrow(/needs a task/);
   });
 });
 

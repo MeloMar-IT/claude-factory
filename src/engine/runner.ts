@@ -155,7 +155,8 @@ async function drive(
       FACTORY_BRANCH: summary.branch ?? "",
       FACTORY_LEARNINGS_FILE: lf,
       FACTORY_TOOLS: TOOLS_DIR,
-      ...protectedBranchEnv(config.protected_branches),
+      FACTORY_BASE_SHA: summary.baseSha ?? "",
+      ...protectedBranchEnv(config.protected_branches, config.secret_scan),
       ...(await identityEnv(config)),
     };
   } catch (e) {

@@ -182,3 +182,100 @@ write("pr-feedback", {
     },
   ],
 });
+
+// ── ci-fix: CI failing on the default branch → fix PR ──
+{
+  const s = [
+    ...steps("github-repo", "pull-repo"),
+    {
+      id: "ci_logs",
+      type: "shell",
+      description: "Failed job logs of CI run ci_run (set by the ci-failures watcher)",
+      run: [
+        'case "$FACTORY_VAR_CI_RUN" in *[!0-9]*|"") echo "set var ci_run to a GitHub Actions run id"; exit 1;; esac',
+        'gh run view "$FACTORY_VAR_CI_RUN" --repo "$FACTORY_VAR_GITHUB_REPO" --json workflowName,headSha,headBranch,url \\',
+        '  --jq \'"workflow: \\(.workflowName)\\ncommit: \\(.headSha)\\nbranch: \\(.headBranch)\\nurl: \\(.url)"\'',
+        'echo; echo "=== failed job logs (tail) ==="',
+        'gh run view "$FACTORY_VAR_CI_RUN" --repo "$FACTORY_VAR_GITHUB_REPO" --log-failed 2>&1 | tail -200',
+      ].join("\n"),
+    },
+    {
+      id: "implement",
+      type: "claude",
+      permission_mode: "acceptEdits",
+      allowed_tools: ["Read", "Edit", "Write", "Glob", "Grep", "Bash(npm *)", "Bash(npx *)", "Bash(git log*)", "Bash(git diff*)", "Bash(git show*)"],
+      prompt: [
+        "CI is failing on the default branch. Find the root cause and fix it with the smallest",
+        "correct change. Do not disable, skip or loosen tests or checks. Use `git log` to see which",
+        "recent commits could have caused it.",
+        "",
+        "{{steps.ci_logs.output}}",
+        "",
+        "Things learned from earlier runs in this repo:",
+        "{{learnings}}",
+        "",
+        "Finish with a short summary of the cause and the fix.",
+      ].join("\n"),
+    },
+    ...steps("run-tests", "code-review", "commit", "push", "open-pr", "ci", "learn"),
+  ];
+  patch(s, "address_review", { on_success: "run_tests" });
+  write("ci-fix", {
+    title: "CI failing on the default branch → fix pull request",
+    lines: [
+      "factory run ci-fix --var github_repo=owner/repo --var ci_run=123456789",
+      "(the ci-failures watcher runs this when the latest run of a workflow on the default branch failed)",
+      "",
+      "clone → failed logs → fix → tests ⟲ fix → review ⟲ address → commit → push → PR → CI ⟲ fix → learn",
+    ],
+  }, {
+    description: "Fix CI that is red on the default branch: read the failed logs, fix, test, review, open a PR",
+    workspace: "empty",
+    defaults: { model: "sonnet", timeout_sec: 1800 },
+    limits: { max_cost_usd: 15 },
+    vars: { github_repo: "owner/repo", ci_run: "", test_cmd: "auto" },
+    steps: s,
+  });
+}
+
+// ── chore: recurring maintenance on a schedule → PR (or nothing) ──
+{
+  const s = [
+    ...steps("github-repo", "pull-repo"),
+    {
+      id: "implement",
+      type: "claude",
+      permission_mode: "acceptEdits",
+      allowed_tools: ["Read", "Edit", "Write", "Glob", "Grep", "Bash(npm *)", "Bash(npx *)", "Bash(pnpm *)", "Bash(yarn *)", "Bash(git log*)", "Bash(git diff*)"],
+      prompt: [
+        "Recurring maintenance task for this repository:",
+        "",
+        "{{task}}",
+        "",
+        "Keep the change focused and safe to merge. If nothing needs to be done, change nothing",
+        "and answer with exactly: NOTHING_TO_DO",
+        "Otherwise finish with a short summary of what you changed and why.",
+      ].join("\n"),
+      routes: [{ if: "^NOTHING_TO_DO\\s*$", goto: "end" }],
+    },
+    ...steps("run-tests", "code-review", "commit", "push", "open-pr", "ci"),
+  ];
+  patch(s, "address_review", { on_success: "run_tests" });
+  write("chore", {
+    title: "Scheduled chore → pull request (or nothing to do)",
+    lines: [
+      'factory run chore --var github_repo=owner/repo "Update dependencies with known vulnerabilities"',
+      "(a schedule watcher runs this on a timer with its task)",
+      "",
+      "clone → do the chore ─┬─ nothing to do → end",
+      "                      └─ changed → tests ⟲ fix → review → commit → push → PR → CI ⟲ fix",
+    ],
+  }, {
+    description: "Recurring maintenance (deps, flaky tests, docs…) on a schedule; opens a PR only if something changed",
+    workspace: "empty",
+    defaults: { model: "sonnet", timeout_sec: 1800 },
+    limits: { max_cost_usd: 10 },
+    vars: { github_repo: "owner/repo", test_cmd: "auto" },
+    steps: s,
+  });
+}

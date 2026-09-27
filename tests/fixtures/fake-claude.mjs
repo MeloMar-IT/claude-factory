@@ -32,6 +32,15 @@ else if (prompt.includes("VERDICT: APPROVE")) canned = "Looks good.\nVERDICT: AP
 else if (prompt.includes("CI failed on this branch")) {
   writeFileSync("ci-fix.txt", "fixed\n");
   canned = "fixed the failing assertion";
+} else if (prompt.includes("CI is failing on the default branch")) {
+  writeFileSync("main-fix.txt", "fixed\n");
+  canned = "Cause: off-by-one in app.js. Fixed it.";
+} else if (prompt.includes("Recurring maintenance task")) {
+  if (prompt.includes("SKIP_CHORE")) canned = "NOTHING_TO_DO";
+  else {
+    writeFileSync("chore.txt", "done\n");
+    canned = "- bumped a dependency";
+  }
 } else if (prompt.includes("reusable lessons")) canned = process.env.FAKE_LEARN ?? "- CI runs tests that expect 2";
 else if (prompt.includes("Address the review feedback")) {
   writeFileSync("review-fix.txt", "done\n");

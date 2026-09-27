@@ -11,7 +11,7 @@ import { loadConfig, WatcherSchema } from "./config.js";
 import { cleanRuns } from "./clean.js";
 import { runEval } from "./evals.js";
 import { Scheduler } from "./queue/scheduler.js";
-import { Watcher } from "./queue/watcher.js";
+import { DEFAULT_FLOWS, Watcher } from "./queue/watcher.js";
 import { installService, serviceStatus, uninstallService } from "./service.js";
 import { fileURLToPath } from "node:url";
 
@@ -22,8 +22,8 @@ Usage:
   factory resume <run-id> [--from <step>]        Continue a stopped/failed/interrupted run
   factory approve <run-id> [--note "..."]        Approve a run waiting at an approval step
   factory reject <run-id> [--note "..."]         Reject it (the flow's on_failure path runs)
-  factory eval <suite.yaml> [--flows a,b] [--models sonnet,opus]
-                                                 Benchmark flows/models on sample tasks
+  factory eval <suite.yaml> [--flows a,b] [--models sonnet,codex,ollama:qwen3-coder]
+                                                 Benchmark flows/agents/models on sample tasks
   factory clean [--older-than 7] [--purge] [--include-paused] [--dry-run]
                                                  Remove old run workspaces/worktrees (branches kept)
   factory flows [--repo <dir>]                   List available flows
@@ -35,14 +35,21 @@ Usage:
   factory service install|uninstall|status       Keep \`factory serve\` running as a macOS login agent
   factory watch [flow] --var github_repo=o/r     Every 5 min, run the flow (default github-issue) on
         [--every 5m] [--label claude-factory]    each open issue with the label; results are marked
-        [--max 1] [--once] [--source pr-feedback]  with factory:* status labels; resumes runs when
-                                                 questions are answered or /approve is commented
+        [--max 1] [--once] [--source …]          with factory:* status labels; resumes runs when
+                                                 questions are answered or /approve is commented.
+                                                 --source pr-feedback: review comments on factory PRs
+                                                 --source ci-failures: CI red on the default branch → ci-fix
+                                                 --source schedule --every 7d --task "…": chore → PR
 
 Run options:
   -t, --task <text>        Task description (or --task-file <path>); optional for ticket flows
   -r, --repo <dir>         Target repository (default: current directory)
   -v, --var key=value      Override a flow variable (repeatable)
       --runs-dir <dir>     Where run logs/worktrees go (default: ${join(FACTORY_HOME, "runs")})
+
+Models: a step's model can be a spec like sonnet, codex, codex:gpt-5, ollama:qwen3-coder or
+codex:ollama:gpt-oss:20b (Claude Code or Codex CLI, on Anthropic, OpenAI or a local model).
+Routing rules and fallbacks live in config.yaml (router:) — or the Models page of the UI.
 
 Flows are looked up in <repo>/.claude-factory/flows, ${join(FACTORY_HOME, "flows")}, then built-ins.
 `;
@@ -191,12 +198,13 @@ async function main(argv: string[]): Promise<number> {
       const cfg = WatcherSchema.parse({
         id: "cli",
         source: values.source ?? "issues",
-        flow: arg ?? (values.source === "pr-feedback" ? "pr-feedback" : "github-issue"),
+        flow: arg ?? DEFAULT_FLOWS[(values.source ?? "issues") as keyof typeof DEFAULT_FLOWS] ?? "github-issue",
         github_repo,
         label: values.label ?? "claude-factory",
         every: values.every ?? "5m",
         max_per_tick: Number(values.max ?? 1),
         vars: rest,
+        task: values.task,
       });
       const config = loadConfig();
       const runsDir = resolve(values["runs-dir"] ?? join(FACTORY_HOME, "runs"));

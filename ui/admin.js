@@ -18,15 +18,43 @@ async function saveConfig(mutate, okMsg) {
 
 // ── watchers ──
 
+const SOURCES = {
+  issues: "Issues with a label → run a flow",
+  "pr-feedback": "Review comments on factory PRs → pr-feedback",
+  "ci-failures": "CI red on the default branch → ci-fix PR",
+  schedule: "On a schedule → run a chore (PR if anything changed)",
+};
+const DEFAULT_FLOWS = { issues: "github-issue", "pr-feedback": "pr-feedback", "ci-failures": "ci-fix", schedule: "chore" };
+const CHORES = [
+  ["Dependencies", "Update dependencies that have known security vulnerabilities (npm audit / pip-audit / cargo audit etc.) to the smallest fixed version. Do not do major upgrades."],
+  ["Flaky tests", "Run the test suite 3 times. If any test fails only sometimes, find why it is flaky and make it deterministic. Do not delete or skip tests."],
+  ["Test coverage", "Find the most important untested code path (business logic, not trivial getters) and add focused tests for it."],
+  ["Docs", "Check that README and docs match the code (commands, options, examples). Fix anything outdated."],
+  ["Lint / TODOs", "Run the linter and fix the warnings that are safe to fix. Resolve TODO/FIXME comments that are quick and clearly specified."],
+];
+const describeWatcher = (w) => {
+  const flow = w.flow === "github-issue" ? DEFAULT_FLOWS[w.source] : w.flow;
+  return {
+    issues: `issues labelled “${w.label}” → ${flow}`,
+    "pr-feedback": `PR review comments → ${flow}`,
+    "ci-failures": `CI failures on ${w.branch ?? "the default branch"} → ${flow}`,
+    schedule: `every ${w.every}: ${(w.task ?? "").slice(0, 60)}${(w.task ?? "").length > 60 ? "…" : ""} → ${flow}`,
+  }[w.source];
+};
+
 async function editWatcher(existing, flows) {
   const w = existing ?? { id: "", source: "issues", flow: "github-issue", github_repo: "", label: "claude-factory", every: "5m", max_per_tick: 1, enabled: true, vars: {} };
   return modal(existing ? `Edit watcher ${w.id}` : "Add a watcher", (close) => {
     const id = input(w.id, { class: "mono", placeholder: "my-repo", disabled: !!existing });
     const repo = input(w.github_repo, { class: "mono", placeholder: "owner/repo" });
-    const source = h("select", {},
-      h("option", { value: "issues", selected: w.source === "issues" }, "Issues with a label → run a flow"),
-      h("option", { value: "pr-feedback", selected: w.source === "pr-feedback" }, "Review comments on factory PRs → pr-feedback"));
     const flow = input(w.flow, { class: "mono", list: "watcher-flows" });
+    const source = h("select", { onChange: () => {
+      if (Object.values(DEFAULT_FLOWS).includes(flow.value)) flow.value = DEFAULT_FLOWS[source.value];
+      if (source.value === "schedule" && /^\d+(s|m)$/.test(every.value)) every.value = "7d";
+      showFor();
+    } }, Object.entries(SOURCES).map(([v, label]) => h("option", { value: v, selected: w.source === v }, label)));
+    const task = h("textarea", { rows: 3, placeholder: "What the chore should do each time", value: w.task ?? "" });
+    const branch = input(w.branch ?? "", { class: "mono", placeholder: "default branch" });
     const label = input(w.label, { class: "mono" });
     const every = input(w.every, { class: "mono", placeholder: "5m" });
     const max = input(String(w.max_per_tick), { type: "number", min: 1 });
@@ -41,7 +69,9 @@ async function editWatcher(existing, flows) {
         parsedVars[line.slice(0, i).trim()] = line.slice(i + 1).trim();
       }
       const next = { id: id.value.trim(), source: source.value, flow: flow.value.trim(), github_repo: repo.value.trim(), label: label.value.trim(),
-        every: every.value.trim(), max_per_tick: Number(max.value) || 1, enabled: enabled.el.checked, vars: parsedVars };
+        every: every.value.trim(), max_per_tick: Number(max.value) || 1, enabled: enabled.el.checked, vars: parsedVars,
+        task: source.value === "schedule" ? task.value.trim() : undefined,
+        branch: source.value === "ci-failures" ? branch.value.trim() || undefined : undefined };
       try {
         await saveConfig((c) => {
           if (!existing && c.watchers.some((x) => x.id === next.id)) throw new Error(`a watcher "${next.id}" already exists`);
@@ -52,12 +82,23 @@ async function editWatcher(existing, flows) {
         err.textContent = e.message;
       }
     } }, "Save watcher");
+    const labelField = f("Trigger label", label);
+    const taskField = h("div", {}, f("Chore", task, "Becomes the run's task. The flow opens a PR only if something changed."),
+      h("div", { class: "chips", style: { marginTop: "6px" } }, CHORES.map(([name, text]) => h("button", { class: "chip", type: "button", onClick: () => (task.value = text) }, name))));
+    const branchField = f("Branch to watch", branch);
+    const showFor = () => {
+      labelField.style.display = source.value === "issues" ? "" : "none";
+      taskField.style.display = source.value === "schedule" ? "" : "none";
+      branchField.style.display = source.value === "ci-failures" ? "" : "none";
+    };
+    showFor();
     return h("div", { style: { display: "grid", gap: "12px" } },
       h("datalist", { id: "watcher-flows" }, flows.map((x) => h("option", { value: x.name }))),
       h("div", { class: "grid" }, f("Id", id), f("GitHub repo", repo)),
       f("Source", source),
-      h("div", { class: "grid" }, f("Flow", flow), f("Trigger label", label, "Issues source only")),
-      h("div", { class: "grid" }, f("Check every", every, "e.g. 30s, 5m, 1h"), f("Max new runs per check", max)),
+      h("div", { class: "grid" }, f("Flow", flow), labelField, branchField),
+      taskField,
+      h("div", { class: "grid" }, f("Check every", every, "e.g. 5m, 1h — for chores: how often it runs, e.g. 1d, 7d"), f("Max new runs per check", max)),
       f("Variables for each run", vars, "One name=value per line. github_repo and issue/pr are set automatically."),
       enabled.row, err, h("div", { class: "row" }, h("span", { class: "spacer" }), save));
   });
@@ -79,7 +120,7 @@ export async function renderWatchers(main) {
           h("b", { class: "mono" }, w.id),
           h("span", { class: `pill ${!w.enabled ? "cancelled" : st?.lastError ? "failed" : "succeeded"}` }, !w.enabled ? "disabled" : st?.lastError ? "error" : "active"),
           h("span", { class: "mono" }, w.github_repo),
-          h("span", { class: "muted" }, w.source === "issues" ? `issues labelled “${w.label}” → ${w.flow}` : "PR review comments → pr-feedback"),
+          h("span", { class: "muted" }, describeWatcher(w)),
           h("span", { class: "spacer" }),
           w.enabled ? h("button", { class: "small", onClick: async () => { toast("Checking…"); await api.tickWatcher(w.id).catch((e) => toast(e.message, "error")); reload(); } }, "Check now") : null,
           h("button", { class: "small", onClick: async () => (await editWatcher(w, flows)) && reload() }, "Edit"),
@@ -89,13 +130,13 @@ export async function renderWatchers(main) {
             reload();
           } }, "Delete")),
         h("div", { class: "muted", style: { fontSize: "12.5px" } },
-          `every ${w.every} · max ${w.max_per_tick} per check`,
+          w.source === "schedule" ? `max 1 run per ${w.every}` : `every ${w.every} · max ${w.max_per_tick} per check`,
           st?.lastTick ? ` · last check ${timeAgo(st.lastTick)}` : "",
           st?.nextTick ? ` · next ${new Date(st.nextTick).toLocaleTimeString()}` : ""),
         st?.lastError ? h("div", { class: "errors", style: { margin: 0 } }, st.lastError) : null,
         st?.lastActions?.length ? h("details", {}, h("summary", {}, `Recent activity (${st.lastActions.length})`), h("pre", { class: "mono" }, st.lastActions.join("\n"))) : null);
     })) : h("div", { class: "empty" },
-      h("p", {}, "No watchers yet. A watcher checks a GitHub repo on a schedule and runs a flow for each labelled issue."),
+      h("p", {}, "No watchers yet. A watcher checks a GitHub repo on a schedule and runs a flow: for labelled issues, review comments, red CI on the default branch, or a recurring chore."),
       h("button", { class: "primary", onClick: async () => (await editWatcher(null, flows)) && reload() }, "+ Add watcher")),
     h("p", { class: "muted", style: { marginTop: "16px" } },
       "Watchers run inside this server. To keep them running after you close the terminal or restart your Mac: ",
@@ -144,7 +185,8 @@ export async function renderSettings(main) {
   const appId = input(c.github_app?.app_id ?? "", { class: "mono" });
   const instId = input(c.github_app?.installation_id ?? "", { class: "mono" });
   const keyPath = input(c.github_app?.private_key_path ?? "", { class: "mono", placeholder: "/path/to/app.private-key.pem" });
-  const sbxClaude = check(c.sandbox.claude, "Sandbox Claude's bash tool by default");
+  const sbxClaude = check(c.sandbox.claude, "Sandbox agents' shell commands by default");
+  const secrets = check(c.secret_scan !== false, "Block pushes that add secrets (API keys, tokens, private keys, .env files)");
   const sbxImage = input(c.sandbox.docker_image ?? "", { class: "mono", placeholder: "e.g. node:22" });
   const err = h("div");
 
@@ -154,6 +196,7 @@ export async function renderSettings(main) {
       daily_budget_usd: num(budget),
       concurrency: Number(conc.value) || 1,
       protected_branches: protectedB.value.split(",").map((s) => s.trim()).filter(Boolean),
+      secret_scan: secrets.el.checked,
       notify: { macos: macos.el.checked, slack_webhook: slack.value.trim() || undefined, command: cmd.value.trim() || undefined, on: on.filter(([, x]) => x.el.checked).map(([s]) => s) },
       bot: { name: botName.value.trim() || undefined, email: botEmail.value.trim() || undefined, gh_token_env: botToken.value.trim() || undefined },
       github_app: appId.value.trim() ? { app_id: appId.value.trim(), installation_id: instId.value.trim(), private_key_path: keyPath.value.trim() } : undefined,
@@ -178,6 +221,7 @@ export async function renderSettings(main) {
         f("Runs at the same time", conc))),
     section("Safety",
       f("Protected branches", protectedB, "Pushes to these are refused during runs (glob patterns, comma-separated). Also enable branch protection on GitHub."),
+      secrets.row,
       sbxClaude.row,
       f("Docker image for sandboxed shell steps", sbxImage, "Steps marked “Run in Docker” (like tests) run in this image with only the workspace mounted.")),
     section("Notifications",

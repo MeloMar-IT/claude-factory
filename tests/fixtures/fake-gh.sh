@@ -3,7 +3,11 @@
 # State lives next to the log: $FAKE_GH_LOG.pr (PR url once created), $FAKE_GH_LOG.checks (CI call count).
 echo "gh $*" >> "$FAKE_GH_LOG"
 case "$1 $2" in
-  "repo view")   echo "repo: owner/repo"; echo "default branch: main" ;;
+  "repo view")
+    case "$*" in *--jq*|*nameWithOwner*) echo "repo: owner/repo"; echo "default branch: main" ;;
+      *defaultBranchRef*) echo '{"defaultBranchRef":{"name":"main"}}' ;;
+      *) echo "repo: owner/repo" ;;
+    esac ;;
   "issue view")
     case "$*" in *"-q .title"*) echo "Add a feature" ;;
       *"--json comments,labels"*) printf '%s' "${FAKE_GH_COMMENTS:-{\"comments\":[]\}}" ;;
@@ -31,7 +35,7 @@ case "$1 $2" in
     n=$(($(cat "$FAKE_GH_LOG.checks" 2>/dev/null || echo 0) + 1)); echo "$n" > "$FAKE_GH_LOG.checks"
     if [ -n "$FAKE_GH_CI_FAILS" ] && [ "$n" -le "$FAKE_GH_CI_FAILS" ]; then echo "test  fail  1m"; exit 1; fi
     echo "test  pass  1m" ;;
-  "run list")    echo 123 ;;
+  "run list")    case "$*" in *workflowName*) printf '%s' "${FAKE_GH_RUNS:-[]}" ;; *) echo 123 ;; esac ;;
   "run view")    echo "FAIL src/app.test.js: expected 2, got 3" ;;
   "pr merge")    echo "merged" ;;
   "pr checkout") git fetch -q origin "factory/pr-$3" && git checkout -q -B "factory/pr-$3" FETCH_HEAD && git branch -q --set-upstream-to="origin/factory/pr-$3" 2>/dev/null; git config "branch.factory/pr-$3.remote" origin; git config "branch.factory/pr-$3.merge" "refs/heads/factory/pr-$3" ;;
