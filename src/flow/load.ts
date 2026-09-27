@@ -8,9 +8,19 @@ import { FlowSchema, type Flow } from "./schema.js";
 export const FACTORY_HOME = process.env.FACTORY_HOME ?? join(homedir(), ".claude-factory");
 const BUILTIN_FLOWS = resolve(dirname(fileURLToPath(import.meta.url)), "../../flows");
 
+export type FlowScope = "repo" | "global" | "builtin";
+
+export function flowDir(scope: FlowScope, repo: string): string {
+  if (scope === "repo") return join(repo, ".claude-factory", "flows");
+  if (scope === "global") return join(FACTORY_HOME, "flows");
+  return BUILTIN_FLOWS;
+}
+
+const SCOPES: FlowScope[] = ["repo", "global", "builtin"];
+
 /** Directories searched for flows by name, most specific first. */
 export function flowDirs(repo: string): string[] {
-  return [join(repo, ".claude-factory", "flows"), join(FACTORY_HOME, "flows"), BUILTIN_FLOWS];
+  return SCOPES.map((s) => flowDir(s, repo));
 }
 
 export function resolveFlowPath(nameOrPath: string, repo: string): string {
@@ -47,6 +57,7 @@ export function loadFlow(nameOrPath: string, repo: string): { flow: Flow; path: 
 export interface FlowListing {
   name: string;
   path: string;
+  scope: FlowScope;
   description?: string;
   error?: string;
 }
@@ -54,7 +65,8 @@ export interface FlowListing {
 /** List flows; a name found in a more specific dir shadows later ones. */
 export function listFlows(repo: string): FlowListing[] {
   const seen = new Map<string, FlowListing>();
-  for (const dir of flowDirs(repo)) {
+  for (const scope of SCOPES) {
+    const dir = flowDir(scope, repo);
     if (!existsSync(dir)) continue;
     for (const file of readdirSync(dir).sort()) {
       if (![".yaml", ".yml"].includes(extname(file))) continue;
@@ -63,9 +75,9 @@ export function listFlows(repo: string): FlowListing[] {
       const path = join(dir, file);
       try {
         const flow = parseFlow(readFileSync(path, "utf8"), path);
-        seen.set(name, { name, path, description: flow.description });
+        seen.set(name, { name, path, scope, description: flow.description });
       } catch (e) {
-        seen.set(name, { name, path, error: (e as Error).message });
+        seen.set(name, { name, path, scope, error: (e as Error).message });
       }
     }
   }

@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { execFile } from "node:child_process";
 import { parseArgs } from "node:util";
 import { runFlow } from "./engine/runner.js";
 import { FACTORY_HOME, listFlows, loadFlow, resolveFlowPath } from "./flow/load.js";
+import { startServer } from "./server/server.js";
 
 const USAGE = `claude-factory — run custom flows of headless Claude Code + shell steps
 
@@ -12,6 +14,7 @@ Usage:
   factory flows [--repo <dir>]                   List available flows
   factory validate <flow|file.yaml>              Check a flow definition
   factory new <name> [--from <flow>] [--global]  Create your own flow (copies a template)
+  factory ui [--port 4777] [--no-open]           Web UI: build flows, start and watch runs
 
 Run options:
   -t, --task <text>        Task description (or --task-file <path>)
@@ -44,6 +47,8 @@ async function main(argv: string[]): Promise<number> {
       "runs-dir": { type: "string" },
       from: { type: "string" },
       global: { type: "boolean" },
+      port: { type: "string", short: "p" },
+      "no-open": { type: "boolean" },
       help: { type: "boolean", short: "h" },
     },
   });
@@ -106,6 +111,19 @@ async function main(argv: string[]): Promise<number> {
       writeFileSync(dest, template.replace(/^name:.*$/m, `name: ${arg}`));
       process.stdout.write(`created ${dest}\nedit it, then: factory run ${arg} --task "..."\n`);
       return 0;
+    }
+
+    case "ui": {
+      const port = Number(values.port ?? 4777);
+      if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("--port must be 1-65535");
+      const { url } = await startServer({
+        repo,
+        port,
+        runsDir: resolve(values["runs-dir"] ?? join(FACTORY_HOME, "runs")),
+      });
+      process.stdout.write(`claude-factory UI → ${url}\n  repo: ${repo}\n  Ctrl+C to stop\n`);
+      if (!values["no-open"] && process.platform === "darwin") execFile("open", [url]);
+      return new Promise<number>(() => {}); // run until killed
     }
 
     default:

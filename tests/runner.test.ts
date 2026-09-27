@@ -69,6 +69,21 @@ steps:
     expect(fix!.output).toContain("exit=1");
   });
 
+  it("runs shell steps without colour even if FORCE_COLOR is set", async () => {
+    process.env.FORCE_COLOR = "1";
+    try {
+      const s = await run(`
+name: t
+workspace: inplace
+steps:
+  - {id: a, type: shell, run: "node -e 'console.log(5)'; printf '\\\\033[31mred\\\\033[0m'"}
+`);
+      expect(s.history[0]!.output).toBe("5\nred");
+    } finally {
+      delete process.env.FORCE_COLOR;
+    }
+  });
+
   it("stops runaway loops with max_visits", async () => {
     const s = await run(`
 name: t

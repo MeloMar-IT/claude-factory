@@ -31,7 +31,7 @@ export interface RunSummary {
   runId: string;
   flow: string;
   task: string;
-  status: "running" | "succeeded" | "failed";
+  status: "running" | "succeeded" | "failed" | "cancelled";
   reason?: string;
   runDir: string;
   workdir?: string;
@@ -48,7 +48,12 @@ export interface RunOptions {
   runsDir: string;
   vars?: Record<string, string>;
   claudeBin?: string;
+  /** Pre-allocated run id (e.g. so a UI can subscribe before the run starts). */
+  runId?: string;
+  signal?: AbortSignal;
   log?: (msg: string) => void;
+  /** Called whenever run.json is written. */
+  onUpdate?: (summary: RunSummary) => void;
 }
 
 export function newRunId(now = new Date()): string {
@@ -69,7 +74,7 @@ function checkOutput(step: Step, ok: boolean, output: string): { ok: boolean; er
 
 export async function runFlow(flow: Flow, opts: RunOptions): Promise<RunSummary> {
   const log = opts.log ?? (() => {});
-  const runId = newRunId();
+  const runId = opts.runId ?? newRunId();
   const runDir = join(opts.runsDir, runId);
   const logsDir = join(runDir, "logs");
   mkdirSync(logsDir, { recursive: true });
@@ -84,8 +89,11 @@ export async function runFlow(flow: Flow, opts: RunOptions): Promise<RunSummary>
     totalCostUsd: 0,
     history: [],
   };
-  const save = () => writeFileSync(join(runDir, "run.json"), JSON.stringify(summary, null, 2));
-  const finish = (status: "succeeded" | "failed", reason?: string) => {
+  const save = () => {
+    writeFileSync(join(runDir, "run.json"), JSON.stringify(summary, null, 2));
+    opts.onUpdate?.(summary);
+  };
+  const finish = (status: "succeeded" | "failed" | "cancelled", reason?: string) => {
     summary.status = status;
     summary.reason = reason;
     summary.finishedAt = new Date().toISOString();
@@ -119,6 +127,7 @@ export async function runFlow(flow: Flow, opts: RunOptions): Promise<RunSummary>
 
   let idx = 0;
   while (idx < flow.steps.length) {
+    if (opts.signal?.aborted) return finish("cancelled", "cancelled by user");
     const step = flow.steps[idx]!;
     const visit = (visits.get(step.id) ?? 0) + 1;
     visits.set(step.id, visit);
@@ -147,6 +156,7 @@ export async function runFlow(flow: Flow, opts: RunOptions): Promise<RunSummary>
           resumeSessionId: typeof resumeFrom === "string" ? resumeFrom : undefined,
           maxBudgetUsd: step.max_budget_usd ?? d.max_budget_usd,
           timeoutMs,
+          signal: opts.signal,
           onProgress: (m) => log(`    · ${m}`),
         });
         rec = { ok: r.ok, output: r.output, error: r.error, sessionId: r.sessionId, costUsd: r.costUsd };
@@ -157,6 +167,7 @@ export async function runFlow(flow: Flow, opts: RunOptions): Promise<RunSummary>
           env: { FACTORY_TASK: opts.task, FACTORY_RUN_ID: runId, FACTORY_WORKDIR: workdir, ...outputEnv },
           logFile,
           timeoutMs,
+          signal: opts.signal,
         });
         rec = { ok: r.ok, output: r.output, error: r.error, exitCode: r.exitCode };
       }
@@ -193,6 +204,7 @@ export async function runFlow(flow: Flow, opts: RunOptions): Promise<RunSummary>
     const secs = (record.durationMs / 1000).toFixed(1);
     log(`${rec.ok ? "✔" : "✘"} ${step.id} (${secs}s${rec.costUsd ? `, $${rec.costUsd.toFixed(4)}` : ""})${rec.error ? ` — ${rec.error}` : ""}`);
 
+    if (opts.signal?.aborted) return finish("cancelled", `cancelled during step "${step.id}"`);
     const target = rec.ok ? (step.on_success ?? "next") : (step.on_failure ?? "fail");
     if (target === "end") return finish("succeeded");
     if (target === "fail") return finish("failed", `step "${step.id}" failed${rec.error ? `: ${rec.error}` : ""}`);

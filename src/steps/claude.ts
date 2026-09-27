@@ -12,6 +12,7 @@ export interface ClaudeRunOptions {
   resumeSessionId?: string;
   maxBudgetUsd?: number;
   timeoutMs?: number;
+  signal?: AbortSignal;
   onProgress?: (msg: string) => void;
 }
 
@@ -61,6 +62,7 @@ export async function runClaude(o: ClaudeRunOptions): Promise<ClaudeRunResult> {
     cwd: o.cwd,
     stdin: o.prompt,
     timeoutMs: o.timeoutMs,
+    signal: o.signal,
     logFile: o.logFile,
     onLine: (line) => {
       let ev: StreamEvent;
@@ -78,6 +80,7 @@ export async function runClaude(o: ClaudeRunOptions): Promise<ClaudeRunResult> {
     },
   });
 
+  if (res.aborted) return { ok: false, output: final?.result ?? "", error: "cancelled" };
   if (res.timedOut) return { ok: false, output: final?.result ?? "", error: "timed out" };
   if (!final) {
     return {

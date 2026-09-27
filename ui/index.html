@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>claude-factory</title>
+  <link rel="stylesheet" href="/style.css">
+  <script type="importmap">{ "imports": { "yaml": "/vendor/yaml/index.js" } }</script>
+</head>
+<body>
+  <header class="top">
+    <a class="brand" href="#/flows"><span class="logo">◆</span> claude-factory</a>
+    <nav>
+      <a href="#/flows" data-nav="flows">Flows</a>
+      <a href="#/runs" data-nav="runs">Runs</a>
+    </nav>
+    <span class="repo" id="repo" title="Repository this UI works against"></span>
+  </header>
+  <div class="layout">
+    <aside id="sidebar"></aside>
+    <main id="main"></main>
+  </div>
+  <div id="modal-root"></div>
+  <div id="toast"></div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

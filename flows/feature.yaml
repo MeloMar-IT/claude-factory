@@ -90,6 +90,7 @@ steps:
       End your answer with exactly one line:
       VERDICT: APPROVE   or   VERDICT: CHANGES
     pass_if: "^VERDICT: APPROVE\\s*$"
+    on_success: commit
     on_failure: address_review
     max_visits: 3
 
