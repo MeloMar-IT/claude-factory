@@ -23,7 +23,14 @@ for (const line of prompt.split("\n")) {
 let canned;
 if (prompt.includes("PLAN_STATUS: NEEDS_INFO")) canned = process.env.FAKE_PLAN ?? "1. change feature.txt\nPLAN_STATUS: READY";
 else if (prompt.includes("VERDICT: APPROVE")) canned = "Looks good.\nVERDICT: APPROVE";
-else if (prompt.includes("Implement the work")) {
+else if (prompt.includes("CI failed on this branch")) {
+  writeFileSync("ci-fix.txt", "fixed\n");
+  canned = "fixed the failing assertion";
+} else if (prompt.includes("reusable lessons")) canned = process.env.FAKE_LEARN ?? "- CI runs tests that expect 2";
+else if (prompt.includes("Address the review feedback")) {
+  writeFileSync("review-fix.txt", "done\n");
+  canned = "- renamed the variable as requested";
+} else if (prompt.includes("Implement the work")) {
   writeFileSync("feature.txt", "implemented\n");
   canned = "- added feature.txt";
 }

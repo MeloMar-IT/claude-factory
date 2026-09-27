@@ -1,0 +1,13 @@
+name: Merge PR (when approved)
+category: GitHub
+description: Squash-merges the branch's PR if a reviewer approved it; otherwise fails so the run waits for a human.
+vars:
+  github_repo: owner/repo
+steps:
+  - id: merge
+    type: shell
+    run: |
+      branch=$(git branch --show-current)
+      decision=$(gh pr view "$branch" --repo "$FACTORY_VAR_GITHUB_REPO" --json reviewDecision -q .reviewDecision)
+      if [ "$decision" != "APPROVED" ]; then echo "PR not approved yet (reviewDecision: ${decision:-none})"; exit 1; fi
+      gh pr merge "$branch" --repo "$FACTORY_VAR_GITHUB_REPO" --squash --delete-branch && echo "merged"

@@ -1,0 +1,45 @@
+name: Wait for CI (fix until green)
+category: GitHub
+description: Waits for the PR's CI checks; on failure Claude fixes the code using the failed job logs, pushes, and waits again (max 3 fixes).
+vars:
+  github_repo: owner/repo
+steps:
+  - id: wait_ci
+    type: shell
+    timeout_sec: 3600
+    run: |
+      branch=$(git branch --show-current)
+      sleep "${FACTORY_VAR_CI_SETTLE_SEC:-15}"   # let CI register the new commit
+      out=$(gh pr checks "$branch" --repo "$FACTORY_VAR_GITHUB_REPO" --watch --fail-fast --interval 20 2>&1); code=$?
+      printf '%s\n' "$out"
+      if printf '%s' "$out" | grep -qi "no checks reported"; then echo "no CI checks configured"; exit 0; fi
+      if [ "$code" -ne 0 ]; then
+        echo; echo "=== failed job logs (tail) ==="
+        id=$(gh run list --repo "$FACTORY_VAR_GITHUB_REPO" --branch "$branch" --status failure --limit 1 --json databaseId -q '.[0].databaseId')
+        [ -n "$id" ] && gh run view "$id" --repo "$FACTORY_VAR_GITHUB_REPO" --log-failed 2>&1 | tail -150
+      fi
+      exit "$code"
+    on_failure: fix_ci
+
+  - id: fix_ci
+    type: claude
+    jump_only: true
+    max_visits: 3
+    permission_mode: acceptEdits
+    allowed_tools: [Read, Edit, Write, Glob, Grep, "Bash(npm *)", "Bash(npx *)", "Bash(git diff*)", "Bash(git log*)"]
+    prompt: |
+      CI failed on this branch. Find the cause in the output below and fix the code.
+      Do not disable or skip checks.
+
+      {{steps.wait_ci.output}}
+    on_success: push_ci_fix
+
+  - id: push_ci_fix
+    type: shell
+    jump_only: true
+    run: |
+      git add -A
+      git diff --cached --quiet && { echo "fix_ci changed nothing"; exit 1; }
+      git commit -q -m "Fix CI" -m "Automated by claude-factory (run $FACTORY_RUN_ID)"
+      git push -q && git log --oneline -1
+    on_success: wait_ci

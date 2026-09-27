@@ -1,0 +1,22 @@
+name: Ask for approval on the ticket
+category: GitHub
+description: "Asks on the issue for a go-ahead and pauses the run. Reply /approve or /reject on the issue (the watcher picks it up), or use the UI."
+vars:
+  github_repo: owner/repo
+  issue: ""
+steps:
+  - id: request_approval
+    type: shell
+    run: |
+      {
+        echo "✋ **claude-factory is ready to push** branch \`$(git branch --show-current)\`:"
+        echo; git log --oneline origin/HEAD..HEAD 2>/dev/null
+        echo; echo '```'; git diff --stat origin/HEAD 2>/dev/null | tail -20; echo '```'
+        echo; echo "Reply **/approve** to continue or **/reject** to stop (optionally followed by a note)."
+        echo; echo "<!-- claude-factory run=$FACTORY_RUN_ID approval -->"
+      } | gh issue comment "$FACTORY_VAR_ISSUE" --repo "$FACTORY_VAR_GITHUB_REPO" --body-file -
+
+  - id: approve
+    type: approval
+    message: "Push the changes for {{vars.github_repo}}#{{vars.issue}}?"
+    on_failure: stop

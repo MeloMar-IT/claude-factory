@@ -1,12 +1,20 @@
 name: Run tests (fix until green)
 category: Checks
-description: Runs the test command; on failure Claude fixes the code and tests run again (max 3 fixes).
+description: Runs the tests (command auto-detected unless test_cmd is set); on failure Claude fixes the code and tests run again (max 3 fixes).
 vars:
-  test_cmd: npm test
+  test_cmd: auto
 steps:
   - id: run_tests
     type: shell
-    run: "{{vars.test_cmd}}"
+    description: "test_cmd: a command, or auto to detect it (npm/pnpm/yarn, pytest, go, cargo, gradle, maven, make)"
+    # Runs repo code: sandboxed in Docker when a sandbox.docker_image is configured.
+    sandbox: true
+    run: |
+      cmd="$FACTORY_VAR_TEST_CMD"
+      if [ -z "$cmd" ] || [ "$cmd" = auto ]; then cmd=$("$FACTORY_TOOLS/detect-commands" test); fi
+      if [ -z "$cmd" ]; then echo "⚠ no test command found (set var test_cmd); skipping tests"; exit 0; fi
+      echo "\$ $cmd"
+      sh -c "$cmd"
     on_failure: fix_tests
 
   - id: fix_tests

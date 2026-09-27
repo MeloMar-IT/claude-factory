@@ -1,6 +1,8 @@
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { runFlow } from "../src/engine/runner.js";
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { learningsFile, resumeRun, runFlow } from "../src/engine/runner.js";
 import { listBlocks, parseBlock } from "../src/flow/blocks.js";
 import { loadFlow } from "../src/flow/load.js";
 import { fakeGithub } from "./helpers/fake-github.js";
@@ -74,5 +76,59 @@ describe("github-issue flow (fake gh + claude)", { timeout: 30_000 }, () => {
     });
     expect(s.status).toBe("failed");
     expect(s.history.at(-1)!.output).toContain("issue number");
+  });
+});
+
+describe("github-pr flow (fake gh + claude)", () => {
+  let gh: ReturnType<typeof fakeGithub>;
+  beforeEach(() => (gh = fakeGithub()));
+  afterEach(() => gh.restore());
+
+  it("waits for approval, then pushes, opens a PR, fixes CI, reports and learns", async () => {
+    process.env.FAKE_GH_CI_FAILS = "1";
+    const common = { runsDir: join(gh.tmp, "runs"), claudeBin: resolve("tests/fixtures/fake-claude.mjs") };
+    const s = await runFlow(loadFlow("github-pr", gh.tmp).flow, {
+      ...common,
+      task: "",
+      repo: gh.tmp,
+      vars: { github_repo: "acme/app", issue: "7", test_cmd: "test -f feature.txt", require_approval: "yes", ci_settle_sec: "0" },
+    });
+    expect(s.reason).toMatch(/Push the changes for acme\/app#7/);
+    expect(s.status).toBe("waiting");
+    expect(gh.ghLog()).toContain("Reply **/approve**");
+    expect(gh.remoteGit("branch", "--list")).not.toMatch(/factory\//); // nothing pushed yet
+
+    const r = await resumeRun({ ...common, runId: s.runId, decision: { approved: true, by: "marcel" } });
+    expect(r.reason).toBeUndefined();
+    expect(r.status).toBe("succeeded");
+    const ids = r.history.map((h) => h.id);
+    expect(ids.slice(ids.indexOf("approve"))).toEqual([
+      "approve", "push", "open_pr", "wait_ci", "fix_ci", "push_ci_fix", "wait_ci", "push_result", "learn", "save_learnings",
+    ]);
+    const log = gh.ghLog();
+    expect(log).toContain("Closes #7");
+    expect(log).toContain("Pull request: https://github.com/owner/repo/pull/99");
+    const branch = gh.remoteGit("branch", "--list").match(/factory\/\S+/)![0];
+    expect(gh.remoteGit("log", "-2", "--format=%s", branch).trim().split("\n")).toEqual(["Fix CI", "Resolve #7"]);
+    expect(readFileSync(learningsFile({ github_repo: "acme/app" }, ""), "utf8")).toContain("CI runs tests that expect 2");
+  });
+});
+
+describe("pr-feedback flow (fake gh + claude)", () => {
+  let gh: ReturnType<typeof fakeGithub>;
+  beforeEach(() => (gh = fakeGithub()));
+  afterEach(() => gh.restore());
+
+  it("addresses review comments, pushes and replies on the PR", async () => {
+    // Give the remote a PR branch to check out.
+    execFileSync("git", ["-C", gh.remote, "branch", "factory/pr-17", "main"]);
+    const s = await runFlow(loadFlow("pr-feedback", gh.tmp).flow, {
+      task: "", repo: gh.tmp, runsDir: join(gh.tmp, "runs"), claudeBin: resolve("tests/fixtures/fake-claude.mjs"),
+      vars: { github_repo: "acme/app", pr: "17", test_cmd: "true" },
+    });
+    expect(s.reason).toBeUndefined();
+    expect(s.status).toBe("succeeded");
+    expect(gh.remoteGit("log", "-1", "--format=%s", "factory/pr-17").trim()).toBe("Address review comments");
+    expect(gh.ghLog()).toContain("renamed the variable as requested");
   });
 });

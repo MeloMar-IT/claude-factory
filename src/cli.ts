@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { execFile } from "node:child_process";
 import { parseArgs } from "node:util";
-import { runFlow } from "./engine/runner.js";
+import { resumeRun, runFlow, type RunSummary } from "./engine/runner.js";
 import { listBlocks } from "./flow/blocks.js";
 import { FACTORY_HOME, listFlows, loadFlow, resolveFlowPath } from "./flow/load.js";
 import { startServer } from "./server/server.js";
@@ -13,6 +13,9 @@ const USAGE = `claude-factory — run custom flows of headless Claude Code + she
 
 Usage:
   factory run <flow> --task "<text>" [options]   Run a flow against a repo
+  factory resume <run-id> [--from <step>]        Continue a stopped/failed/interrupted run
+  factory approve <run-id> [--note "..."]        Approve a run waiting at an approval step
+  factory reject <run-id> [--note "..."]         Reject it (the flow's on_failure path runs)
   factory flows [--repo <dir>]                   List available flows
   factory blocks [--repo <dir>]                  List reusable step blocks (the library)
   factory validate <flow|file.yaml>              Check a flow definition
@@ -41,6 +44,30 @@ function parseVars(pairs: string[] = []): Record<string, string> {
   return vars;
 }
 
+const STATUS_LINE: Record<RunSummary["status"], string> = {
+  succeeded: "✔ succeeded",
+  failed: "✘ failed",
+  stopped: "■ stopped",
+  waiting: "⏸ waiting for approval",
+  cancelled: "✘ cancelled",
+  running: "… running",
+};
+
+function report(s: RunSummary): number {
+  process.stdout.write(
+    `\n${STATUS_LINE[s.status]}${s.reason ? `: ${s.reason}` : ""}` +
+      ` · $${s.totalCostUsd.toFixed(4)}` +
+      `\n  run:       ${s.runId}` +
+      `\n  run log:   ${join(s.runDir, "run.json")}` +
+      (s.workdir ? `\n  workspace: ${s.workdir}` : "") +
+      (s.branch ? `\n  branch:    ${s.branch}` : "") +
+      (s.status === "waiting" ? `\n  next:      factory approve ${s.runId}   (or: factory reject ${s.runId})` : "") +
+      (s.status === "stopped" || s.status === "failed" ? `\n  next:      factory resume ${s.runId}` : "") +
+      "\n",
+  );
+  return s.status === "succeeded" ? 0 : s.status === "waiting" || s.status === "stopped" ? 3 : 2;
+}
+
 async function main(argv: string[]): Promise<number> {
   const { values, positionals } = parseArgs({
     args: argv,
@@ -51,13 +78,14 @@ async function main(argv: string[]): Promise<number> {
       repo: { type: "string", short: "r" },
       var: { type: "string", short: "v", multiple: true },
       "runs-dir": { type: "string" },
-      from: { type: "string" },
       global: { type: "boolean" },
       port: { type: "string", short: "p" },
       every: { type: "string" },
       label: { type: "string" },
       max: { type: "string" },
       once: { type: "boolean" },
+      from: { type: "string" },
+      note: { type: "string" },
       "no-open": { type: "boolean" },
       help: { type: "boolean", short: "h" },
     },
@@ -84,16 +112,21 @@ async function main(argv: string[]): Promise<number> {
         vars: parseVars(values.var),
         log: (m) => process.stdout.write(m + "\n"),
       });
-      const ok = summary.status === "succeeded";
-      process.stdout.write(
-        `\n${ok ? "✔ succeeded" : `✘ failed: ${summary.reason}`}` +
-          ` · $${summary.totalCostUsd.toFixed(4)}` +
-          `\n  run log:   ${join(summary.runDir, "run.json")}` +
-          (summary.workdir ? `\n  workspace: ${summary.workdir}` : "") +
-          (summary.branch ? `\n  branch:    ${summary.branch}` : "") +
-          "\n",
-      );
-      return ok ? 0 : 2;
+      return report(summary);
+    }
+
+    case "resume":
+    case "approve":
+    case "reject": {
+      if (!arg) throw new Error(`usage: factory ${cmd} <run-id>`);
+      const summary = await resumeRun({
+        runId: arg,
+        runsDir: resolve(values["runs-dir"] ?? join(FACTORY_HOME, "runs")),
+        from: cmd === "resume" ? values.from : undefined,
+        decision: cmd === "resume" ? undefined : { approved: cmd === "approve", by: process.env.USER ?? "cli", note: values.note },
+        log: (m) => process.stdout.write(m + "\n"),
+      });
+      return report(summary);
     }
 
     case "flows": {

@@ -121,7 +121,6 @@ steps:
   });
 
   it("runs steps in parallel", async () => {
-    const t0 = Date.now();
     const s = await start(`
 name: t
 workspace: inplace
@@ -131,7 +130,11 @@ steps:
   - {id: b, type: shell, run: sleep 1 && echo B, jump_only: true}
 `);
     expect(s.status).toBe("succeeded");
-    expect(Date.now() - t0).toBeLessThan(1900);
+    // Both ran at the same time: each started before the other finished.
+    const [a, b] = ["a", "b"].map((id) => s.history.find((h) => h.id === id)!);
+    const end = (h: typeof a) => new Date(h!.startedAt).getTime() + h!.durationMs;
+    expect(new Date(a!.startedAt).getTime()).toBeLessThan(end(b));
+    expect(new Date(b!.startedAt).getTime()).toBeLessThan(end(a));
     expect(s.history.map((h) => h.id).sort()).toEqual(["a", "b", "both"]);
     expect(s.history.find((h) => h.id === "both")!.output).toContain("## a\nA");
   });

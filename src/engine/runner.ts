@@ -17,7 +17,7 @@ import {
   type Scope,
   type StepResult,
 } from "./execute.js";
-import { identityEnv, protectedBranchEnv } from "./guards.js";
+import { identityEnv, protectedBranchEnv, TOOLS_DIR } from "./guards.js";
 import { appendLiveLog, loadRun, saveRun, spentToday, type RunStatus, type RunSummary } from "./state.js";
 import { render } from "./template.js";
 import { prepareWorkspace } from "./workspace.js";
@@ -151,6 +151,7 @@ async function drive(
       FACTORY_WORKDIR: summary.workdir!,
       FACTORY_BRANCH: summary.branch ?? "",
       FACTORY_LEARNINGS_FILE: lf,
+      FACTORY_TOOLS: TOOLS_DIR,
       ...protectedBranchEnv(config.protected_branches),
       ...(await identityEnv(config)),
     };

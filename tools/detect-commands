@@ -1,0 +1,45 @@
+#!/bin/sh
+# Print the command to test / lint / build the repo in the current directory.
+# Usage: detect-commands test|lint|build     (prints nothing if unknown)
+# A repo can pin commands in .claude-factory/config.yaml:  vars: { test_cmd: "make check" }
+kind="${1:-test}"
+
+pinned=$(sed -n "s/^[[:space:]]*${kind}_cmd:[[:space:]]*//p" .claude-factory/config.yaml 2>/dev/null | head -1 | sed 's/^["'"'"']//; s/["'"'"']$//')
+[ -n "$pinned" ] && [ "$pinned" != auto ] && { echo "$pinned"; exit 0; }
+
+has_script() { grep -Eq "\"$1\"[[:space:]]*:" package.json 2>/dev/null && ! grep -Eq "\"$1\"[[:space:]]*:[[:space:]]*\"echo \\\\\"Error: no test specified" package.json; }
+
+if [ -f package.json ]; then
+  if [ -f pnpm-lock.yaml ]; then pm=pnpm; install="pnpm install --frozen-lockfile"
+  elif [ -f yarn.lock ]; then pm=yarn; install="yarn install --frozen-lockfile"
+  elif [ -f bun.lockb ] || [ -f bun.lock ]; then pm=bun; install="bun install"
+  elif [ -f package-lock.json ]; then pm=npm; install="npm ci"
+  else pm=npm; install="npm install"; fi
+  pre=""; [ -d node_modules ] || pre="$install && "
+  case "$kind" in
+    test)  has_script test  && { echo "${pre}$pm test"; exit 0; } ;;
+    lint)  has_script lint  && { echo "${pre}$pm run lint"; exit 0; } ;;
+    build) has_script build && { echo "${pre}$pm run build"; exit 0; } ;;
+  esac
+fi
+if [ -f go.mod ]; then
+  case "$kind" in test) echo "go test ./..." ;; lint) echo "go vet ./..." ;; build) echo "go build ./..." ;; esac; exit 0
+fi
+if [ -f Cargo.toml ]; then
+  case "$kind" in test) echo "cargo test" ;; lint) echo "cargo clippy -- -D warnings" ;; build) echo "cargo build" ;; esac; exit 0
+fi
+if [ -f pyproject.toml ] || [ -f setup.py ] || [ -f pytest.ini ] || [ -f requirements.txt ]; then
+  case "$kind" in
+    test) echo "python3 -m pytest -q"; exit 0 ;;
+    lint) grep -q ruff pyproject.toml 2>/dev/null && { echo "ruff check ."; exit 0; } ;;
+  esac
+fi
+if [ -x gradlew ]; then
+  case "$kind" in test) echo "./gradlew test" ;; lint) echo "./gradlew check" ;; build) echo "./gradlew build -x test" ;; esac; exit 0
+fi
+if [ -f pom.xml ]; then
+  case "$kind" in test) echo "mvn -q test" ;; lint) echo "mvn -q verify -DskipTests" ;; build) echo "mvn -q package -DskipTests" ;; esac; exit 0
+fi
+if [ -f Gemfile ] && [ -d spec ] && [ "$kind" = test ]; then echo "bundle exec rspec"; exit 0; fi
+if [ -f Makefile ] && grep -Eq "^${kind}:" Makefile; then echo "make $kind"; exit 0; fi
+exit 0

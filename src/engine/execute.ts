@@ -141,7 +141,7 @@ export async function executeStep(step: Step, scope: Scope, engine: Engine, logF
 
     case "shell": {
       const image = scope.flow.sandbox.docker_image ?? engine.config.sandbox.docker_image;
-      if (step.sandbox && !image) return { ok: false, output: "", error: "sandbox: true but no sandbox.docker_image configured" };
+      if (step.sandbox && !image) engine.log(`    ⚠ ${step.id}: not sandboxed (no sandbox.docker_image configured)`);
       const r = await runShell({
         command: render(step.run, ctx, SHELL_TEMPLATE_ROOTS),
         cwd: engine.summary.workdir!,

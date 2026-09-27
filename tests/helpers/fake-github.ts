@@ -31,6 +31,8 @@ export function fakeGithub() {
     PATH: `${bin}:${process.env.PATH}`,
     FAKE_GH_LOG: ghLog,
     FAKE_GH_REMOTE: remote,
+    FAKE_GH_CI_SETTLE: "0",
+    FACTORY_VAR_CI_SETTLE_SEC: "0",
     GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t",
   });
 

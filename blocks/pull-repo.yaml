@@ -8,8 +8,9 @@ steps:
     type: shell
     description: Clone (or fast-forward) and create a factory/ branch
     run: |
-      if [ -d .git ]; then git pull -q --ff-only; else gh repo clone "$FACTORY_VAR_GITHUB_REPO" . -- -q; fi
+      # Idempotent, so a resumed run can pass through here again.
+      if [ -d .git ]; then git fetch -q origin; else gh repo clone "$FACTORY_VAR_GITHUB_REPO" . -- -q; fi
       branch="factory/${FACTORY_VAR_ISSUE:+issue-$FACTORY_VAR_ISSUE-}$FACTORY_RUN_ID"
-      git checkout -q -b "$branch"
+      git checkout -q -B "$branch" origin/HEAD
       echo "branch: $branch"
       git log --oneline -1

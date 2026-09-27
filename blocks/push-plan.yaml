@@ -9,5 +9,6 @@ steps:
     type: shell
     run: |
       { echo "🤖 **claude-factory plan**"; echo
-        printf '%s\n' "$FACTORY_OUT_PLAN" | sed '/^PLAN_STATUS:/d'; } \
+        printf '%s\n' "$FACTORY_OUT_PLAN" | sed '/^PLAN_STATUS:/d'
+        echo; echo "<!-- claude-factory run=$FACTORY_RUN_ID -->"; } \
         | gh issue comment "$FACTORY_VAR_ISSUE" --repo "$FACTORY_VAR_GITHUB_REPO" --body-file -

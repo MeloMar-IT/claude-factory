@@ -1,0 +1,39 @@
+name: Address PR review comments
+category: GitHub
+description: Checks out a PR (var pr), collects review comments and has Claude address them.
+vars:
+  github_repo: owner/repo
+  pr: ""
+steps:
+  - id: checkout_pr
+    type: shell
+    run: |
+      case "$FACTORY_VAR_PR" in ''|*[!0-9]*) echo "set the 'pr' variable to a PR number"; exit 1;; esac
+      [ -d .git ] || gh repo clone "$FACTORY_VAR_GITHUB_REPO" . -- -q
+      gh pr checkout "$FACTORY_VAR_PR" --repo "$FACTORY_VAR_GITHUB_REPO" --force
+      git branch --show-current
+
+  - id: pr_comments
+    type: shell
+    run: |
+      R="$FACTORY_VAR_GITHUB_REPO"; N="$FACTORY_VAR_PR"
+      gh pr view "$N" --repo "$R" --json number,title,body -q '"# PR #\(.number // "") \(.title)\n\(.body)\n"' 2>/dev/null || true
+      echo "## Line comments"
+      gh api "repos/$R/pulls/$N/comments" --jq '.[] | select(.body | contains("claude-factory") | not) | "--- \(.user.login) on \(.path):\(.line // .original_line):\n\(.body)\n"'
+      echo "## Reviews and comments"
+      gh pr view "$N" --repo "$R" --json reviews,comments --jq '
+        (.reviews[] | select(.body != "") | "--- review by \(.author.login) (\(.state)):\n\(.body)\n"),
+        (.comments[] | select(.body | contains("claude-factory") | not) | "--- \(.author.login):\n\(.body)\n")'
+
+  - id: address_comments
+    type: claude
+    permission_mode: acceptEdits
+    allowed_tools: [Read, Edit, Write, Glob, Grep, "Bash(npm *)", "Bash(npx *)", "Bash(git diff*)", "Bash(git log*)"]
+    prompt: |
+      Address the review feedback on this pull request. Handle every actionable comment;
+      if you disagree with one, explain why instead of changing the code.
+      Ignore comments that were already addressed by later commits (see `git log`).
+
+      {{steps.pr_comments.output}}
+
+      Finish with a short summary per comment of what you did.

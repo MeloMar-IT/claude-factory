@@ -1,0 +1,29 @@
+name: Learn from this run
+category: Claude
+description: Haiku distils reusable lessons from what went wrong in this run and appends them to the repo's learnings file ({{learnings}} in prompts).
+steps:
+  - id: learn
+    type: claude
+    model: haiku
+    permission_mode: dontAsk
+    allowed_tools: []
+    prompt: |
+      This is the step history of an automated coding run on this repository:
+
+      {{run.history}}
+
+      Existing lessons for this repo:
+      {{learnings}}
+
+      If steps failed or needed fix loops, write 1-3 short, specific, reusable lessons that
+      would help future runs on this repo avoid that (e.g. "tests need `npm run build` first").
+      Do not repeat existing lessons. If there is nothing new worth remembering, reply exactly: NONE
+
+  - id: save_learnings
+    type: shell
+    run: |
+      out=$(printf '%s' "$FACTORY_OUT_LEARN" | sed '/^[[:space:]]*$/d')
+      [ "$out" = "NONE" ] || [ -z "$out" ] && { echo "nothing new"; exit 0; }
+      mkdir -p "$(dirname "$FACTORY_LEARNINGS_FILE")"
+      { echo "<!-- $(date +%F) run $FACTORY_RUN_ID -->"; printf '%s\n' "$out"; } >> "$FACTORY_LEARNINGS_FILE"
+      echo "saved to $FACTORY_LEARNINGS_FILE"

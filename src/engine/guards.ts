@@ -1,6 +1,7 @@
 import { createSign } from "node:crypto";
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { Config } from "../config.js";
 import { FACTORY_HOME } from "../flow/load.js";
 
@@ -84,6 +85,8 @@ export async function identityEnv(config: Config): Promise<Record<string, string
 // ── Docker sandbox for shell steps ──
 
 /** Wrap a shell command so it runs in a container with only the workspace mounted. */
+export const TOOLS_DIR = join(dirname(fileURLToPath(import.meta.url)), "../../tools");
+
 export function dockerCommand(image: string, workdir: string, command: string, envNames: string[]): { cmd: string; args: string[] } {
   const uid = process.getuid?.() ?? 1000;
   const gid = process.getgid?.() ?? 1000;
@@ -91,9 +94,11 @@ export function dockerCommand(image: string, workdir: string, command: string, e
     "run", "--rm", "-i",
     "--user", `${uid}:${gid}`,
     "-v", `${workdir}:/work`,
+    "-v", `${TOOLS_DIR}:/factory-tools:ro`,
     "-w", "/work",
     "-e", "HOME=/tmp",
-    ...envNames.flatMap((n) => ["-e", n]), // values come from our env, not the command line
+    "-e", "FACTORY_TOOLS=/factory-tools",
+    ...envNames.filter((n) => n !== "FACTORY_TOOLS").flatMap((n) => ["-e", n]), // values come from our env, not the command line
     image, "sh", "-c", command,
   ];
   return { cmd: "docker", args };

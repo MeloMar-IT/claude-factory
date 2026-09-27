@@ -12,11 +12,14 @@ steps:
       {
         echo "✅ **claude-factory finished this ticket**"
         echo
-        echo "Branch: [\`$branch\`](https://github.com/$FACTORY_VAR_GITHUB_REPO/compare/$branch?expand=1) — open a pull request from there."
+        pr=$(gh pr view "$branch" --repo "$FACTORY_VAR_GITHUB_REPO" --json url -q .url 2>/dev/null || true)
+        if [ -n "$pr" ]; then echo "Pull request: $pr"
+        else echo "Branch: [\`$branch\`](https://github.com/$FACTORY_VAR_GITHUB_REPO/compare/$branch?expand=1) — open a pull request from there."; fi
         echo
         echo "### Changes"
         printf '%s\n' "$FACTORY_OUT_IMPLEMENT"
         echo
         echo "### Commits"
         git log --oneline origin/HEAD..HEAD 2>/dev/null || git log --oneline -3
+        echo; echo "<!-- claude-factory run=$FACTORY_RUN_ID -->"
       } | gh issue comment "$FACTORY_VAR_ISSUE" --repo "$FACTORY_VAR_GITHUB_REPO" --body-file -
