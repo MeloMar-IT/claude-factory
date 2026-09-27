@@ -11,7 +11,8 @@
     "flows",
     "ui",
     "blocks",
-    "tools"
+    "tools",
+    "evals"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json && chmod +x dist/cli.js",

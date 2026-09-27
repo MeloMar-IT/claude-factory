@@ -1,0 +1,22 @@
+# Example evaluation suite. Run it with:
+#   factory eval evals/example.yaml                       (flows listed below)
+#   factory eval evals/example.yaml --models haiku,sonnet (compare models)
+# Each case runs in a fresh copy of its repo; `check` decides pass/fail afterwards.
+name: example
+description: Small, cheap tasks to compare flows and models
+flows: [quick]
+repeat: 1
+cases:
+  - name: add-multiply
+    repo: fixtures/calc
+    task: Add a multiply(a, b) function to calc.js and export it next to add.
+    vars: {test_cmd: node --test}
+    check: >-
+      node --test && node -e "process.exit(require('./calc.js').multiply(2, 3) === 6 ? 0 : 1)"
+
+  - name: fix-divide-by-zero
+    repo: fixtures/calc
+    task: "divide(a, b) must throw an Error with message 'division by zero' when b is 0. Add divide to calc.js if it is missing."
+    vars: {test_cmd: node --test}
+    check: >-
+      node -e "const c=require('./calc.js'); try { c.divide(1,0); process.exit(1) } catch (e) { process.exit(e.message==='division by zero'?0:1) }"

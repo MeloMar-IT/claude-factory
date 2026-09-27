@@ -51,7 +51,7 @@ function rateBar(ok, total) {
 
 export async function renderDashboard(main) {
   mount(main, h("div", { class: "row" }, h("span", { class: "spinner" }), " Loading…"));
-  const [s, info] = await Promise.all([api.stats(), api.info()]);
+  const [s, info, evals] = await Promise.all([api.stats(), api.info(), api.evals().catch(() => [])]);
   const t = s.totals;
   const budget = info.dailyBudget;
   mount(main,
@@ -81,6 +81,14 @@ export async function renderDashboard(main) {
         s.failingSteps.length ? h("table", { class: "table compact" },
           h("thead", {}, h("tr", {}, ["Step", "Failures", "Runs"].map((x) => h("th", {}, x)))),
           h("tbody", {}, s.failingSteps.map((f) => h("tr", {}, h("td", { class: "mono" }, f.step), h("td", {}, f.failures), h("td", {}, f.runs))))) : h("p", { class: "muted" }, "Nothing failed. 🎉")),
+      h("div", { class: "card", style: { gridColumn: "1 / -1" } }, h("h3", {}, "Evaluations"),
+        evals.length ? h("table", { class: "table compact" },
+          h("thead", {}, h("tr", {}, ["Suite", "When", "Variant", "Runs", "Pass", "Avg cost", "Avg time", "Fix loops"].map((x) => h("th", {}, x)))),
+          h("tbody", {}, evals.flatMap((e) => e.summary.map((v, i) => h("tr", {},
+            h("td", {}, i === 0 ? h("b", {}, e.suite) : ""), h("td", { class: "muted" }, i === 0 ? new Date(e.startedAt).toLocaleString() : ""),
+            h("td", { class: "mono" }, v.variant), h("td", {}, v.runs), h("td", {}, rateBar(Math.round(v.passRate * v.runs), v.runs)),
+            h("td", { class: "mono" }, usd(v.avgCostUsd, 3)), h("td", { class: "mono" }, `${v.avgMinutes}m`), h("td", {}, v.avgFixLoops))))))
+          : h("p", { class: "muted" }, "No evaluations yet. Run: ", h("code", {}, "factory eval evals/example.yaml"))),
       h("div", { class: "card" }, h("h3", {}, "Most loops (fix cycles)"),
         s.loops.length ? h("table", { class: "table compact" },
           h("thead", {}, h("tr", {}, ["Step", "Extra visits"].map((x) => h("th", {}, x)))),

@@ -1,0 +1,5 @@
+{
+  "name": "calc-fixture",
+  "private": true,
+  "scripts": { "test": "node --test" }
+}

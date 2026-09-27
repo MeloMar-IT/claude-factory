@@ -8,6 +8,7 @@ import { listBlocks } from "./flow/blocks.js";
 import { FACTORY_HOME, listFlows, loadFlow, resolveFlowPath } from "./flow/load.js";
 import { startServer } from "./server/server.js";
 import { loadConfig, WatcherSchema } from "./config.js";
+import { runEval } from "./evals.js";
 import { Scheduler } from "./queue/scheduler.js";
 import { Watcher } from "./queue/watcher.js";
 import { installService, serviceStatus, uninstallService } from "./service.js";
@@ -20,6 +21,8 @@ Usage:
   factory resume <run-id> [--from <step>]        Continue a stopped/failed/interrupted run
   factory approve <run-id> [--note "..."]        Approve a run waiting at an approval step
   factory reject <run-id> [--note "..."]         Reject it (the flow's on_failure path runs)
+  factory eval <suite.yaml> [--flows a,b] [--models sonnet,opus]
+                                                 Benchmark flows/models on sample tasks
   factory flows [--repo <dir>]                   List available flows
   factory blocks [--repo <dir>]                  List reusable step blocks (the library)
   factory validate <flow|file.yaml>              Check a flow definition
@@ -89,6 +92,8 @@ async function main(argv: string[]): Promise<number> {
       port: { type: "string", short: "p" },
       every: { type: "string" },
       source: { type: "string" },
+      flows: { type: "string" },
+      models: { type: "string" },
       label: { type: "string" },
       max: { type: "string" },
       once: { type: "boolean" },
@@ -230,6 +235,23 @@ async function main(argv: string[]): Promise<number> {
       process.stdout.write(`claude-factory → ${url}\n  repo: ${repo}\n  watchers: ${n}\n  Ctrl+C to stop\n`);
       if (cmd === "ui" && !values["no-open"] && process.platform === "darwin") execFile("open", [url]);
       return new Promise<number>(() => {}); // run until killed
+    }
+
+    case "eval": {
+      if (!arg) throw new Error("usage: factory eval <suite.yaml> [--flows a,b] [--models sonnet,opus]");
+      const split = (v?: string) => v?.split(",").map((x) => x.trim()).filter(Boolean);
+      const { report, file } = await runEval({
+        suitePath: arg,
+        runsDir: resolve(values["runs-dir"] ?? join(FACTORY_HOME, "runs")),
+        config: loadConfig(),
+        flowsFilter: split(values.flows),
+        modelsOverride: split(values.models),
+        log: (m) => process.stdout.write(m + "\n"),
+      });
+      const rows = report.summary.map((s) =>
+        `${s.variant.padEnd(28)} ${String(Math.round(s.passRate * 100) + "%").padStart(5)}  $${s.avgCostUsd.toFixed(3).padStart(7)}  ${s.avgMinutes.toFixed(1).padStart(5)}m  ${s.avgFixLoops.toFixed(1).padStart(5)}`);
+      process.stdout.write(`\n${"variant".padEnd(28)}  pass   avg cost   time  loops\n${rows.join("\n")}\n\nreport: ${file}\n`);
+      return 0;
     }
 
     case "service": {
