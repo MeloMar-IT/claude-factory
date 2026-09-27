@@ -23,9 +23,39 @@ const WatcherSchema = z
     task: z.string().max(5000).optional(),
     /** ci-failures: branch to watch (default: the repo's default branch). */
     branch: z.string().regex(/^[\w./-]+$/).optional(),
+    /** issues: skip issues that carry any of these labels. */
+    exclude_labels: z.array(z.string()).default([]),
+    /** issues: your own names for the status labels (default factory:working, factory:done, …). */
+    status_labels: z
+      .object({ working: z.string(), done: z.string(), needs_info: z.string(), waiting: z.string(), failed: z.string() })
+      .partial()
+      .strict()
+      .default({}),
+    /** issues: labels to remove when a run succeeds (e.g. the trigger label). */
+    remove_on_done: z.array(z.string()).default([]),
+    /** issues: post the failure reason and the failing step's output on the issue. */
+    comment_on_failure: z.boolean().default(true),
+    /** Start nothing while an open PR's head branch starts with this (e.g. factory/daily-). */
+    pause_while_pr_open: z.string().optional(),
+    /** Never run two of this watcher's runs at the same time (they share a branch). */
+    one_at_a_time: z.boolean().default(false),
+    /** schedule: run once a day at this time ("17:00") instead of every `every`. */
+    at: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "HH:MM").optional(),
+    /** schedule: IANA time zone for `at`, e.g. Europe/Berlin (default: this Mac's). */
+    timezone: z.string().optional(),
   })
   .strict()
-  .refine((w) => w.source !== "schedule" || !!w.task?.trim(), { message: "a schedule watcher needs a task", path: ["task"] });
+  .refine((w) => w.source !== "schedule" || !!w.task?.trim(), { message: "a schedule watcher needs a task", path: ["task"] })
+  .refine((w) => !w.timezone || validTimeZone(w.timezone), { message: "unknown time zone (use e.g. Europe/Berlin)", path: ["timezone"] });
+
+function validTimeZone(tz: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en", { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export const PROVIDER_KINDS = ["anthropic", "openai", "ollama", "lmstudio", "anthropic-compatible"] as const;
 

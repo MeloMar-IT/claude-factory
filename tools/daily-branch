@@ -1,0 +1,120 @@
+#!/usr/bin/env node
+// Daily work branches (one per day, e.g. factory/daily-2026-09-28) that go to main in one PR.
+// Run inside a clone of the repo.
+//
+//   daily-branch prepare               check out today's branch → prints "BRANCH: <name>", or
+//                                      "WAIT: <why>" when a daily PR is open (or had to be opened)
+//   daily-branch pending               daily branches with commits and no PR yet, newest first ("NONE" if none)
+//   daily-branch open-pr <branch> [--draft] [--note-file <file>]
+//                                      open the PR to main; body lists the issues ("Closes #N")
+//
+// Env: FACTORY_VAR_GITHUB_REPO (owner/repo), FACTORY_VAR_BRANCH_PREFIX (default factory/daily-),
+//      FACTORY_VAR_TIMEZONE (default Europe/Berlin), FACTORY_RUN_ID (for the PR marker).
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+
+const repo = process.env.FACTORY_VAR_GITHUB_REPO;
+const prefix = process.env.FACTORY_VAR_BRANCH_PREFIX || "factory/daily-";
+const tz = process.env.FACTORY_VAR_TIMEZONE || "Europe/Berlin";
+if (!repo || !/^[\w.-]+\/[\w.-]+$/.test(repo)) fail("set var github_repo to owner/repo");
+if (!/^[\w./-]+$/.test(prefix)) fail("invalid branch_prefix");
+
+function fail(msg) {
+  console.error(`daily-branch: ${msg}`);
+  process.exit(1);
+}
+const run = (cmd, args, input) => execFileSync(cmd, args, { encoding: "utf8", input, stdio: [input ? "pipe" : "ignore", "pipe", "pipe"] }).trim();
+const git = (...a) => run("git", a);
+const gh = (...a) => run(process.env.FACTORY_GH_BIN || "gh", a);
+
+function today() {
+  const p = Object.fromEntries(new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date()).map((x) => [x.type, x.value]));
+  return `${p.year}-${p.month}-${p.day}`;
+}
+
+function base() {
+  try {
+    return git("symbolic-ref", "--short", "refs/remotes/origin/HEAD"); // e.g. origin/main
+  } catch {
+    return "origin/main";
+  }
+}
+
+function state() {
+  git("fetch", "-q", "--prune", "origin");
+  const branches = git("for-each-ref", "--sort=-refname", "--format=%(refname:lstrip=3)", `refs/remotes/origin/${prefix}*`).split("\n").filter(Boolean);
+  const prs = JSON.parse(gh("pr", "list", "--repo", repo, "--state", "all", "--limit", "300", "--json", "number,headRefName,state,url") || "[]")
+    .filter((p) => p.headRefName.startsWith(prefix));
+  const ahead = (b) => Number(git("rev-list", "--count", `${base()}..origin/${b}`));
+  const pending = branches.filter((b) => !prs.some((p) => p.headRefName === b) && ahead(b) > 0);
+  return { branches, prs, pending };
+}
+
+function openPr(branch, { draft = false, note = "" } = {}) {
+  const b = base();
+  const subjects = git("log", "--reverse", "--format=%s", `${b}..origin/${branch}`).split("\n").filter(Boolean);
+  const issues = [];
+  for (const s of subjects) {
+    const m = /^Resolve #(\d+):?\s*(.*)$/.exec(s);
+    if (m && !issues.some((i) => i.n === m[1])) issues.push({ n: m[1], title: m[2] });
+  }
+  const day = branch.slice(prefix.length);
+  const body = [
+    `Daily batch from claude-factory (${day}).`,
+    "",
+    "### Issues",
+    ...(issues.length ? issues.map((i) => `- #${i.n} ${i.title}`) : ["- (no issue commits)"]),
+    "",
+    "### Commits",
+    ...subjects.map((s) => `- ${s}`),
+    ...(note ? ["", note.trim()] : []),
+    "",
+    ...issues.map((i) => `Closes #${i.n}`),
+    "",
+    `<!-- claude-factory run=${process.env.FACTORY_RUN_ID ?? ""} daily -->`,
+  ].join("\n");
+  const title = `claude-factory daily ${day}${issues.length ? `: ${issues.map((i) => `#${i.n}`).join(", ")}` : ""}`;
+  const args = ["pr", "create", "--repo", repo, "--base", b.replace(/^origin\//, ""), "--head", branch, "--title", title, "--body-file", "-"];
+  if (draft) args.push("--draft");
+  return run(process.env.FACTORY_GH_BIN || "gh", args, body).split("\n").pop();
+}
+
+const [cmd, ...rest] = process.argv.slice(2);
+if (cmd === "pending") {
+  const { pending } = state();
+  console.log(pending.length ? pending.join("\n") : "NONE");
+} else if (cmd === "open-pr") {
+  const branch = rest[0];
+  if (!branch?.startsWith(prefix)) fail(`open-pr needs a ${prefix}* branch`);
+  const i = rest.indexOf("--note-file");
+  const note = i >= 0 ? readFileSync(rest[i + 1], "utf8") : "";
+  git("fetch", "-q", "origin");
+  console.log(openPr(branch, { draft: rest.includes("--draft"), note }));
+} else if (cmd === "prepare") {
+  const { branches, prs, pending } = state();
+  const open = prs.find((p) => p.state === "OPEN");
+  if (open) {
+    console.log(`WAIT: daily PR #${open.number} (${open.headRefName}) is not merged yet — ${open.url}`);
+    process.exit(0);
+  }
+  const t = today();
+  // Rule: before a new day's branch is created, the previous day's work goes to main in a PR.
+  const older = pending.filter((b) => !b.startsWith(`${prefix}${t}`));
+  if (older.length) {
+    const urls = older.map((b) => openPr(b));
+    console.log(`WAIT: opened the PR for earlier work first (${urls.join(", ")}) — continuing after it is merged`);
+    process.exit(0);
+  }
+  // Today's branch; if today's was already merged via a PR, continue on -2, -3, …
+  for (let n = 1; n < 50; n++) {
+    const name = `${prefix}${t}${n > 1 ? `-${n}` : ""}`;
+    if (prs.some((p) => p.headRefName === name)) continue;
+    git("checkout", "-q", "-B", name, branches.includes(name) ? `origin/${name}` : base());
+    console.log(`BRANCH: ${name}${branches.includes(name) ? " (continuing)" : ` (new, from ${base()})`}`);
+    console.log(git("log", "--oneline", "-1"));
+    process.exit(0);
+  }
+  fail("no free branch name for today");
+} else {
+  fail("usage: daily-branch prepare | pending | open-pr <branch> [--draft] [--note-file f]");
+}

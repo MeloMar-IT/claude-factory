@@ -2,7 +2,7 @@
 // Stand-in for the `claude` CLI: reads the prompt from stdin, emits stream-json.
 // Prompt directives: "WRITE <file> <text>" writes a file; "SAY <text>" sets the result;
 // "ERROR" returns an error result. Args are echoed into the result for assertions.
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 
 let prompt = "";
 for await (const chunk of process.stdin) prompt += chunk;
@@ -41,6 +41,22 @@ else if (prompt.includes("CI failed on this branch")) {
     writeFileSync("chore.txt", "done\n");
     canned = "- bumped a dependency";
   }
+} else if (prompt.includes("You are the architect for this repository")) {
+  canned = process.env.FAKE_ISSUE_PLAN ?? "## Approach\nAdd feature.txt\n## Tests to add\nfeature test\nPLAN_STATUS: READY";
+} else if (prompt.includes("Implement GitHub issue below")) {
+  const issue = /# #(\d+):/.exec(prompt)?.[1] ?? "?";
+  writeFileSync("feature.txt", process.env.FAKE_IMPL_BUG ? "BUG\n" : `implemented #${issue}\n`);
+  canned = "- added feature.txt";
+} else if (prompt.includes("The tests fail. Fix the code")) {
+  if (!process.env.FAKE_FIX_NOOP) writeFileSync("feature.txt", "fixed\n");
+  canned = "fixed feature.txt";
+} else if (prompt.includes("A reviewer (Codex) looked at your changes")) {
+  writeFileSync("review-fix.txt", "addressed\n");
+  canned = "- addressed the review";
+} else if (prompt.includes("Now document the change")) {
+  mkdirSync("docs", { recursive: true });
+  writeFileSync("docs/CHANGELOG.md", `- feature.txt added for #${/# #(\d+):/.exec(prompt)?.[1] ?? "?"}\n`);
+  canned = "- documented in docs/CHANGELOG.md";
 } else if (prompt.includes("reusable lessons")) canned = process.env.FAKE_LEARN ?? "- CI runs tests that expect 2";
 else if (prompt.includes("Address the review feedback")) {
   writeFileSync("review-fix.txt", "done\n");

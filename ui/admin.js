@@ -38,7 +38,7 @@ const describeWatcher = (w) => {
     issues: `issues labelled “${w.label}” → ${flow}`,
     "pr-feedback": `PR review comments → ${flow}`,
     "ci-failures": `CI failures on ${w.branch ?? "the default branch"} → ${flow}`,
-    schedule: `every ${w.every}: ${(w.task ?? "").slice(0, 60)}${(w.task ?? "").length > 60 ? "…" : ""} → ${flow}`,
+    schedule: `${w.at ? `daily at ${w.at}${w.timezone ? ` ${w.timezone}` : ""}` : `every ${w.every}`}: ${(w.task ?? "").slice(0, 60)}${(w.task ?? "").length > 60 ? "…" : ""} → ${flow}`,
   }[w.source];
 };
 
@@ -55,6 +55,9 @@ async function editWatcher(existing, flows) {
     } }, Object.entries(SOURCES).map(([v, label]) => h("option", { value: v, selected: w.source === v }, label)));
     const task = h("textarea", { rows: 3, placeholder: "What the chore should do each time", value: w.task ?? "" });
     const branch = input(w.branch ?? "", { class: "mono", placeholder: "default branch" });
+    const exclude = input((w.exclude_labels ?? []).join(", "), { class: "mono", placeholder: "e.g. geni, wontfix" });
+    const at = input(w.at ?? "", { class: "mono", placeholder: "HH:MM (optional)" });
+    const tz = input(w.timezone ?? "", { class: "mono", placeholder: Intl.DateTimeFormat().resolvedOptions().timeZone });
     const label = input(w.label, { class: "mono" });
     const every = input(w.every, { class: "mono", placeholder: "5m" });
     const max = input(String(w.max_per_tick), { type: "number", min: 1 });
@@ -68,10 +71,16 @@ async function editWatcher(existing, flows) {
         if (i < 1) return (err.textContent = `vars: "${line}" should be name=value`);
         parsedVars[line.slice(0, i).trim()] = line.slice(i + 1).trim();
       }
-      const next = { id: id.value.trim(), source: source.value, flow: flow.value.trim(), github_repo: repo.value.trim(), label: label.value.trim(),
+      const list = (el) => el.value.split(",").map((x) => x.trim()).filter(Boolean);
+      // Keep settings this form doesn't show (status label names, pauses, …).
+      const { status: _runtime, ...kept } = existing ?? {};
+      const next = { ...kept, id: id.value.trim(), source: source.value, flow: flow.value.trim(), github_repo: repo.value.trim(), label: label.value.trim(),
         every: every.value.trim(), max_per_tick: Number(max.value) || 1, enabled: enabled.el.checked, vars: parsedVars,
         task: source.value === "schedule" ? task.value.trim() : undefined,
-        branch: source.value === "ci-failures" ? branch.value.trim() || undefined : undefined };
+        branch: source.value === "ci-failures" ? branch.value.trim() || undefined : undefined,
+        exclude_labels: list(exclude),
+        at: source.value === "schedule" ? at.value.trim() || undefined : undefined,
+        timezone: source.value === "schedule" ? tz.value.trim() || undefined : undefined };
       try {
         await saveConfig((c) => {
           if (!existing && c.watchers.some((x) => x.id === next.id)) throw new Error(`a watcher "${next.id}" already exists`);
@@ -82,13 +91,15 @@ async function editWatcher(existing, flows) {
         err.textContent = e.message;
       }
     } }, "Save watcher");
-    const labelField = f("Trigger label", label);
+    const labelField = h("div", { class: "grid" }, f("Trigger label", label), f("Skip issues with these labels", exclude));
+    const atField = h("div", { class: "grid" }, f("Once a day at", at, "Instead of every interval"), f("Time zone", tz));
     const taskField = h("div", {}, f("Chore", task, "Becomes the run's task. The flow opens a PR only if something changed."),
       h("div", { class: "chips", style: { marginTop: "6px" } }, CHORES.map(([name, text]) => h("button", { class: "chip", type: "button", onClick: () => (task.value = text) }, name))));
     const branchField = f("Branch to watch", branch);
     const showFor = () => {
       labelField.style.display = source.value === "issues" ? "" : "none";
       taskField.style.display = source.value === "schedule" ? "" : "none";
+      atField.style.display = source.value === "schedule" ? "" : "none";
       branchField.style.display = source.value === "ci-failures" ? "" : "none";
     };
     showFor();
@@ -98,6 +109,7 @@ async function editWatcher(existing, flows) {
       f("Source", source),
       h("div", { class: "grid" }, f("Flow", flow), labelField, branchField),
       taskField,
+      atField,
       h("div", { class: "grid" }, f("Check every", every, "e.g. 5m, 1h — for chores: how often it runs, e.g. 1d, 7d"), f("Max new runs per check", max)),
       f("Variables for each run", vars, "One name=value per line. github_repo and issue/pr are set automatically."),
       enabled.row, err, h("div", { class: "row" }, h("span", { class: "spacer" }), save));
@@ -130,7 +142,9 @@ export async function renderWatchers(main) {
             reload();
           } }, "Delete")),
         h("div", { class: "muted", style: { fontSize: "12.5px" } },
-          w.source === "schedule" ? `max 1 run per ${w.every}` : `every ${w.every} · max ${w.max_per_tick} per check`,
+          w.source === "schedule" ? (w.at ? `checks every ${w.every}` : `max 1 run per ${w.every}`) : `every ${w.every} · max ${w.max_per_tick} per check`,
+          w.exclude_labels?.length ? ` · skips ${w.exclude_labels.join(", ")}` : "",
+          w.pause_while_pr_open ? ` · pauses while a ${w.pause_while_pr_open}* PR is open` : "",
           st?.lastTick ? ` · last check ${timeAgo(st.lastTick)}` : "",
           st?.nextTick ? ` · next ${new Date(st.nextTick).toLocaleTimeString()}` : ""),
         st?.lastError ? h("div", { class: "errors", style: { margin: 0 } }, st.lastError) : null,

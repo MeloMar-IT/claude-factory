@@ -14,14 +14,21 @@ case "$1 $2" in
       *) printf '# #%s: Add a feature\nhttps://github.com/owner/repo/issues/%s\n\nPlease add feature.txt\n' "$3" "$3"
          if [ -n "$FAKE_GH_ISSUE_EXTRA" ]; then printf '%s\n' "$FAKE_GH_ISSUE_EXTRA"; fi ;;
     esac ;;
-  "issue comment"|"pr comment") echo "--- comment on #$3:" >> "$FAKE_GH_LOG"; cat >> "$FAKE_GH_LOG"; echo "https://github.com/owner/repo/issues/$3#issuecomment-1" ;;
+  "issue comment"|"pr comment") echo "--- comment on #$3:" >> "$FAKE_GH_LOG"
+    case "$*" in *--body-file*) cat >> "$FAKE_GH_LOG" ;;
+      *) prev=""; for a in "$@"; do [ "$prev" = "--body" ] && printf '%s\n' "$a" >> "$FAKE_GH_LOG"; prev="$a"; done ;;
+    esac
+    echo "https://github.com/owner/repo/issues/$3#issuecomment-1" ;;
   "issue create") n=$(($(cat "$FAKE_GH_LOG.created" 2>/dev/null || echo 100) + 1)); echo "$n" > "$FAKE_GH_LOG.created"
                   echo "--- created issue: $*" >> "$FAKE_GH_LOG"; echo "https://github.com/owner/repo/issues/$n" ;;
   "issue list")  printf '%s' "${FAKE_GH_ISSUES:-[]}" ;;
-  "pr list")     printf '%s' "${FAKE_GH_PRS:-[]}" ;;
+  "pr list")     if [ -n "$FAKE_GH_PRS" ]; then printf '%s' "$FAKE_GH_PRS"; elif [ -f "$FAKE_GH_LOG.prs.json" ]; then cat "$FAKE_GH_LOG.prs.json"; else echo '[]'; fi ;;
   "issue edit"|"label create") ;;
   "repo clone")  git clone -q "$FAKE_GH_REMOTE" "$4" ;;
-  "pr create")   echo "--- pr body:" >> "$FAKE_GH_LOG"; cat >> "$FAKE_GH_LOG"; echo "https://github.com/owner/repo/pull/99" | tee "$FAKE_GH_LOG.pr" ;;
+  "pr create")   echo "--- pr body:" >> "$FAKE_GH_LOG"; cat >> "$FAKE_GH_LOG"
+                 head=""; prev=""; for a in "$@"; do [ "$prev" = "--head" ] && head="$a"; prev="$a"; done
+                 # Remember created PRs (pr list returns them): number, head branch, state OPEN.
+                 node -e 'const f=process.argv[1],fs=require("fs");const l=fs.existsSync(f)?JSON.parse(fs.readFileSync(f,"utf8")):[];const n=99+l.length;l.push({number:n,headRefName:process.argv[2],state:"OPEN",url:"https://github.com/owner/repo/pull/"+n});fs.writeFileSync(f,JSON.stringify(l));console.log(l.at(-1).url)' "$FAKE_GH_LOG.prs.json" "$head" | tee "$FAKE_GH_LOG.pr" ;;
   "pr view")
     case "$*" in
       *reviewDecision*) echo "${FAKE_GH_REVIEW_DECISION:-}" ;;

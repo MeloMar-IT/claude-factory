@@ -279,3 +279,388 @@ write("pr-feedback", {
     steps: s,
   });
 }
+
+// ── Label-driven pipeline: issue-plan → issue-code-daily → daily-pr ──
+// Watchers move issues through labels (e.g. Factory_ready → Factory_planned → Factory_code → Factory_done).
+const clone = {
+  id: "clone",
+  type: "shell",
+  run: 'if [ -d .git ]; then git fetch -q origin; else gh repo clone "$FACTORY_VAR_GITHUB_REPO" . -- -q; fi\ngit log --oneline -1',
+};
+
+write("issue-plan", {
+  title: "Plan a GitHub issue and post the plan (label-driven)",
+  lines: [
+    "factory run issue-plan --var github_repo=owner/repo --var issue=42",
+    "(a watcher on the plan label runs this; when it succeeds the watcher swaps the labels)",
+    "",
+    "pull ticket → clone → plan (Opus, read-only) ─┬─ READY      → post plan → done",
+    "                                             └─ NEEDS_INFO / NOT_CODE / TOO_BIG → post why → stop",
+    "                                                (resumes and re-plans when you reply)",
+  ],
+}, {
+  description: "Plan an issue with Opus and post the plan; questions, non-code and too-big issues are sent back",
+  workspace: "empty",
+  defaults: { timeout_sec: 1800 },
+  limits: { max_cost_usd: 5 },
+  vars: { github_repo: "owner/repo", issue: "", code_label: "Factory_code", ready_label: "Factory_ready", forbidden_paths: "" },
+  steps: [
+    ...steps("pull-ticket"),
+    clone,
+    {
+      id: "plan",
+      type: "claude",
+      model: "opus",
+      permission_mode: "dontAsk",
+      allowed_tools: ["Read", "Glob", "Grep", "Bash(git log*)", "Bash(git show*)", "Bash(ls*)"],
+      prompt: [
+        "You are the architect for this repository. Read the code (and CLAUDE.md / design docs if present)",
+        "and plan the work for the GitHub issue below. Do NOT modify any files.",
+        "",
+        "{{steps.pull_ticket.output}}",
+        "",
+        "Paths that must not be changed: {{vars.forbidden_paths}}",
+        "Earlier comments may contain a previous plan and feedback on it — take the feedback into account.",
+        "",
+        "Decide first:",
+        "- NOT_CODE: the issue is not a coding task (legal, approval, research, rollout, …). Explain why.",
+        "- TOO_BIG: it cannot be done well in one focused change. Propose a split into smaller issues",
+        "  (title + 2-3 lines each) that can each be coded and tested on their own.",
+        "- NEEDS_INFO: critical information is missing. List the specific questions. Do not guess.",
+        "- READY: write the plan:",
+        "  ## Approach   ## Changes (modules / files)   ## Tests to add   ## Documentation   ## Risks",
+        "  Keep it concrete and short. No new dependencies unless the issue asks for them.",
+        "",
+        "End with exactly one line: PLAN_STATUS: READY | NEEDS_INFO | NOT_CODE | TOO_BIG",
+      ].join("\n"),
+      routes: [{ if: "^PLAN_STATUS: READY\\s*$", goto: "post_plan" }],
+      on_success: "send_back",
+    },
+    {
+      id: "send_back",
+      type: "shell",
+      jump_only: true,
+      description: "Post why the issue can't be planned yet, then stop (resumes when someone replies)",
+      resume_from: "pull_ticket",
+      run: [
+        'status=$(printf \'%s\\n\' "$FACTORY_OUT_PLAN" | sed -n \'s/^PLAN_STATUS: *\\([A-Z_]*\\).*/\\1/p\' | tail -1)',
+        'case "$status" in',
+        '  NEEDS_INFO) head="needs more information before it can plan this issue:" ;;',
+        '  NOT_CODE) head="thinks this issue is not a coding task:" ;;',
+        '  TOO_BIG) head="thinks this issue is too big for one change and proposes splitting it:" ;;',
+        '  *) echo "planning failed: no PLAN_STATUS line"; exit 1 ;;',
+        "esac",
+        '{ echo "🤖 **claude-factory** $head"; echo',
+        '  printf \'%s\\n\' "$FACTORY_OUT_PLAN" | sed \'/^PLAN_STATUS:/d\'',
+        '  echo; echo "_Reply on this issue and it plans again._"',
+        '  echo; echo "<!-- claude-factory run=$FACTORY_RUN_ID -->"; } \\',
+        '  | gh issue comment "$FACTORY_VAR_ISSUE" --repo "$FACTORY_VAR_GITHUB_REPO" --body-file -',
+      ].join("\n"),
+      on_success: "stop",
+    },
+    {
+      id: "post_plan",
+      type: "shell",
+      jump_only: true,
+      run: [
+        '{ echo "🤖 **claude-factory plan**"; echo',
+        '  printf \'%s\\n\' "$FACTORY_OUT_PLAN" | sed \'/^PLAN_STATUS:/d\'',
+        '  echo; echo "_Add the \\`$FACTORY_VAR_CODE_LABEL\\` label to start coding. To change the plan, comment what to change,"',
+        '  echo "remove the planned label and add \\`$FACTORY_VAR_READY_LABEL\\` again._"',
+        '  echo; echo "<!-- claude-factory run=$FACTORY_RUN_ID plan -->"; } \\',
+        '  | gh issue comment "$FACTORY_VAR_ISSUE" --repo "$FACTORY_VAR_GITHUB_REPO" --body-file -',
+      ].join("\n"),
+      on_success: "end",
+    },
+  ],
+});
+
+{
+  const testsRun = [
+    'git add -A -N >/dev/null 2>&1 || true   # new files show up in git diff for reviewers',
+    'cmd="$FACTORY_VAR_TEST_CMD"',
+    'if [ -z "$cmd" ] || [ "$cmd" = auto ]; then cmd=$("$FACTORY_TOOLS/detect-commands" test); fi',
+    'if [ -z "$cmd" ]; then echo "no test command found (set var test_cmd)"; exit 1; fi',
+    'marker="{{run.dir}}/tests.marker"; touch "$marker"',
+    'echo "\\$ $cmd"',
+    'sh -c "$cmd" > "{{run.dir}}/tests.log" 2>&1; code=$?',
+    'tail -150 "{{run.dir}}/tests.log"',
+    'echo; echo "=== summary ==="',
+    '{ "$FACTORY_TOOLS/test-summary" "$marker"; [ "$code" -eq 0 ] && echo "result: PASSED" || echo "result: FAILED (exit $code)"; } | tee "{{run.dir}}/last-tests.txt"',
+    'exit "$code"',
+  ].join("\n");
+  const tests = (id, fixId, next) => [
+    { id, type: "shell", timeout_sec: 3600, run: testsRun, on_failure: fixId, ...(next ? { on_success: next } : {}) },
+    {
+      id: fixId,
+      type: "claude",
+      jump_only: true,
+      max_visits: 3,
+      prompt: [
+        "The tests fail. Fix the code so they pass. Never delete, disable or weaken tests to make them pass;",
+        "change a test only if the test itself is wrong, and say so.",
+        "",
+        `{{steps.${id}.output}}`,
+      ].join("\n"),
+      on_success: id,
+    },
+  ];
+  const review = (n, skipTo) => [
+    {
+      id: `review_${n}`,
+      type: "claude",
+      agent: "codex",
+      permission_mode: "dontAsk",
+      allowed_tools: ["Read", "Glob", "Grep"],
+      prompt: [
+        `Code review, round ${n} of 2. Another AI implemented the GitHub issue below; its changes are`,
+        "uncommitted in this repository (run `git status` and `git diff HEAD`). Review them strictly for",
+        "correctness, edge cases, security, error handling, test coverage and fit with the existing code.",
+        "Report only real problems, each with file, line, problem and the fix. No style nitpicks.",
+        "",
+        "{{steps.pull_ticket.output}}",
+        "",
+        "End with exactly one line: VERDICT: APPROVE   or   VERDICT: CHANGES",
+      ].join("\n"),
+      routes: [{ if: "^VERDICT: APPROVE\\s*$", goto: skipTo }],
+    },
+    {
+      id: `address_review_${n}`,
+      type: "claude",
+      prompt: [
+        "A reviewer (Codex) looked at your changes. Fix every point you agree with. For points you",
+        "disagree with, explain why in one line each. Keep tests passing; don't write docs yet.",
+        "",
+        `{{steps.review_${n}.output}}`,
+      ].join("\n"),
+    },
+  ];
+
+  // Checks after coding (and, with checkDocs, after the docs step).
+  const guardRun = (checkDocs) => [
+        "git add -A -N >/dev/null 2>&1 || true",
+        "changed=$(git diff HEAD --name-only)",
+        '[ -n "$changed" ] || { echo "no changes were made"; exit 1; }',
+        "bad=0",
+        "for p in $FACTORY_VAR_FORBIDDEN_PATHS; do",
+        '  hits=$(printf \'%s\\n\' "$changed" | grep "^$p" || true)',
+        '  [ -n "$hits" ] && { echo "changes in forbidden path $p:"; printf \'%s\\n\' "$hits"; bad=1; }',
+        "done",
+        "added=$(git diff HEAD -U0 | grep '^+' | grep -v '^+++' || true)",
+        "removed=$(git diff HEAD -U0 | grep '^-' | grep -v '^---' || true)",
+        "skips=$(printf '%s\\n' \"$added\" | grep -E '@Disabled|@Ignore\\b|\\.skip\\(|\\bxit\\(|\\bxdescribe\\(|@pytest\\.mark\\.skip|t\\.Skip\\(' || true)",
+        '[ -n "$skips" ] && { echo "tests were disabled or skipped:"; printf \'%s\\n\' "$skips"; bad=1; }',
+        "pat='@Test\\b|@ParameterizedTest|\\bit\\(|\\btest\\(|def test_'",
+        "rt=$(printf '%s\\n' \"$removed\" | grep -Ec \"$pat\" || true); at=$(printf '%s\\n' \"$added\" | grep -Ec \"$pat\" || true)",
+        '[ "$rt" -gt "$at" ] && { echo "tests were removed ($rt removed, $at added)"; bad=1; }',
+        ...(checkDocs ? [
+          "for f in $FACTORY_VAR_DOCS_REQUIRED; do",
+          '  printf \'%s\\n\' "$changed" | grep -qx "$f" || { echo "documentation not updated: $f"; bad=1; }',
+          "done",
+        ] : []),
+        '[ "$bad" = 0 ] && echo "guard ok: $(printf \'%s\\n\' "$changed" | wc -l | tr -d " ") files changed"',
+        'exit "$bad"',
+      ].join("\n");
+
+  const s = [
+    ...steps("pull-ticket"),
+    {
+      id: "daily_branch",
+      type: "shell",
+      description: "Clone, then check out today's branch — or wait while the daily PR is unmerged",
+      run: 'if [ -d .git ]; then git fetch -q origin; else gh repo clone "$FACTORY_VAR_GITHUB_REPO" . -- -q; fi\n"$FACTORY_TOOLS/daily-branch" prepare',
+      routes: [{ if: "^WAIT:", goto: "wait_for_merge" }],
+    },
+    { ...tests("baseline_tests", "baseline_failed")[0], description: "Tests must pass before we change anything", on_failure: "baseline_failed" },
+    {
+      id: "implement",
+      type: "claude",
+      prompt: [
+        "Implement GitHub issue below in this repository.",
+        "",
+        "{{steps.pull_ticket.output}}",
+        "",
+        "Follow the plan in the latest \"claude-factory plan\" comment, including any later comments from",
+        "people, which override it. Follow the repository's CLAUDE.md conventions.",
+        "- Add or update tests for everything you change.",
+        "- Do not add new dependencies. Do not change: {{vars.forbidden_paths}}",
+        "- Do not write documentation yet; that is a separate step.",
+        "- Do not commit.",
+        "",
+        "Things learned from earlier runs in this repo:",
+        "{{learnings}}",
+        "",
+        "Finish with a short summary of what you changed (files and why).",
+      ].join("\n"),
+    },
+    {
+      id: "guard",
+      type: "shell",
+      description: "No forbidden paths, no disabled or deleted tests, something changed",
+      run: guardRun(false),
+      on_failure: "fix_guard",
+    },
+    {
+      id: "fix_guard",
+      type: "claude",
+      jump_only: true,
+      max_visits: 2,
+      prompt: "Your changes broke a rule of this factory. Fix that (restore removed/disabled tests, revert changes in forbidden paths, or make the missing change):\n\n{{steps.guard.output}}",
+      on_success: "guard",
+    },
+    ...tests("run_tests", "fix_tests"),
+    ...review(1, "docs"),
+    ...tests("run_tests_1", "fix_tests_1"),
+    ...review(2, "docs"),
+    ...tests("run_tests_2", "fix_tests_2"),
+    {
+      id: "docs",
+      type: "claude",
+      prompt: [
+        "Now document the change you made for this issue, following the repository's documentation rules",
+        "(CLAUDE.md). If there are none: update README/docs where behaviour changed, and add doc comments",
+        "to new public APIs. Required files that must be updated: {{vars.docs_required}}",
+        "",
+        "{{steps.pull_ticket.output}}",
+        "",
+        "What was implemented:",
+        "{{steps.implement.output}}",
+      ].join("\n"),
+    },
+    {
+      id: "final_guard",
+      type: "shell",
+      description: "Same checks as guard, plus: required docs were updated",
+      run: guardRun(true),
+      on_failure: "docs",
+    },
+    {
+      id: "commit",
+      type: "shell",
+      run: [
+        "git add -A",
+        'title=$(gh issue view "$FACTORY_VAR_ISSUE" --repo "$FACTORY_VAR_GITHUB_REPO" --json title -q .title 2>/dev/null)',
+        'git commit -q -m "Resolve #$FACTORY_VAR_ISSUE: $title" -m "Written by Claude, reviewed by Codex, tests passing. claude-factory run $FACTORY_RUN_ID"',
+        "git log --oneline -1",
+      ].join("\n"),
+    },
+    {
+      id: "push",
+      type: "shell",
+      run: [
+        "branch=$(git branch --show-current)",
+        'if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then git pull -q --rebase origin "$branch"; fi',
+        'git push -q -u origin HEAD && echo "pushed $branch"',
+      ].join("\n"),
+    },
+    {
+      id: "report",
+      type: "shell",
+      run: [
+        "branch=$(git branch --show-current); sha=$(git rev-parse HEAD)",
+        'verdict() { printf \'%s\\n\' "$1" | sed -n \'s/^VERDICT: *//p\' | tail -1; }',
+        '{ echo "🤖 **claude-factory** implemented this on branch \\`$branch\\` (commit https://github.com/$FACTORY_VAR_GITHUB_REPO/commit/$sha)."',
+        '  echo; echo "### What was done"; printf \'%s\\n\' "$FACTORY_OUT_IMPLEMENT"',
+        '  echo; echo "### Review (Codex)"',
+        '  echo "- round 1: $(verdict "$FACTORY_OUT_REVIEW_1")"',
+        '  [ -n "$FACTORY_OUT_REVIEW_2" ] && echo "- round 2: $(verdict "$FACTORY_OUT_REVIEW_2")"',
+        '  echo; echo "### Tests"; echo \'```\'; cat "{{run.dir}}/last-tests.txt"; echo \'```\'',
+        '  echo; echo "### Files changed"; echo \'```\'; git show --stat --format= HEAD | tail -40; echo \'```\'',
+        '  echo; echo "_This goes to main with the daily pull request._"',
+        '  echo; echo "<!-- claude-factory run=$FACTORY_RUN_ID -->"; } \\',
+        '  | gh issue comment "$FACTORY_VAR_ISSUE" --repo "$FACTORY_VAR_GITHUB_REPO" --body-file -',
+      ].join("\n"),
+      on_success: "end",
+    },
+    {
+      id: "baseline_failed",
+      type: "shell",
+      jump_only: true,
+      run: 'echo "The tests already fail on $(git branch --show-current) before any change — not starting."; tail -40 "{{run.dir}}/tests.log"; exit 1',
+    },
+    {
+      id: "wait_for_merge",
+      type: "shell",
+      jump_only: true,
+      description: "Stop until the daily PR is merged; the watcher resumes the run then",
+      resume_from: "daily_branch",
+      run: 'printf \'%s\\n\' "$FACTORY_OUT_DAILY_BRANCH" | grep "^WAIT:"',
+      on_success: "stop",
+    },
+  ];
+  s.find((x) => x.id === "docs").max_visits = 2;
+  s.find((x) => x.id === "docs").prompt += "\n\n{{steps.final_guard.output}}";
+  write("issue-code-daily", {
+    title: "Code a planned issue on today's branch (label-driven)",
+    lines: [
+      "factory run issue-code-daily --var github_repo=owner/repo --var issue=42 --var test_cmd=\"./gradlew test\"",
+      "",
+      "pull ticket → today's branch (waits while the daily PR is unmerged) → baseline tests",
+      "  → Claude codes → guard → tests ⟲ fix (max 3)",
+      "  → Codex review 1 → Claude fixes → tests ⟲ fix (max 3)",
+      "  → Codex review 2 → Claude fixes → tests ⟲ fix (max 3)      (an APPROVE skips ahead)",
+      "  → docs → guard (+ docs updated) → commit \"Resolve #N\" → push → report on the issue",
+    ],
+  }, {
+    description: "Code a planned issue on the day's branch: tests, 2 Codex reviews, docs, commit, push, report",
+    workspace: "empty",
+    defaults: { model: "sonnet", timeout_sec: 2400 },
+    limits: { max_cost_usd: 30 },
+    vars: {
+      github_repo: "owner/repo", issue: "", test_cmd: "auto", branch_prefix: "factory/daily-", timezone: "Europe/Berlin",
+      forbidden_paths: "", docs_required: "",
+    },
+    steps: s,
+  });
+}
+
+write("daily-pr", {
+  title: "Open the daily pull request to main",
+  lines: [
+    "factory run daily-pr --var github_repo=owner/repo --var test_cmd=\"./gradlew test\"",
+    "(a schedule watcher runs this at a set time, e.g. 17:00 Europe/Berlin)",
+    "",
+    "clone → daily branch with commits and no PR? ─┬─ none → end",
+    "                                              └─ full tests + build → open PR (draft if red)",
+  ],
+}, {
+  description: "Open the day's PR to main after running the full tests and build (draft if they fail)",
+  workspace: "empty",
+  defaults: { timeout_sec: 3600 },
+  vars: { github_repo: "owner/repo", test_cmd: "auto", build_cmd: "", branch_prefix: "factory/daily-", timezone: "Europe/Berlin" },
+  steps: [
+    clone,
+    {
+      id: "find_branch",
+      type: "shell",
+      run: '"$FACTORY_TOOLS/daily-branch" pending | head -1',
+      routes: [{ if: "^NONE$", goto: "end" }],
+    },
+    {
+      id: "verify",
+      type: "shell",
+      description: "Full tests and build on the branch; the result goes into the PR",
+      run: [
+        'branch=$(printf \'%s\\n\' "$FACTORY_OUT_FIND_BRANCH" | head -1)',
+        'git checkout -q -B "$branch" "origin/$branch"',
+        'cmd="$FACTORY_VAR_TEST_CMD"; if [ -z "$cmd" ] || [ "$cmd" = auto ]; then cmd=$("$FACTORY_TOOLS/detect-commands" test); fi',
+        'marker="{{run.dir}}/tests.marker"; touch "$marker"; ok=yes',
+        'sh -c "$cmd" > "{{run.dir}}/tests.log" 2>&1 || ok=no',
+        'if [ -n "$FACTORY_VAR_BUILD_CMD" ]; then sh -c "$FACTORY_VAR_BUILD_CMD" > "{{run.dir}}/build.log" 2>&1 || ok=no; fi',
+        '{ echo "### Checks on this branch"; echo \'```\'; echo "\\$ $cmd"; "$FACTORY_TOOLS/test-summary" "$marker"',
+        '  [ -n "$FACTORY_VAR_BUILD_CMD" ] && echo "\\$ $FACTORY_VAR_BUILD_CMD → $(grep -q "BUILD SUCCESSFUL" "{{run.dir}}/build.log" 2>/dev/null && echo ok || tail -1 "{{run.dir}}/build.log")"',
+        '  echo \'```\'; [ "$ok" = yes ] || echo "⚠ **Checks failed** — opened as a draft. See the run log for details."; } > "{{run.dir}}/checks.md"',
+        'cat "{{run.dir}}/checks.md"; echo "CHECKS: $ok"',
+      ].join("\n"),
+    },
+    {
+      id: "open_pr",
+      type: "shell",
+      run: [
+        'branch=$(printf \'%s\\n\' "$FACTORY_OUT_FIND_BRANCH" | head -1)',
+        'draft=""; printf \'%s\\n\' "$FACTORY_OUT_VERIFY" | grep -q "^CHECKS: no" && draft=--draft',
+        '"$FACTORY_TOOLS/daily-branch" open-pr "$branch" $draft --note-file "{{run.dir}}/checks.md"',
+      ].join("\n"),
+    },
+  ],
+});

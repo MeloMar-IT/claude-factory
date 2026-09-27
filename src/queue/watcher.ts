@@ -12,7 +12,20 @@ export const STATUS_LABELS = {
   waiting: { name: "factory:waiting-approval", color: "7c3aed", description: "claude-factory waits for /approve or /reject" },
   failed: { name: "factory:failed", color: "b91c1c", description: "claude-factory run failed — remove this label to retry" },
 } as const;
-const ALL_STATUS: string[] = Object.values(STATUS_LABELS).map((l) => l.name);
+type LabelKey = keyof typeof STATUS_LABELS;
+type LabelNames = Record<LabelKey, string>;
+
+/** Status label names for a watcher: its own names where set, factory:* otherwise. */
+export function labelNames(cfg: WatcherConfig): LabelNames {
+  const o = cfg.status_labels ?? {};
+  return {
+    working: o.working ?? STATUS_LABELS.working.name,
+    done: o.done ?? STATUS_LABELS.done.name,
+    needsInfo: o.needs_info ?? STATUS_LABELS.needsInfo.name,
+    waiting: o.waiting ?? STATUS_LABELS.waiting.name,
+    failed: o.failed ?? STATUS_LABELS.failed.name,
+  };
+}
 
 /** Flow each source runs when the watcher doesn't name one. */
 export const DEFAULT_FLOWS: Record<WatcherConfig["source"], string> = {
@@ -51,14 +64,27 @@ export interface WatcherStatus {
 
 const APPROVE_RE = /^\s*\/(approve|reject)\b[ \t]*(.*)$/im;
 
-function labelFor(s: RunSummary): string | undefined {
+/** Stopped for a reason that clears by itself: daily budget, or a `wait_*` step (e.g. waiting for a PR merge). */
+function isPaused(s: RunSummary): boolean {
+  return /daily budget|stopped at step "(?:[\w-]+\/)*wait_/.test(s.reason ?? "");
+}
+
+function labelFor(s: RunSummary, L: LabelNames): string {
   switch (s.status) {
-    case "succeeded": return STATUS_LABELS.done.name;
-    case "waiting": return STATUS_LABELS.waiting.name;
-    case "stopped": return /daily budget/.test(s.reason ?? "") ? STATUS_LABELS.working.name : STATUS_LABELS.needsInfo.name;
-    case "running": return STATUS_LABELS.working.name;
-    default: return /interrupted/.test(s.reason ?? "") ? STATUS_LABELS.working.name : STATUS_LABELS.failed.name;
+    case "succeeded": return L.done;
+    case "waiting": return L.waiting;
+    case "stopped": return isPaused(s) ? L.working : L.needsInfo;
+    case "running": return L.working;
+    default: return /interrupted/.test(s.reason ?? "") ? L.working : L.failed;
   }
+}
+
+/** Minutes since midnight in a time zone (default: this machine's). */
+export function minutesNow(timeZone?: string, now = new Date()): { day: string; minutes: number } {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
+    timeZone, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+  }).formatToParts(now).map((p) => [p.type, p.value]));
+  return { day: `${parts.year}-${parts.month}-${parts.day}`, minutes: Number(parts.hour) * 60 + Number(parts.minute) };
 }
 
 /** Polls one GitHub repo and turns tickets / PR comments into runs. */
@@ -69,8 +95,13 @@ export class Watcher {
   private setupDone = false;
   private stopped = false;
 
+  private L: LabelNames;
+  private allStatus: string[];
+
   constructor(public cfg: WatcherConfig, private d: WatcherDeps) {
     this.status = { id: cfg.id, lastActions: [] };
+    this.L = labelNames(cfg);
+    this.allStatus = Object.values(this.L);
   }
 
   private get repo() {
@@ -113,7 +144,7 @@ export class Watcher {
     });
     if (this.cfg.source === "issues") {
       await ensureLabel(this.repo, this.cfg.label, "c2410c", "Let claude-factory work on this issue");
-      for (const l of Object.values(STATUS_LABELS)) await ensureLabel(this.repo, l.name, l.color, l.description);
+      for (const [k, l] of Object.entries(STATUS_LABELS)) await ensureLabel(this.repo, this.L[k as LabelKey], l.color, l.description);
     }
     loadFlow(this.flowName(), this.d.repo); // fail early on a missing flow
     this.setupDone = true;
@@ -143,7 +174,7 @@ export class Watcher {
     const m = new Map<string, RunSummary>();
     for (const s of this.d.scheduler.list(1000)) {
       if (s.vars?.github_repo !== this.repo || !s.vars[key]) continue;
-      if (key === "pr" && s.flow !== this.flowName()) continue;
+      if (s.flow !== this.flowName()) continue; // e.g. a plan watcher and a code watcher on the same issues
       if (!m.has(s.vars[key]!)) m.set(s.vars[key]!, s);
     }
     return m;
@@ -189,10 +220,18 @@ export class Watcher {
 
   /** Run the chore when the last one started at least `every` ago (survives restarts). */
   private async tickSchedule() {
-    const every = parseInterval(this.cfg.every);
     const last = this.d.scheduler.list(1000).find((s) => s.vars?.chore_watcher === this.cfg.id);
-    // 5% slack so timer jitter doesn't skip a whole period.
-    if (last && Date.now() - new Date(last.startedAt).getTime() < every * 0.95) return;
+    if (this.cfg.at) {
+      // Once a day at `at` (caught up later that day if the Mac was off at that time).
+      const now = minutesNow(this.cfg.timezone);
+      const [hh, mm] = this.cfg.at.split(":").map(Number) as [number, number];
+      if (now.minutes < hh * 60 + mm) return;
+      if (last && minutesNow(this.cfg.timezone, new Date(last.startedAt)).day === now.day) return;
+    } else {
+      const every = parseInterval(this.cfg.every);
+      // 5% slack so timer jitter doesn't skip a whole period.
+      if (last && Date.now() - new Date(last.startedAt).getTime() < every * 0.95) return;
+    }
     const lockKey = `${this.repo}#chore:${this.cfg.id}`;
     if (this.d.scheduler.isLocked(lockKey) || !this.budgetLeft()) return;
     const { flow } = loadFlow(this.flowName(), this.d.repo);
@@ -204,17 +243,47 @@ export class Watcher {
   }
 
   private submit(n: number, kind: "issue" | "pr", job: Parameters<Scheduler["submit"]>[0]): string {
-    return this.d.scheduler.submit(job, { lockKey: `${this.repo}#${n}`, source: `watcher ${this.cfg.id} ${kind} #${n}` });
+    return this.d.scheduler.submit(job, { lockKey: kind === "issue" ? this.lockFor(n) : `${this.repo}#${n}`, source: `watcher ${this.cfg.id} ${kind} #${n}` });
   }
 
   /** Update labels when a run we started finishes (the next tick would also reconcile). */
   private labelWhenDone(issue: number, runId: string) {
     void this.d.scheduler.wait(runId).then(async (s) => {
       if (!s || this.stopped) return;
-      const label = labelFor(s);
-      await setLabels(this.repo, issue, label, ALL_STATUS).catch(() => {});
+      const label = labelFor(s, this.L);
+      const remove = s.status === "succeeded" ? [...this.allStatus, ...this.cfg.remove_on_done] : this.allStatus;
+      await setLabels(this.repo, issue, label, remove).catch(() => {});
+      if (label === this.L.failed && this.cfg.comment_on_failure) await this.commentFailure(issue, s).catch(() => {});
       this.act(`#${issue} → ${s.status}${s.reason ? ` (${s.reason})` : ""} · $${s.totalCostUsd.toFixed(3)}`);
     });
+  }
+
+  /** Tell the issue why the run failed, with the tail of the failing step's output. */
+  private async commentFailure(issue: number, s: RunSummary) {
+    const failed = [...s.history].reverse().find((h) => !h.ok);
+    const tail = (failed?.output || failed?.error || "").trim().slice(-3000);
+    const body = [
+      `🤖 **claude-factory** could not finish this issue: ${s.reason ?? s.status}`,
+      failed ? `\nLast failing step: \`${failed.id}\`${failed.visit > 1 ? ` (attempt ${failed.visit})` : ""}` : "",
+      tail ? `\n<details><summary>Output (tail)</summary>\n\n\`\`\`\n${tail.replace(/```/g, "ˋˋˋ")}\n\`\`\`\n</details>` : "",
+      `\n_Remove the \`${this.L.failed}\` label to try again._`,
+      `\n<!-- claude-factory run=${s.runId} -->`,
+    ].join("\n");
+    await gh(["issue", "comment", String(issue), "--repo", this.repo, "--body", body]);
+  }
+
+  /** Lock key for a run on this issue: per issue, or per watcher when runs share a branch. */
+  private lockFor(n: number) {
+    return this.cfg.one_at_a_time ? `${this.repo}#watcher:${this.cfg.id}` : `${this.repo}#${n}`;
+  }
+
+  /** An open PR whose head branch starts with pause_while_pr_open (then start nothing new). */
+  private async pausingPr(): Promise<string | undefined> {
+    const prefix = this.cfg.pause_while_pr_open;
+    if (!prefix) return undefined;
+    const prs = await ghJson<{ number: number; headRefName: string; state: string }[]>(["pr", "list", "--repo", this.repo, "--state", "open", "--limit", "100", "--json", "number,headRefName,state"]);
+    const pr = prs.find((p) => p.state === "OPEN" && p.headRefName.startsWith(prefix));
+    return pr ? `PR #${pr.number} (${pr.headRefName})` : undefined;
   }
 
   private startNew(issue: Issue) {
@@ -237,44 +306,49 @@ export class Watcher {
     const runs = this.latestRuns("issue");
     const budgetLeft = this.budgetLeft();
     let started = 0;
+    const excluded = new Set(this.cfg.exclude_labels);
+    const paused = await this.pausingPr();
+    if (paused && this.status.lastActions[0]?.includes(paused) !== true) this.act(`not starting new work while ${paused} is open`);
 
     for (const issue of issues.sort((a, b) => a.number - b.number)) {
       const n = issue.number;
-      if (this.d.scheduler.isLocked(`${this.repo}#${n}`)) continue;
-      const status = issue.labels.map((l) => l.name).find((l) => ALL_STATUS.includes(l));
+      if (issue.labels.some((l) => excluded.has(l.name))) continue;
+      if (this.d.scheduler.isLocked(this.lockFor(n))) continue;
+      const status = issue.labels.map((l) => l.name).find((l) => this.allStatus.includes(l));
       const run = runs.get(String(n));
 
       if (!status) {
-        if (started >= this.cfg.max_per_tick || !budgetLeft) continue;
-        await setLabels(this.repo, n, STATUS_LABELS.working.name, ALL_STATUS);
+        if (started >= this.cfg.max_per_tick || !budgetLeft || paused) continue;
+        await setLabels(this.repo, n, this.L.working, this.allStatus);
         this.labelWhenDone(n, this.startNew(issue));
         started++;
-      } else if (status === STATUS_LABELS.working.name) {
+      } else if (status === this.L.working) {
         // Reconcile: the label says working but nothing is running (restart, crash, budget pause).
         if (!run) continue;
         const resumable = run.status === "cancelled" || /interrupted/.test(run.reason ?? "") ||
-          (run.status === "stopped" && /daily budget/.test(run.reason ?? "") && budgetLeft);
+          (run.status === "stopped" && /daily budget/.test(run.reason ?? "") && budgetLeft) ||
+          (run.status === "stopped" && isPaused(run) && !/daily budget/.test(run.reason ?? "") && !paused);
         if (resumable && started < this.cfg.max_per_tick) {
-          this.resume(n, run.runId, run.status === "stopped" ? "budget available again" : "was interrupted");
+          this.resume(n, run.runId, run.status !== "stopped" ? "was interrupted" : /daily budget/.test(run.reason ?? "") ? "budget available again" : "can continue now");
           this.labelWhenDone(n, run.runId);
           started++;
-        } else if (!resumable && labelFor(run) !== STATUS_LABELS.working.name) {
-          await setLabels(this.repo, n, labelFor(run), ALL_STATUS);
-          this.act(`#${n} label → ${labelFor(run)}`);
+        } else if (!resumable && labelFor(run, this.L) !== this.L.working) {
+          await setLabels(this.repo, n, labelFor(run, this.L), this.allStatus);
+          this.act(`#${n} label → ${labelFor(run, this.L)}`);
         }
-      } else if (status === STATUS_LABELS.needsInfo.name && run?.status === "stopped") {
+      } else if (status === this.L.needsInfo && run?.status === "stopped") {
         const comments = await issueComments(this.repo, n);
         const answers = commentsAfter(comments, isBot);
         if (answers.length && started < this.cfg.max_per_tick) {
-          await setLabels(this.repo, n, STATUS_LABELS.working.name, ALL_STATUS);
+          await setLabels(this.repo, n, this.L.working, this.allStatus);
           this.resume(n, run.runId, `answered by @${answers[0]!.author.login}`);
           this.labelWhenDone(n, run.runId);
           started++;
         }
-      } else if (status === STATUS_LABELS.waiting.name && run?.status === "waiting") {
+      } else if (status === this.L.waiting && run?.status === "waiting") {
         const decision = await this.findDecision(run.runId, await issueComments(this.repo, n));
         if (decision) {
-          await setLabels(this.repo, n, STATUS_LABELS.working.name, ALL_STATUS);
+          await setLabels(this.repo, n, this.L.working, this.allStatus);
           this.resume(n, run.runId, `${decision.approved ? "approved" : "rejected"} by @${decision.by}`, decision);
           this.labelWhenDone(n, run.runId);
         }

@@ -1,0 +1,51 @@
+#!/usr/bin/env node
+// Summarise JUnit XML reports (Gradle, Maven, and most test runners' junit reporters) written
+// after <marker-file> was touched. Prints counts and up to 20 failing tests.
+// Usage: test-summary <marker-file> [dir]
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
+
+const [marker, root = "."] = process.argv.slice(2);
+const since = marker ? statSync(marker).mtimeMs - 1000 : 0;
+const files = [];
+(function walk(dir, depth) {
+  if (depth > 8) return;
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const e of entries) {
+    if (e.name === "node_modules" || e.name === ".git" || e.name === ".gradle") continue;
+    const p = join(dir, e.name);
+    if (e.isDirectory()) walk(p, depth + 1);
+    else if (/^TEST-.*\.xml$|^junit.*\.xml$/.test(e.name) && statSync(p).mtimeMs >= since) files.push(p);
+  }
+})(root, 0);
+
+if (!files.length) {
+  console.log("tests: no JUnit XML reports found (see the output above)");
+  process.exit(0);
+}
+const t = { tests: 0, failures: 0, errors: 0, skipped: 0 };
+const failed = [];
+for (const f of files) {
+  const xml = readFileSync(f, "utf8");
+  for (const m of xml.matchAll(/<testsuite\b([^>]*)>/g)) {
+    for (const k of Object.keys(t)) t[k] += Number(new RegExp(`\\b${k}="(\\d+)"`).exec(m[1])?.[1] ?? 0);
+  }
+  for (const m of xml.matchAll(/<testcase\b([^>]*?)(?:\/>|>([\s\S]*?)<\/testcase>)/g)) {
+    if (!m[2] || !/<(failure|error)\b/.test(m[2])) continue;
+    const name = /\bname="([^"]*)"/.exec(m[1])?.[1];
+    const cls = /\bclassname="([^"]*)"/.exec(m[1])?.[1];
+    failed.push(`${cls ? `${cls}.` : ""}${name}`);
+  }
+}
+const passed = t.tests - t.failures - t.errors - t.skipped;
+console.log(`tests: ${t.tests} run, ${passed} passed, ${t.failures + t.errors} failed, ${t.skipped} skipped (${files.length} report files)`);
+if (failed.length) {
+  console.log("failing:");
+  for (const f of failed.slice(0, 20)) console.log(`  - ${f}`);
+  if (failed.length > 20) console.log(`  … and ${failed.length - 20} more`);
+}
