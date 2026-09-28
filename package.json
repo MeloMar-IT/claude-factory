@@ -2,6 +2,11 @@
   "name": "claude-factory",
   "version": "0.1.0",
   "description": "AI coding factory: run custom YAML flows of headless Claude Code CLI and shell steps",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MeloMar-IT/claude-factory.git"
+  },
   "type": "module",
   "bin": {
     "factory": "dist/cli.js"
