@@ -8,6 +8,7 @@
 name: ci-fix
 description: "Fix CI that is red on the default branch: read the failed logs, fix, test, review, open a PR"
 workspace: empty
+one_per_repo: true
 defaults:
   model: sonnet
   timeout_sec: 1800

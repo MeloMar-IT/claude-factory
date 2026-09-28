@@ -9,6 +9,7 @@
 name: chore
 description: Recurring maintenance (deps, flaky tests, docs…) on a schedule; opens a PR only if something changed
 workspace: empty
+one_per_repo: true
 defaults:
   model: sonnet
   timeout_sec: 1800

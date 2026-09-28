@@ -35,6 +35,7 @@ name: feature
 description: plan → implement → test/fix loop → review gate → commit
 
 workspace: worktree        # isolated git worktree + branch per run
+one_per_repo: true         # only one code-changing run per repository at a time
 
 defaults:
   model: sonnet

@@ -6,6 +6,7 @@
 name: pr-feedback
 description: Check out a PR, address its review comments, test, push, reply on the PR
 workspace: empty
+one_per_repo: true
 defaults:
   model: sonnet
   timeout_sec: 1800

@@ -192,6 +192,11 @@ export const FlowSchema = z
      * inplace: work directly in the repo. empty: fresh empty dir (e.g. clone from GitHub in a step).
      */
     workspace: z.enum(["worktree", "inplace", "empty"]).default("worktree"),
+    /**
+     * Only one run of flows with this set may be active per repository (GitHub repo, or the
+     * local repo path). For flows that change code; others (e.g. planning) run in parallel.
+     */
+    one_per_repo: z.boolean().optional(),
     defaults: DefaultsSchema.default({}),
     limits: z.object({ max_cost_usd: z.number().positive().optional() }).strict().default({}),
     sandbox: SandboxSchema.default({}),

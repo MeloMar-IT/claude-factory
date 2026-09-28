@@ -7,6 +7,7 @@
 name: github-pr
 description: GitHub ticket → plan → code → tests → review → PR → CI fix loop → report → learn
 workspace: empty
+one_per_repo: true
 defaults:
   model: sonnet
   timeout_sec: 1800

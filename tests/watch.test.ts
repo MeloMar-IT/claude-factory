@@ -209,6 +209,33 @@ describe("watcher", () => {
 });
 
 describe("scheduler", () => {
+  it("runs one coding (one_per_repo) run per repository; planning runs in parallel", async () => {
+    const gh = fakeGithub();
+    try {
+      const config = ConfigSchema.parse({ protected_branches: [], concurrency: 5 });
+      const s = new Scheduler({ runsDir: join(gh.tmp, "runs"), config: () => config });
+      const { parseFlow } = await import("../src/flow/load.js");
+      const flow = (name: string, one: boolean) => parseFlow(`name: ${name}\nworkspace: empty\n${one ? "one_per_repo: true\n" : ""}steps:\n  - {id: a, type: shell, run: sleep 1}`);
+      const job = (f: ReturnType<typeof parseFlow>, repo: string) => ({ kind: "run" as const, flow: f, task: "", repo: gh.tmp, vars: { github_repo: repo } });
+      const code1 = s.submit(job(flow("code", true), "acme/app"));
+      const code2 = s.submit(job(flow("code", true), "acme/app"));
+      const other = s.submit(job(flow("code", true), "acme/lib"));
+      const plan1 = s.submit(job(flow("plan", false), "acme/app"));
+      const plan2 = s.submit(job(flow("plan", false), "acme/app"));
+      await new Promise((r) => setTimeout(r, 150));
+      const q = s.queue();
+      expect(q.active.map((a) => a.runId).sort()).toEqual([code1, other, plan1, plan2].sort());
+      expect(q.pending).toMatchObject([{ runId: code2, repoLock: "code:acme/app", waitingFor: code1 }]);
+      await s.idle();
+      const done = s.list().filter((r) => r.status === "succeeded");
+      expect(done).toHaveLength(5);
+      const a = done.find((r) => r.runId === code1)!, b = done.find((r) => r.runId === code2)!;
+      expect(new Date(b.startedAt).getTime()).toBeGreaterThanOrEqual(new Date(a.finishedAt!).getTime());
+    } finally {
+      gh.restore();
+    }
+  });
+
   it("respects concurrency and per-key locks", async () => {
     const gh = fakeGithub();
     try {

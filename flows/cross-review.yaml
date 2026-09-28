@@ -4,6 +4,7 @@ name: cross-review
 description: Claude codes → tests → Codex reviews ⟲ Claude fixes → commit
 
 workspace: worktree
+one_per_repo: true
 
 defaults:
   model: sonnet

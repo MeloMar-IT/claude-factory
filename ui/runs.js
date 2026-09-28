@@ -7,33 +7,49 @@ const STATUS_LABEL = { waiting: "waiting for approval", stopped: "stopped", runn
 const pill = (status, extra) => h("span", { class: `pill ${status}` }, status === "running" ? h("span", { class: "spinner", style: { width: "10px", height: "10px" } }) : null, extra ?? STATUS_LABEL[status] ?? status);
 const what = (r) => (r.vars?.issue ? `${r.vars.github_repo}#${r.vars.issue}` : r.vars?.pr ? `${r.vars.github_repo} PR #${r.vars.pr}` : "");
 
+const REFRESH_MS = 30_000;
+
+/** Runs list; refreshes itself every 30 seconds. Returns a cleanup function that stops that. */
 export async function renderRunsList(main) {
   mount(main, h("div", { class: "row" }, h("span", { class: "spinner" }), " Loading runs…"));
-  const [runs, queue] = await Promise.all([api.runs(), api.queue()]);
-  const needsYou = runs.filter((r) => r.status === "waiting" || r.status === "stopped");
-  const row = (r) => h("tr", { class: "link", onClick: () => (location.hash = `#/runs/${r.runId}`) },
-    h("td", {}, pill(r.status)),
-    h("td", {}, h("b", {}, r.flow), what(r) ? h("div", { class: "muted mono", style: { fontSize: "11.5px" } }, what(r)) : null),
-    h("td", { class: "task", title: r.task }, r.reason && r.status !== "succeeded" ? h("span", { class: "muted" }, r.reason) : r.task || h("span", { class: "muted" }, "—")),
-    h("td", { class: "mono" }, r.history.length),
-    h("td", { class: "mono" }, money(r.totalCostUsd)),
-    h("td", { class: "muted" }, timeAgo(r.startedAt)));
-  const table = (list) => h("table", { class: "table" },
-    h("thead", {}, h("tr", {}, ["Status", "Flow", "Task / reason", "Steps", "Cost", "Started"].map((t) => h("th", {}, t)))),
-    h("tbody", {}, list.map(row)));
+  let timer;
+  const draw = async () => {
+    const [runs, queue] = await Promise.all([api.runs(), api.queue()]);
+    if (!main.isConnected) return;
+    const needsYou = runs.filter((r) => r.status === "waiting" || r.status === "stopped");
+    const flowOf = new Map(runs.map((r) => [r.runId, r.flow]));
+    const row = (r) => h("tr", { class: "link", onClick: () => (location.hash = `#/runs/${r.runId}`) },
+      h("td", {}, pill(r.status)),
+      h("td", {}, h("b", {}, r.flow), what(r) ? h("div", { class: "muted mono", style: { fontSize: "11.5px" } }, what(r)) : null),
+      h("td", { class: "task", title: r.task }, r.reason && r.status !== "succeeded" ? h("span", { class: "muted" }, r.reason) : r.task || h("span", { class: "muted" }, "—")),
+      h("td", { class: "mono" }, r.history.length),
+      h("td", { class: "mono" }, money(r.totalCostUsd)),
+      h("td", { class: "muted" }, timeAgo(r.startedAt)));
+    const table = (list) => h("table", { class: "table" },
+      h("thead", {}, h("tr", {}, ["Status", "Flow", "Task / reason", "Steps", "Cost", "Started"].map((t) => h("th", {}, t)))),
+      h("tbody", {}, list.map(row)));
+    const why = (p) => p.waitingFor
+      ? `waiting for ${p.repoLock ? `the coding run on ${p.repoLock.slice(5)}` : "the run on the same ticket"} (${flowOf.get(p.waitingFor) ?? p.waitingFor})`
+      : "waiting for a free slot";
 
-  mount(main,
-    h("div", { class: "toolbar" }, h("h1", {}, "Runs"),
-      h("span", { class: "muted" }, `${queue.active.length}/${queue.concurrency} running · ${queue.pending.length} queued`),
-      h("span", { class: "spacer" }), h("button", { onClick: () => renderRunsList(main) }, "↻ Refresh")),
-    queue.pending.length ? h("div", { class: "card", style: { marginBottom: "16px" } },
-      h("h3", {}, "Queue"),
-      queue.pending.map((p) => h("div", { class: "row" },
-        pill("queued"), h("span", { class: "mono" }, p.runId), h("span", { class: "muted" }, `${p.kind} · ${p.source ?? ""}`),
+    mount(main,
+      h("div", { class: "toolbar" }, h("h1", {}, "Runs"),
+        h("span", { class: "muted" }, `${queue.active.length}/${queue.concurrency} running · ${queue.pending.length} queued`),
         h("span", { class: "spacer" }),
-        h("button", { class: "small", onClick: async () => { await api.cancelRun(p.runId); renderRunsList(main); } }, "Remove")))) : null,
-    needsYou.length ? h("div", { style: { marginBottom: "16px" } }, h("h3", { style: { marginBottom: "8px" } }, `Needs you (${needsYou.length})`), table(needsYou)) : null,
-    runs.length ? table(runs) : h("div", { class: "empty" }, "No runs yet. Open a flow and press ▶ Run."));
+        h("span", { class: "muted", style: { fontSize: "12px" } }, `updated ${new Date().toLocaleTimeString()} · refreshes every 30 s`),
+        h("button", { onClick: () => draw() }, "↻ Refresh")),
+      queue.pending.length ? h("div", { class: "card", style: { marginBottom: "16px" } },
+        h("h3", {}, "Queue"),
+        queue.pending.map((p) => h("div", { class: "row" },
+          pill("queued"), h("span", { class: "mono" }, p.runId), h("span", { class: "muted" }, `${p.kind} · ${p.source ?? ""} · ${why(p)}`),
+          h("span", { class: "spacer" }),
+          h("button", { class: "small", onClick: async () => { await api.cancelRun(p.runId); draw(); } }, "Remove")))) : null,
+      needsYou.length ? h("div", { style: { marginBottom: "16px" } }, h("h3", { style: { marginBottom: "8px" } }, `Needs you (${needsYou.length})`), table(needsYou)) : null,
+      runs.length ? table(runs) : h("div", { class: "empty" }, "No runs yet. Open a flow and press ▶ Run."));
+  };
+  await draw();
+  timer = setInterval(() => draw().catch(() => {}), REFRESH_MS);
+  return () => clearInterval(timer);
 }
 
 function logLine(line) {

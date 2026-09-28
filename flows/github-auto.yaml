@@ -10,6 +10,7 @@
 name: github-auto
 description: Triage the ticket, then small fix, full feature, split into sub-issues, or ask questions
 workspace: empty
+one_per_repo: true
 defaults:
   model: sonnet
   timeout_sec: 1800

@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, resolve } from "node:path";
 import type { Config } from "../config.js";
 import type { ApprovalDecision } from "../engine/execute.js";
 import { newRunId, resumeRun, runFlow } from "../engine/runner.js";
@@ -19,6 +19,8 @@ export interface QueuedJob {
   lockKey?: string;
   /** Who queued it, e.g. "watcher acme/app#7" or "ui". */
   source?: string;
+  /** Set for one_per_repo flows: only one active job per repo key. */
+  repoLock?: string;
   enqueuedAt: string;
 }
 
@@ -67,10 +69,25 @@ export class Scheduler {
   submit(job: Job, meta: { lockKey?: string; source?: string } = {}): string {
     const runId = job.kind === "run" ? newRunId() : job.runId;
     if (job.kind === "resume" && (this.isActive(runId) || this.isQueued(runId))) throw new Error(`run ${runId} is already queued or running`);
-    this.pending.push({ runId, job, ...meta, enqueuedAt: new Date().toISOString() });
+    const repoLock = this.repoLockFor(job);
+    this.pending.push({ runId, job, ...meta, ...(repoLock ? { repoLock } : {}), enqueuedAt: new Date().toISOString() });
     this.persist();
     this.pump();
     return runId;
+  }
+
+  /** "code:<owner/repo or local path>" for flows with one_per_repo, else undefined. */
+  private repoLockFor(job: Job): string | undefined {
+    let flow: Flow | undefined, vars: Record<string, string>, repo: string;
+    if (job.kind === "run") ({ flow, vars, repo } = job);
+    else {
+      const s = loadRun(this.o.runsDir, job.runId);
+      if (!s) return undefined;
+      ({ flowDef: flow, vars, repo } = s);
+    }
+    if (!flow?.one_per_repo) return undefined;
+    const gh = vars?.github_repo;
+    return `code:${gh && gh !== "owner/repo" ? gh : resolve(repo)}`;
   }
 
   isActive(runId: string) {
@@ -100,8 +117,11 @@ export class Scheduler {
 
   queue() {
     return {
-      pending: this.pending.map(({ runId, lockKey, source, enqueuedAt, job }) => ({ runId, lockKey, source, enqueuedAt, kind: job.kind })),
-      active: [...this.active.values()].map((a) => ({ runId: a.queued.runId, lockKey: a.queued.lockKey, source: a.queued.source })),
+      pending: this.pending.map(({ runId, lockKey, repoLock, source, enqueuedAt, job }) => {
+        const blocker = [...this.active.values()].find((a) => (repoLock && a.queued.repoLock === repoLock) || (lockKey && a.queued.lockKey === lockKey));
+        return { runId, lockKey, repoLock, source, enqueuedAt, kind: job.kind, waitingFor: blocker?.queued.runId };
+      }),
+      active: [...this.active.values()].map((a) => ({ runId: a.queued.runId, lockKey: a.queued.lockKey, repoLock: a.queued.repoLock, source: a.queued.source })),
       concurrency: this.o.config().concurrency,
     };
   }
@@ -167,7 +187,8 @@ export class Scheduler {
     const limit = this.o.config().concurrency;
     for (let i = 0; i < this.pending.length && this.active.size < limit; ) {
       const q = this.pending[i]!;
-      const locked = q.lockKey && [...this.active.values()].some((a) => a.queued.lockKey === q.lockKey);
+      const active = [...this.active.values()].map((a) => a.queued);
+      const locked = (q.lockKey && active.some((a) => a.lockKey === q.lockKey)) || (q.repoLock && active.some((a) => a.repoLock === q.repoLock));
       if (locked) {
         i++;
         continue;

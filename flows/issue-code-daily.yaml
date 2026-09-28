@@ -11,6 +11,7 @@
 name: issue-code-daily
 description: "Code a planned issue on the day's branch: tests, 2 Codex reviews, docs, commit, push, report"
 workspace: empty
+one_per_repo: true
 defaults:
   model: sonnet
   timeout_sec: 2400

@@ -9,6 +9,7 @@
 name: github-issue
 description: GitHub ticket → plan (or ask for info) → code → tests → review → commit, push, report
 workspace: empty
+one_per_repo: true
 defaults:
   model: sonnet
   timeout_sec: 1800

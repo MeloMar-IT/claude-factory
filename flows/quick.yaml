@@ -4,6 +4,7 @@ name: quick
 description: single claude pass → tests, one fix attempt
 
 workspace: worktree
+one_per_repo: true
 
 defaults:
   model: sonnet

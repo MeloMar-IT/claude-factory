@@ -371,7 +371,7 @@ async function route() {
     else if (section === "settings") await renderSettings(main);
     else if (section === "models") await renderModels(main);
     else if (section === "runs" && arg) S.cleanup = renderRunDetail(main, arg);
-    else if (section === "runs") await renderRunsList(main);
+    else if (section === "runs") S.cleanup = await renderRunsList(main);
     else if (section === "new") S.cur && !S.cur.name ? renderFlowView() : openNew();
     else if (section === "flows" && arg) await openFlow(arg);
     else welcome();

@@ -17,7 +17,11 @@ function write(name, header, flow) {
 ${header.lines.map((l) => `# ${l}`).join("\n")}
 # ${"─".repeat(72)}
 `;
-  writeFileSync(join(root, "flows", `${name}.yaml`), text + stringify({ name, ...flow }, { lineWidth: 0 }));
+  // Flows that change code: one run per repository at a time. Planning / PR-only flows run in parallel.
+  const { description, workspace, ...rest } = flow;
+  const coding = !["issue-plan", "daily-pr"].includes(name);
+  const ordered = { name, description, workspace, ...(coding ? { one_per_repo: true } : {}), ...rest };
+  writeFileSync(join(root, "flows", `${name}.yaml`), text + stringify(ordered, { lineWidth: 0 }));
   console.log(`wrote flows/${name}.yaml (${flow.steps.length} steps)`);
 }
 

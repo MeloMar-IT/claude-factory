@@ -6,6 +6,7 @@
 name: jira-ticket
 description: Jira ticket → plan (posted to Jira) → code → tests → review → commit → push → result on Jira
 workspace: worktree
+one_per_repo: true
 defaults:
   model: sonnet
   timeout_sec: 1800

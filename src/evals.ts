@@ -149,7 +149,7 @@ export async function runEval(o: {
   const variants: Flow[] = flowNames.flatMap((name) => {
     const { flow } = loadFlow(name, suiteDir);
     return models?.length ? models.map((m) => withModel(flow, m)) : [flow];
-  });
+  }).map((f) => ({ ...f, one_per_repo: false })); // cases get their own worktrees: run them in parallel
   // Routing rules would override the model under test.
   const config = models?.length ? { ...o.config, router: { ...o.config.router, rules: [] } } : o.config;
   const scheduler = new Scheduler({ runsDir: o.runsDir, config: () => config, claudeBin: o.claudeBin });
