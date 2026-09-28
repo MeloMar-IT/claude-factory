@@ -308,6 +308,11 @@ async function loop(engine: Engine, scope: Scope, startAt: string | null, runsDi
     }
     recordStep(step, scope, engine, res, startedAt, logFile, visit);
     lastOutput = res.output;
+    if (res.limited) {
+      visits[step.id] = visit - 1; // try again from here; a limit is not a real attempt
+      setNext(step.id);
+      return { outcome: "stopped", reason: `${res.error} — continues automatically after the limit resets (or resume it)`, next: step.id, lastOutput };
+    }
     if (engine.signal?.aborted) return { outcome: "cancelled", reason: `cancelled during step "${step.id}"`, ...here() };
 
     const routed = res.ok ? step.routes?.find((r) => new RegExp(r.if, "m").test(res.output))?.goto : undefined;

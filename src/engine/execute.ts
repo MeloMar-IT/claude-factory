@@ -64,7 +64,7 @@ export interface ApprovalDecision {
   note?: string;
 }
 
-export type StepResult = Pick<StepRecord, "ok" | "output" | "error" | "exitCode" | "sessionId" | "costUsd" | "agent" | "tokens">;
+export type StepResult = Pick<StepRecord, "ok" | "output" | "error" | "exitCode" | "sessionId" | "costUsd" | "agent" | "tokens" | "limited">;
 
 export function stepEnv(scope: Scope, engine: Engine): Record<string, string> {
   const env: Record<string, string> = { ...engine.baseEnv };

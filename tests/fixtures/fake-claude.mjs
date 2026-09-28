@@ -21,7 +21,7 @@ for (const line of prompt.split("\n")) {
   if (line === "SHOWENV") result = `base=${process.env.ANTHROPIC_BASE_URL ?? ""} token=${process.env.ANTHROPIC_AUTH_TOKEN ?? ""} haiku=${process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL ?? ""} args=${args.join(" ")}`;
 }
 if (prompt.includes("CLAUDE_LIMIT")) {
-  emit({ type: "result", subtype: "success", is_error: true, result: "Claude AI usage limit reached|1760000000", session_id: "s", total_cost_usd: 0, num_turns: 1 });
+  emit({ type: "result", subtype: "success", is_error: true, result: "You've hit your limit · resets 3:50pm (Europe/Amsterdam)", session_id: "s", total_cost_usd: 0, num_turns: 1 });
   process.exit(1);
 }
 // Canned answers for the built-in blocks, so whole flows can run offline.

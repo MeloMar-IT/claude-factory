@@ -66,7 +66,13 @@ const APPROVE_RE = /^\s*\/(approve|reject)\b[ \t]*(.*)$/im;
 
 /** Stopped for a reason that clears by itself: daily budget, or a `wait_*` step (e.g. waiting for a PR merge). */
 function isPaused(s: RunSummary): boolean {
-  return /daily budget|stopped at step "(?:[\w-]+\/)*wait_/.test(s.reason ?? "");
+  return /daily budget|usage limit reached|stopped at step "(?:[\w-]+\/)*wait_/.test(s.reason ?? "");
+}
+
+/** Usage limits reset after a while; try a limited run again at most every 30 minutes. */
+export const LIMIT_RETRY_MS = 30 * 60_000;
+function retryLimitAfter(s: RunSummary): boolean {
+  return Date.now() - new Date(s.finishedAt ?? s.startedAt).getTime() >= LIMIT_RETRY_MS;
 }
 
 function labelFor(s: RunSummary, L: LabelNames): string {
@@ -327,9 +333,10 @@ export class Watcher {
         if (!run) continue;
         const resumable = run.status === "cancelled" || /interrupted/.test(run.reason ?? "") ||
           (run.status === "stopped" && /daily budget/.test(run.reason ?? "") && budgetLeft) ||
-          (run.status === "stopped" && isPaused(run) && !/daily budget/.test(run.reason ?? "") && !paused);
+          (run.status === "stopped" && /usage limit reached/.test(run.reason ?? "") && retryLimitAfter(run)) ||
+          (run.status === "stopped" && isPaused(run) && !/daily budget|usage limit reached/.test(run.reason ?? "") && !paused);
         if (resumable && started < this.cfg.max_per_tick) {
-          this.resume(n, run.runId, run.status !== "stopped" ? "was interrupted" : /daily budget/.test(run.reason ?? "") ? "budget available again" : "can continue now");
+          this.resume(n, run.runId, run.status !== "stopped" ? "was interrupted" : /daily budget/.test(run.reason ?? "") ? "budget available again" : /usage limit/.test(run.reason ?? "") ? "trying again after the usage limit" : "can continue now");
           this.labelWhenDone(n, run.runId);
           started++;
         } else if (!resumable && labelFor(run, this.L) !== this.L.working) {

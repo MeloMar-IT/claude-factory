@@ -160,6 +160,35 @@ steps:
     expect(s.history[0]!.output).toBe("from codex");
   });
 
+  it("pauses the run on a usage limit when no fallback is left, and resumes where it stopped", async () => {
+    const flow = `
+name: t
+workspace: inplace
+steps:
+  - {id: a, type: shell, run: echo before}
+  - {id: b, type: claude, prompt: "{{vars.p}}"}
+`;
+    const s = await runFlow(parseFlow(flow), { task: "t", repo, runsDir, claudeBin, config: cfg(), vars: { p: "CLAUDE_LIMIT" } });
+    expect(s.status).toBe("stopped");
+    expect(s.reason).toMatch(/^usage limit reached: You've hit your limit .* continues automatically/);
+    expect(s.state.next).toBe("b");
+    const r = await resumeRun({ runId: s.runId, runsDir, claudeBin, config: cfg() });
+    expect(r.status).toBe("stopped"); // still limited (same prompt) — but no visits were used up
+    expect(r.state.visits.b ?? 0).toBe(0);
+  });
+
+  it("does not treat a long answer that mentions quota as a limit", async () => {
+    const long = "x".repeat(500);
+    const s = await start(`
+name: t
+workspace: inplace
+steps:
+  - {id: a, type: claude, prompt: "SAY quota exceeded ${long}", pass_if: NEVER}
+`, cfg({ router: { fallback: ["codex"] } }));
+    expect(s.status).toBe("failed");
+    expect(s.history).toHaveLength(1);
+  });
+
   it("does not fall back on ordinary failures", async () => {
     const s = await start(`
 name: t

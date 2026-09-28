@@ -96,9 +96,10 @@ export async function runAgentStep(step: ClaudeStep, scope: Scope, engine: Engin
   for (;;) {
     tried.add(target.label);
     const r = await runOn(target, step, scope, engine, logFile, timeoutMs);
-    if (r.ok || engine.signal?.aborted || !isLimitError(`${r.error ?? ""}\n${r.output}`)) return r;
+    if (r.ok || engine.signal?.aborted || !isLimitError(r.error, r.output)) return r;
     const next = fallbacks.find((t) => !tried.has(t.label));
-    if (!next) return r;
+    // No model left to try: the loop pauses the run until the limit resets.
+    if (!next) return { ...r, limited: true, error: `usage limit reached: ${r.output.trim().split("\n")[0] || r.error}` };
     engine.log(`    ↪ ${target.label} hit a limit — retrying on ${next.label}`);
     engine.summary.totalCostUsd += r.costUsd ?? 0;
     target = next;

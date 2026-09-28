@@ -472,7 +472,8 @@ write("issue-plan", {
       id: "daily_branch",
       type: "shell",
       description: "Clone, then check out today's branch — or wait while the daily PR is unmerged",
-      run: 'if [ -d .git ]; then git fetch -q origin; else gh repo clone "$FACTORY_VAR_GITHUB_REPO" . -- -q; fi\n"$FACTORY_TOOLS/daily-branch" prepare',
+      // On a resume or retry, throw away half-done work from the failed attempt first.
+      run: 'if [ -d .git ]; then git reset -q --hard && git clean -qfd && git fetch -q origin; else gh repo clone "$FACTORY_VAR_GITHUB_REPO" . -- -q; fi\n"$FACTORY_TOOLS/daily-branch" prepare',
       routes: [{ if: "^WAIT:", goto: "wait_for_merge" }],
     },
     { ...tests("baseline_tests", "baseline_failed")[0], description: "Tests must pass before we change anything", on_failure: "baseline_failed" },

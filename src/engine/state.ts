@@ -17,6 +17,8 @@ export interface StepRecord {
   /** Agent step target, e.g. "codex:openai:gpt-5". */
   agent?: string;
   tokens?: { input: number; output: number };
+  /** The agent hit a usage/rate limit and no fallback model could take over. */
+  limited?: boolean;
   startedAt: string;
   durationMs: number;
   logFile: string;
