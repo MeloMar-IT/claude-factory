@@ -63,6 +63,16 @@ describe("watcher", () => {
     expect(runFor("5").status).toBe("succeeded");
   });
 
+  it("starts an issue that has the working label but never got a run", async () => {
+    issues([4, "factory:working"]);
+    const w = watcher();
+    await w.tick();
+    await settle();
+    expect(w.status.lastError).toBeUndefined();
+    expect(runFor("4").status).toBe("succeeded");
+    expect(gh.ghLog()).toMatch(/gh issue edit 4 .*--add-label factory:done/);
+  });
+
   it("asks for info, then resumes the same run once someone answers", async () => {
     process.env.FAKE_PLAN = "Which DB?\nPLAN_STATUS: NEEDS_INFO";
     issues([4]);

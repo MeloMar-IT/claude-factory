@@ -323,14 +323,15 @@ export class Watcher {
       const status = issue.labels.map((l) => l.name).find((l) => this.allStatus.includes(l));
       const run = runs.get(String(n));
 
-      if (!status) {
+      if (!status || (status === this.L.working && !run)) {
+        // No run yet — also when the working label is left over from a start that failed.
         if (started >= this.cfg.max_per_tick || !budgetLeft || paused) continue;
+        const runId = this.startNew(issue);
         await setLabels(this.repo, n, this.L.working, this.allStatus);
-        this.labelWhenDone(n, this.startNew(issue));
+        this.labelWhenDone(n, runId);
         started++;
-      } else if (status === this.L.working) {
+      } else if (status === this.L.working && run) {
         // Reconcile: the label says working but nothing is running (restart, crash, budget pause).
-        if (!run) continue;
         const resumable = run.status === "cancelled" || /interrupted/.test(run.reason ?? "") ||
           (run.status === "stopped" && /daily budget/.test(run.reason ?? "") && budgetLeft) ||
           (run.status === "stopped" && /usage limit reached/.test(run.reason ?? "") && retryLimitAfter(run)) ||
