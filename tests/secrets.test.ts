@@ -49,6 +49,16 @@ describe("secret-scan", () => {
     expect(r.stderr).not.toContain(GH_TOKEN);
   });
 
+  it("flags a private key only when key data follows the header", () => {
+    const body = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7" + "x".repeat(20);
+    commit("src/gen.java", 'write("-----BEGIN PRIVATE KEY-----\\n" + encode(generated.getPrivate()) + "\\n-----END PRIVATE KEY-----\\n");\n');
+    expect(scan().status).toBe(0);
+    commit("config/key.txt", `-----BEGIN PRIVATE KEY-----\n${body}\n-----END PRIVATE KEY-----\n`);
+    const r = scan();
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("config/key.txt:1  private key");
+  });
+
   it("honours inline and file allow-lists", () => {
     commit("test/fixture.js", `const t = "${GH_TOKEN}"; // factory:allow-secret\n`);
     expect(scan("HEAD~1..HEAD").status).toBe(0);
