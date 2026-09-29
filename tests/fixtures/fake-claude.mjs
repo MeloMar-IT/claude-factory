@@ -26,6 +26,7 @@ if (prompt.includes("CLAUDE_LIMIT")) {
 }
 // Canned answers for the built-in blocks, so whole flows can run offline.
 let canned;
+let cost = 0.01;
 if (prompt.includes("You triage tickets")) canned = process.env.FAKE_TRIAGE ?? "Small change.\nROUTE: SMALL";
 else if (prompt.includes("PLAN_STATUS: NEEDS_INFO")) canned = process.env.FAKE_PLAN ?? "1. change feature.txt\nPLAN_STATUS: READY";
 else if (prompt.includes("VERDICT: APPROVE")) canned = "Looks good.\nVERDICT: APPROVE";
@@ -41,10 +42,11 @@ else if (prompt.includes("CI failed on this branch")) {
     writeFileSync("chore.txt", "done\n");
     canned = "- bumped a dependency";
   }
+} else if (prompt.includes("Check each review point in the code")) {
+  if (process.env.FAKE_REVISE_COST) cost = Number(process.env.FAKE_REVISE_COST);
+  canned = process.env.FAKE_REVISE ?? "## Goal\nAdd feature.txt (revised)\n## Review notes\n- adopted: add an edge-case test\nPLAN_STATUS: READY";
 } else if (prompt.includes("architect for this repository")) {
   canned = process.env.FAKE_ISSUE_PLAN ?? "## Goal\nAdd feature.txt\n## Tests\nfeature test\nPLAN_STATUS: READY";
-} else if (prompt.includes("Another reviewer checked your plan")) {
-  canned = "## Goal\nAdd feature.txt (revised)\n## Review notes\n- adopted: add an edge-case test\nPLAN_STATUS: READY";
 } else if (prompt.includes("Implement GitHub issue below")) {
   const issue = /# #(\d+):/.exec(prompt)?.[1] ?? "?";
   writeFileSync("feature.txt", process.env.FAKE_IMPL_BUG ? "BUG\n" : `implemented #${issue}\n`);
@@ -76,7 +78,7 @@ emit({
   is_error: isError,
   result: canned ?? `${result}\nPROMPT<<${prompt}>>`,
   session_id: args.includes("--resume") ? resumed : `sess-${Math.random().toString(36).slice(2, 8)}`,
-  total_cost_usd: 0.01,
+  total_cost_usd: cost,
   num_turns: 1,
 });
 process.exit(isError ? 1 : 0);

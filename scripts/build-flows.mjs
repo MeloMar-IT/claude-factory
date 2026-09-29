@@ -292,8 +292,13 @@ const clone = {
   run: 'if [ -d .git ]; then git fetch -q origin; else gh repo clone "$FACTORY_VAR_GITHUB_REPO" . -- -q; fi\ngit log --oneline -1',
 };
 
-// The plan text: the revised plan when there is one, else the first draft.
+// The plan text: the revised plan when it finished as READY, else the first draft.
 const PLAN_OUT = '"${FACTORY_OUT_REVISE_PLAN:-$FACTORY_OUT_PLAN}"';
+const PICK_PLAN = [
+  'out="$FACTORY_OUT_PLAN"; notes=""',
+  'if printf \'%s\\n\' "$FACTORY_OUT_REVISE_PLAN" | grep -q "^PLAN_STATUS: READY"; then out="$FACTORY_OUT_REVISE_PLAN"',
+  'elif [ -n "$FACTORY_OUT_PLAN_REVIEW" ]; then notes="$FACTORY_OUT_PLAN_REVIEW"; fi',
+].join("\n");
 
 write("issue-plan", {
   title: "Plan a GitHub issue and post the plan (label-driven)",
@@ -303,18 +308,24 @@ write("issue-plan", {
     "",
     "pull ticket → clone → plan (Opus 5.5, xhigh effort, read-only)",
     "  ─┬─ READY → Codex checks the plan against the code ─┬─ approved → post plan → done",
-    "   │                                                  └─ issues → Opus revises → post plan → done",
+    "   │                                                  └─ issues → Opus revises (fresh, targeted) → post plan → done",
+    "   │     (if the revision fails or the budget runs out, the draft is posted with Codex's notes)",
     "   └─ NEEDS_INFO / NOT_CODE / TOO_BIG → post why → stop (resumes and re-plans when you reply)",
   ],
 }, {
   description: "Plan an issue with Opus (xhigh effort), have Codex check it against the code, revise, post; send back unclear/non-code/too-big issues",
   workspace: "empty",
   defaults: { timeout_sec: 2400 },
-  limits: { max_cost_usd: 8 },
+  limits: { max_cost_usd: 10 },
   vars: { github_repo: "owner/repo", issue: "", code_label: "Factory_code", ready_label: "Factory_ready", forbidden_paths: "" },
   steps: [
     ...steps("pull-ticket"),
-    clone,
+    {
+      ...clone,
+      description: "Clone, then check out the newest daily branch that is not in main yet (so the plan sees unmerged work)",
+      run: clone.run + '\nb=$("$FACTORY_TOOLS/daily-branch" latest 2>/dev/null || echo NONE)\n' +
+        'if [ "$b" != NONE ] && git checkout -q --detach "origin/$b"; then echo "Code: main plus unmerged work on $b"; else echo "Code: main"; fi',
+    },
     {
       id: "plan",
       type: "claude",
@@ -328,8 +339,10 @@ write("issue-plan", {
         "",
         "{{steps.pull_ticket.output}}",
         "",
+        "{{steps.clone.output}}",
         "Paths that must not be changed: {{vars.forbidden_paths}}",
-        "Earlier comments may contain a previous plan and feedback on it — the feedback wins.",
+        "The issue text above already includes all of its comments — do not try to fetch them (gh and web",
+        "access are not available here). They may contain a previous plan and feedback on it — the feedback wins.",
         "",
         "Investigate before you write (this is the most important part):",
         "- Read CLAUDE.md, the design docs it points to, and the parts of the code this issue touches.",
@@ -395,22 +408,34 @@ write("issue-plan", {
       type: "claude",
       model: "claude-opus-5-5",
       effort: "xhigh",
-      resume: "plan",
       jump_only: true,
+      description: "Fresh session: check only the reviewer's points, then write the final plan (falls back to the draft on failure)",
       permission_mode: "dontAsk",
       allowed_tools: ["Read", "Glob", "Grep", "Bash(git log*)", "Bash(git show*)", "Bash(git grep*)", "Bash(ls*)"],
       prompt: [
-        "Another reviewer checked your plan against the code. Verify each point in the code; adopt the ones",
-        "that are right and ignore the ones that are wrong. Then output the complete final plan (all",
-        "sections, not just the changes), followed by a short \"## Review notes\" section listing which",
-        "points you adopted and which you rejected, with one line why.",
+        "You are the lead architect for this repository. Below are a GitHub issue, the implementation plan",
+        "you drafted for it, and a second reviewer's check of that plan against the code. Do NOT modify files.",
         "",
+        "Check each review point in the code: open only the files needed to confirm or refute that point —",
+        "the rest of the draft was already verified, do not re-investigate it. Adopt the points that are right",
+        "and ignore the ones that are wrong. Then output the complete final plan (all sections, not just the",
+        "changes), followed by a short \"## Review notes\" section listing which points you adopted and which you",
+        "rejected, with one line why.",
+        "",
+        "{{steps.pull_ticket.output}}",
+        "",
+        "=== YOUR DRAFT PLAN ===",
+        "{{steps.plan.output}}",
+        "",
+        "=== REVIEW ===",
         "{{steps.plan_review.output}}",
         "",
         "End with exactly one line: PLAN_STATUS: READY | NEEDS_INFO | NOT_CODE | TOO_BIG",
       ].join("\n"),
-      routes: [{ if: "^PLAN_STATUS: READY\\s*$", goto: "post_plan" }],
-      on_success: "send_back",
+      // READY → post it; another status → send back; no status (cut off) or a failure → post the draft.
+      routes: [{ if: "^PLAN_STATUS: READY\\s*$", goto: "post_plan" }, { if: "^PLAN_STATUS: [A-Z_]+\\s*$", goto: "send_back" }],
+      on_success: "post_plan",
+      on_failure: "post_plan",
     },
     {
       id: "send_back",
@@ -440,10 +465,13 @@ write("issue-plan", {
       type: "shell",
       jump_only: true,
       run: [
-        `out=${PLAN_OUT}`,
+        PICK_PLAN,
         'reviewed=""; [ -n "$FACTORY_OUT_PLAN_REVIEW" ] && reviewed=" (checked against the code by Codex)"',
+        '[ -n "$notes" ] && reviewed=" (draft — the revision did not finish; Codex\'s review notes are below)"',
         '{ echo "🤖 **claude-factory plan**$reviewed"; echo',
         '  printf \'%s\\n\' "$out" | sed \'/^PLAN_STATUS:/d\'',
+        '  if [ -n "$notes" ]; then echo; echo "## Codex review notes (not yet worked in)"; echo',
+        '    printf \'%s\\n\' "$notes" | sed \'/^VERDICT:/d\'; fi',
         '  echo; echo "_Add the \\`$FACTORY_VAR_CODE_LABEL\\` label to start coding. To change the plan, comment what to change,"',
         '  echo "remove the planned label and add \\`$FACTORY_VAR_READY_LABEL\\` again._"',
         '  echo; echo "<!-- claude-factory run=$FACTORY_RUN_ID plan -->"; } \\',

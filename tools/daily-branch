@@ -5,6 +5,7 @@
 //   daily-branch prepare               check out today's branch → prints "BRANCH: <name>", or
 //                                      "WAIT: <why>" when a daily PR is open (or had to be opened)
 //   daily-branch pending               daily branches with commits and no PR yet, newest first ("NONE" if none)
+//   daily-branch latest                newest daily branch not yet in main (no PR, or its PR still open), or "NONE"
 //   daily-branch open-pr <branch> [--draft] [--note-file <file>]
 //                                      open the PR to main; body lists the issues ("Closes #N")
 //
@@ -83,6 +84,10 @@ const [cmd, ...rest] = process.argv.slice(2);
 if (cmd === "pending") {
   const { pending } = state();
   console.log(pending.length ? pending.join("\n") : "NONE");
+} else if (cmd === "latest") {
+  const { branches, prs, pending } = state();
+  const open = branches.filter((b) => pending.includes(b) || prs.some((p) => p.headRefName === b && p.state === "OPEN"));
+  console.log(open[0] ?? "NONE");
 } else if (cmd === "open-pr") {
   const branch = rest[0];
   if (!branch?.startsWith(prefix)) fail(`open-pr needs a ${prefix}* branch`);
@@ -116,5 +121,5 @@ if (cmd === "pending") {
   }
   fail("no free branch name for today");
 } else {
-  fail("usage: daily-branch prepare | pending | open-pr <branch> [--draft] [--note-file f]");
+  fail("usage: daily-branch prepare | pending | latest | open-pr <branch> [--draft] [--note-file f]");
 }

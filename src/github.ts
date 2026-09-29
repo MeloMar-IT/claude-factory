@@ -29,6 +29,8 @@ export interface Issue {
   number: number;
   title: string;
   labels: { name: string }[];
+  body?: string;
+  state?: string;
 }
 
 export const isBot = (c: { body: string }) => c.body.includes(BOT_MARKER);

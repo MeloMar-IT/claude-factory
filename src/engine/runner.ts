@@ -263,7 +263,9 @@ async function loop(engine: Engine, scope: Scope, startAt: string | null, runsDi
     const runCap = summary.flowDef.limits.max_cost_usd;
     const overRun = runCap !== undefined && summary.totalCostUsd >= runCap;
     const overDay = config.daily_budget_usd !== undefined && spentToday(runsDir) >= config.daily_budget_usd;
-    if ((overRun || overDay) && !engine.budgetFallback) {
+    // Shell and approval steps cost nothing, so they still run (e.g. posting what was already paid for).
+    const costsMoney = step.type !== "shell" && step.type !== "approval";
+    if (costsMoney && (overRun || overDay) && !engine.budgetFallback) {
       const free = config.router.fallback_on.includes("budget") ? fallbackTargets(config, (t) => t.free)[0] : undefined;
       if (free) {
         engine.budgetFallback = free;

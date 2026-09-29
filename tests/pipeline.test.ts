@@ -28,7 +28,7 @@ describe("label-driven issue pipeline", () => {
   beforeEach(() => {
     gh = fakeGithub();
     scheduler = new Scheduler({ runsDir: runsDir(), config: () => config, claudeBin });
-    for (const k of ["FAKE_IMPL_BUG", "FAKE_FIX_NOOP", "FAKE_CODEX_VERDICT", "FAKE_ISSUE_PLAN"]) delete process.env[k];
+    for (const k of ["FAKE_IMPL_BUG", "FAKE_FIX_NOOP", "FAKE_CODEX_VERDICT", "FAKE_ISSUE_PLAN", "FAKE_REVISE", "FAKE_REVISE_COST"]) delete process.env[k];
   });
   afterEach(() => gh.restore());
 
@@ -78,11 +78,51 @@ describe("label-driven issue pipeline", () => {
     expect(run.history.map((h) => h.id)).toEqual(["pull_ticket", "clone", "plan", "plan_review", "revise_plan", "post_plan"]);
     expect(run.history.find((h) => h.id === "plan")!.agent).toBe("claude:anthropic:claude-opus-5-5");
     expect(run.history.find((h) => h.id === "plan_review")!.agent).toBe("codex:openai");
-    // The revision continues the planning session.
-    expect(run.history.find((h) => h.id === "revise_plan")!.sessionId).toBe(run.history.find((h) => h.id === "plan")!.sessionId);
+    // The revision is a fresh, targeted session (cheaper than replaying the planning session).
+    expect(run.history.find((h) => h.id === "revise_plan")!.sessionId).not.toBe(run.history.find((h) => h.id === "plan")!.sessionId);
     const log = gh.ghLog();
     expect(log).toContain("claude-factory plan** (checked against the code by Codex)");
     expect(log).toContain("Add feature.txt (revised)");
+  });
+
+  it("posts the draft with Codex's notes when the revision uses up the budget", async () => {
+    process.env.FAKE_CODEX_VERDICT = "The plan misses an edge case.\nVERDICT: CHANGES";
+    process.env.FAKE_REVISE_COST = "50";
+    process.env.FAKE_REVISE = "half a plan";
+    issues([5, ["Factory_ready"]]);
+    await planWatcher().tick();
+    await settle();
+    const run = runOf("issue-plan", "5")!;
+    expect(run.history.map((h) => h.id)).toEqual(["pull_ticket", "clone", "plan", "plan_review", "revise_plan", "post_plan"]);
+    expect(run.status).toBe("succeeded");
+    const log = gh.ghLog();
+    expect(log).toContain("the revision did not finish");
+    expect(log).toContain("## Goal\nAdd feature.txt\n");
+    expect(log).toContain("## Codex review notes (not yet worked in)\n\nThe plan misses an edge case.");
+    expect(log).not.toContain("half a plan");
+  });
+
+  it("waits to plan an issue until the story it depends on is done", async () => {
+    const body = (dep: string) => `Do it.\n\n### Depends on\n${dep}\n\n### Notes\nnone`;
+    process.env.FAKE_GH_ISSUES = JSON.stringify([
+      { number: 4, title: "Story 4 — Download", state: "OPEN", labels: [{ name: "Factory_code" }], body: "" },
+      { number: 5, title: "Story 5 — Verify", state: "OPEN", labels: [{ name: "Factory_ready" }], body: body("Story 4 — Download.") },
+      { number: 6, title: "Story 6 — Install", state: "OPEN", labels: [{ name: "Factory_ready" }], body: body("#3") },
+    ]);
+    const w = new Watcher(WatcherSchema.parse({
+      id: "plan", github_repo: REPO, label: "Factory_ready", flow: "issue-plan", max_per_tick: 5,
+      status_labels: { ...LABELS, working: "Factory_planning", done: "Factory_planned" }, dependency_done_labels: ["Factory_done"], vars: VARS,
+    }), { scheduler, runsDir: runsDir(), repo: gh.tmp, log: () => {} });
+    await w.tick();
+    await settle();
+    expect(runOf("issue-plan", "5")).toBeUndefined();
+    expect(w.status.lastActions.join("\n")).toContain("#5 waits for #4");
+    expect(runOf("issue-plan", "6")?.status).toBe("succeeded"); // #3 is not a known issue: not blocking
+    // Story 4 is coded (Factory_done, not merged yet): now Story 5 can be planned.
+    process.env.FAKE_GH_ISSUES = process.env.FAKE_GH_ISSUES.replace('"Factory_code"', '"Factory_done"');
+    await w.tick();
+    await settle();
+    expect(runOf("issue-plan", "5")?.status).toBe("succeeded");
   });
 
   it("sends non-code issues back with the reason and stops", async () => {

@@ -357,7 +357,7 @@ flowchart LR
 
 | Label | Add it when… | What happens |
 |---|---|---|
-| **`Factory_ready`** | the issue describes the work well enough to plan | Opus investigates the code and writes a plan; Codex checks it against the code; the plan is posted on the issue |
+| **`Factory_ready`** | the issue describes the work well enough to plan | Opus investigates the code and writes a plan; Codex checks it against the code; Opus works in Codex's points; the plan is posted on the issue (if the revision fails or runs out of budget, the draft is posted with Codex's notes) |
 | **`Factory_code`** | you have read the plan and agree with it (comment first if you want changes in it) | Sonnet implements the plan on today's branch, with tests, two Codex review rounds and documentation, and reports on the issue |
 
 #### Labels the factory sets
@@ -397,6 +397,13 @@ Issues with an excluded label (e.g. `geni`) are never picked up, whatever other 
 - **The issue still has a status label** from an earlier round (e.g. `Factory_planned` when you
   add `Factory_ready` again) — remove it.
 - **It has an excluded label** such as `geni`.
+- **It waits for another issue.** If the issue has a **Depends on** (or **Blocked by**) line or
+  section, it isn't planned or coded until those issues are done — closed, or labelled
+  `Factory_done` (coded, waiting in the daily pull request). You can name them as `#72` or by
+  title (`Story 4 — Download the update safely`). The watcher shows "#73 waits for #72" on the
+  Admin page. So you can put `Factory_ready` on a whole chain of stories at once; they are
+  planned one after the other, each on top of the code of the one before it (planning uses the
+  newest unmerged daily branch, not just `main`).
 
 #### Branches and the daily pull request
 

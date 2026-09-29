@@ -2,6 +2,7 @@ import type { WatcherConfig } from "../config.js";
 import { spentToday, type RunSummary } from "../engine/state.js";
 import { loadFlow } from "../flow/load.js";
 import { canWrite, commentsAfter, ensureLabel, gh, ghJson, isBot, issueComments, setLabels, type Comment, type Issue } from "../github.js";
+import { dependencies, openDependencies } from "./deps.js";
 import type { Scheduler } from "./scheduler.js";
 
 /** Status labels the watcher puts on issues. Remove one to have the issue picked up again. */
@@ -308,7 +309,13 @@ export class Watcher {
   }
 
   private async tickIssues() {
-    const issues = await ghJson<Issue[]>(["issue", "list", "--repo", this.repo, "--label", this.cfg.label, "--state", "open", "--limit", "100", "--json", "number,title,labels"]);
+    const issues = await ghJson<Issue[]>(["issue", "list", "--repo", this.repo, "--label", this.cfg.label, "--state", "open", "--limit", "100", "--json", "number,title,labels,body"]);
+    let everyIssue: Issue[] | undefined; // all issues, fetched once per tick when a dependency must be checked
+    const blockedBy = async (issue: Issue) => {
+      if (!this.cfg.wait_for_dependencies || !/depends\s+on|blocked\s+by/i.test(issue.body ?? "")) return [];
+      everyIssue ??= await ghJson<Issue[]>(["issue", "list", "--repo", this.repo, "--state", "all", "--limit", "500", "--json", "number,title,labels,state"]);
+      return openDependencies(dependencies(issue.body ?? "", issue.number, everyIssue), everyIssue, this.cfg.dependency_done_labels);
+    };
     const runs = this.latestRuns("issue");
     const budgetLeft = this.budgetLeft();
     let started = 0;
@@ -326,6 +333,12 @@ export class Watcher {
       if (!status || (status === this.L.working && !run)) {
         // No run yet — also when the working label is left over from a start that failed.
         if (started >= this.cfg.max_per_tick || !budgetLeft || paused) continue;
+        const blockers = await blockedBy(issue);
+        if (blockers.length) {
+          const msg = `#${n} waits for ${blockers.map((b) => `#${b}`).join(", ")} (depends on)`;
+          if (!this.status.lastActions.some((a) => a.endsWith(msg))) this.act(msg);
+          continue;
+        }
         const runId = this.startNew(issue);
         await setLabels(this.repo, n, this.L.working, this.allStatus);
         this.labelWhenDone(n, runId);

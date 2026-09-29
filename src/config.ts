@@ -31,6 +31,10 @@ const WatcherSchema = z
       .partial()
       .strict()
       .default({}),
+    /** issues: don't start an issue while an issue named under "Depends on" / "Blocked by" is not done. */
+    wait_for_dependencies: z.boolean().default(true),
+    /** issues: a dependency also counts as done (besides closed) when it has one of these labels. */
+    dependency_done_labels: z.array(z.string()).default([]),
     /** issues: labels to remove when a run succeeds (e.g. the trigger label). */
     remove_on_done: z.array(z.string()).default([]),
     /** issues: post the failure reason and the failing step's output on the issue. */
