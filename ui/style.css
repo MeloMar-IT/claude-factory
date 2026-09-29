@@ -281,3 +281,10 @@ pre.diff .file { font-weight: 700; display: block; }
   .top { gap: 10px; overflow-x: auto; }
   .route { grid-template-columns: 1fr 1fr; }
 }
+
+/* Why issues are waiting (Dashboard, Admin watcher cards) */
+.holds { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 4px; font-size: 13px; }
+.holds li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px; }
+.holds .hold-title { font-weight: 500; }
+.holds .hold-link { margin-left: 8px; font-size: 12.5px; }
+.hold-group + .hold-group { margin-top: 12px; }

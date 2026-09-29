@@ -61,6 +61,16 @@ export interface WatcherStatus {
   nextTick?: string;
   lastError?: string;
   lastActions: string[];
+  /** Why issues with the trigger label are not being started right now (rebuilt every check). */
+  holds?: Hold[];
+}
+
+export interface Hold {
+  issue?: number;
+  title?: string;
+  reason: string;
+  /** Link to what it waits for (e.g. the daily pull request). */
+  url?: string;
 }
 
 const APPROVE_RE = /^\s*\/(approve|reject)\b[ \t]*(.*)$/im;
@@ -285,12 +295,12 @@ export class Watcher {
   }
 
   /** An open PR whose head branch starts with pause_while_pr_open (then start nothing new). */
-  private async pausingPr(): Promise<string | undefined> {
+  private async pausingPr(): Promise<{ text: string; number: number; url?: string } | undefined> {
     const prefix = this.cfg.pause_while_pr_open;
     if (!prefix) return undefined;
-    const prs = await ghJson<{ number: number; headRefName: string; state: string }[]>(["pr", "list", "--repo", this.repo, "--state", "open", "--limit", "100", "--json", "number,headRefName,state"]);
+    const prs = await ghJson<{ number: number; headRefName: string; state: string; url?: string }[]>(["pr", "list", "--repo", this.repo, "--state", "open", "--limit", "100", "--json", "number,headRefName,state,url"]);
     const pr = prs.find((p) => p.state === "OPEN" && p.headRefName.startsWith(prefix));
-    return pr ? `PR #${pr.number} (${pr.headRefName})` : undefined;
+    return pr ? { text: `PR #${pr.number} (${pr.headRefName})`, number: pr.number, url: pr.url } : undefined;
   }
 
   private startNew(issue: Issue) {
@@ -321,7 +331,8 @@ export class Watcher {
     let started = 0;
     const excluded = new Set(this.cfg.exclude_labels);
     const paused = await this.pausingPr();
-    if (paused && this.status.lastActions[0]?.includes(paused) !== true) this.act(`not starting new work while ${paused} is open`);
+    if (paused && this.status.lastActions[0]?.includes(paused.text) !== true) this.act(`not starting new work while ${paused.text} is open`);
+    const holds: Hold[] = [];
 
     for (const issue of issues.sort((a, b) => a.number - b.number)) {
       const n = issue.number;
@@ -332,13 +343,17 @@ export class Watcher {
 
       if (!status || (status === this.L.working && !run)) {
         // No run yet — also when the working label is left over from a start that failed.
-        if (started >= this.cfg.max_per_tick || !budgetLeft || paused) continue;
         const blockers = await blockedBy(issue);
+        const hold = (reason: string, url?: string) => holds.push({ issue: n, title: issue.title, reason, url });
         if (blockers.length) {
           const msg = `#${n} waits for ${blockers.map((b) => `#${b}`).join(", ")} (depends on)`;
           if (!this.status.lastActions.some((a) => a.endsWith(msg))) this.act(msg);
+          hold(`waits for ${blockers.map((b) => `#${b}`).join(", ")} to be done (Depends on)`);
           continue;
         }
+        if (paused) { hold(`waits until daily pull request #${paused.number} is merged`, paused.url); continue; }
+        if (!budgetLeft) { hold("daily budget used up — starts tomorrow"); continue; }
+        if (started >= this.cfg.max_per_tick) { hold(`starts at the next check (${this.cfg.max_per_tick} per check)`); continue; }
         const runId = this.startNew(issue);
         await setLabels(this.repo, n, this.L.working, this.allStatus);
         this.labelWhenDone(n, runId);
@@ -365,6 +380,8 @@ export class Watcher {
           this.resume(n, run.runId, `answered by @${answers[0]!.author.login}`);
           this.labelWhenDone(n, run.runId);
           started++;
+        } else if (!answers.length) {
+          holds.push({ issue: n, title: issue.title, reason: "needs your answer — reply on the issue and it continues" });
         }
       } else if (status === this.L.waiting && run?.status === "waiting") {
         const decision = await this.findDecision(run.runId, await issueComments(this.repo, n));
@@ -372,9 +389,17 @@ export class Watcher {
           await setLabels(this.repo, n, this.L.working, this.allStatus);
           this.resume(n, run.runId, `${decision.approved ? "approved" : "rejected"} by @${decision.by}`, decision);
           this.labelWhenDone(n, run.runId);
+        } else {
+          holds.push({ issue: n, title: issue.title, reason: "waiting for /approve or /reject on the issue" });
         }
+      } else if (status === this.L.failed) {
+        holds.push({ issue: n, title: issue.title, reason: `failed — see the comment on the issue; remove ${this.L.failed} to try again` });
       }
     }
+    if (paused && !holds.some((x) => x.url === paused.url)) {
+      holds.unshift({ reason: `paused while daily pull request #${paused.number} is open — merge it to continue`, url: paused.url });
+    }
+    this.status.holds = holds;
   }
 
   /** First /approve or /reject after the run's approval request, from someone with write access. */

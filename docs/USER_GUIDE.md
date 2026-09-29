@@ -387,6 +387,10 @@ Issues with an excluded label (e.g. `geni`) are never picked up, whatever other 
 
 #### Why is nothing happening?
 
+Look at the **Dashboard**: the **Waiting** card lists every labelled issue that isn't being
+worked on right now, with the reason and a link to what it waits for (the same list is on each
+watcher's card on the **Watchers** page). The usual reasons:
+
 - **A daily pull request is still open.** No new coding starts until you merge it
   (`Factory_code` issues wait, planning continues).
 - **Another issue is being coded.** Only one coding run per repository runs at a time; the

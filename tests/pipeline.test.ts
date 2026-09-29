@@ -117,6 +117,7 @@ describe("label-driven issue pipeline", () => {
     await settle();
     expect(runOf("issue-plan", "5")).toBeUndefined();
     expect(w.status.lastActions.join("\n")).toContain("#5 waits for #4");
+    expect(w.status.holds).toEqual([{ issue: 5, title: "Story 5 — Verify", reason: "waits for #4 to be done (Depends on)" }]);
     expect(runOf("issue-plan", "6")?.status).toBe("succeeded"); // #3 is not a known issue: not blocking
     // Story 4 is coded (Factory_done, not merged yet): now Story 5 can be planned.
     process.env.FAKE_GH_ISSUES = process.env.FAKE_GH_ISSUES.replace('"Factory_code"', '"Factory_done"');
@@ -220,6 +221,7 @@ describe("label-driven issue pipeline", () => {
     await settle();
     expect(runOf("issue-code-daily", "7")).toBeUndefined();
     expect(w.status.lastActions[0]).toContain("not starting new work while PR #99");
+    expect(w.status.holds).toMatchObject([{ issue: 7, reason: "waits until daily pull request #99 is merged" }]);
 
     // … and after the merge, work continues on a fresh branch for today.
     mergePr(`factory/daily-${today}`);
