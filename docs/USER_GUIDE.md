@@ -318,21 +318,49 @@ in GitHub:
 | `factory:done` | Finished |
 | `factory:failed` | Failed; the reason is commented on the issue. Remove the label to retry |
 
-Watchers can use your own label names, skip issues with certain labels (e.g. `wontfix`), remove
-labels when done, pause while a pull request is open, and run one issue at a time. These are
-set in `~/.claude-factory/config.yaml`:
+Each watcher's card on the **Watchers** page lists the labelled issues it is *not* working on
+right now and why ("waits for #73", "needs your answer", …); the Dashboard shows the same list.
+
+More options are set in `~/.claude-factory/config.yaml` (the form keeps them when you edit the
+watcher). This is the watcher for the [one-label pipeline](#the-label-pipeline-one-label--plan--code--one-pull-request):
 
 ```yaml
 watchers:
-  - id: plan
+  - id: webshop
     source: issues
-    flow: issue-plan
+    flow: issue-deliver            # plan + risk gate + code in one run
+    precheck_flow: epic-questions  # ask all open questions for new issues first
     github_repo: acme/webshop
-    label: Factory_ready
+    label: Factory_go
     exclude_labels: [wontfix]
-    status_labels: {working: Factory_planning, done: Factory_planned, needs_info: Factory_needs_info, failed: Factory_ERROR}
-    remove_on_done: [Factory_ready]
+    status_labels: {working: Factory_working, done: Factory_done, needs_info: Factory_needs_info, waiting: Factory_waiting, failed: Factory_ERROR}
+    remove_on_done: [Factory_go]
+    one_at_a_time: true            # one issue at a time; they share the factory branch
+    dependency_done_labels: [Factory_done]
+    vars:
+      test_cmd: ./gradlew test
+      docs_required: docs/CHANGELOG.md
+      risk_threshold: "75"         # plans scoring above this wait for /approve
+  - id: webshop-report
+    source: schedule
+    flow: daily-pr                 # daily tests + build, commented on the factory PR
+    github_repo: acme/webshop
+    at: "17:00"
+    timezone: Europe/Berlin
+    task: Daily report on the factory pull request
 ```
+
+| Option | What it does |
+|---|---|
+| `exclude_labels` | Never touch issues with any of these labels |
+| `status_labels` | Your own names for the status labels above |
+| `remove_on_done` | Labels to remove when a run succeeds (e.g. the trigger label) |
+| `one_at_a_time` | Never run two of this watcher's runs at once |
+| `wait_for_dependencies` | On by default: an issue with a **Depends on** / **Blocked by** section waits until those issues are closed (or have a `dependency_done_labels` label) |
+| `dependency_done_labels` | Labels that also count as "done" for dependencies, e.g. `Factory_done` |
+| `precheck_flow` | Run this flow once over all new labelled issues before any is started (`epic-questions` asks every owner decision up front) |
+| `pause_while_pr_open` | Start nothing while a PR from a branch with this prefix is open (for the older two-label pipeline) |
+| `comment_on_failure` | On by default: post the failure reason and output on the issue |
 
 ### The label pipeline: one label → plan + code → one pull request
 
@@ -469,8 +497,13 @@ it; paused runs continue the next day. Flows can also cap one run (`limits.max_c
   step.
 - **Secret scan** — every push is checked for API keys, tokens, private keys, connection
   strings and `.env`/key files in the new commits. Findings are shown masked and the push is
-  refused. For a false positive, add `factory:allow-secret` to the line or a pattern to
-  `.claude-factory/secret-allow` in the repository.
+  refused. A private-key header only counts when key data follows it, so code (or a test) that
+  writes a PEM around a key it generates is fine. For a false positive, add
+  `factory:allow-secret` to the line or a pattern to `.claude-factory/secret-allow` in the
+  repository.
+- **Risk gate** — in `issue-deliver`, every plan gets a risk score (0–100) from Opus and from
+  Codex; above 75 (`risk_threshold`) a human must `/approve` it before any code is written. See
+  [The risk score](#the-risk-score).
 - **Sandboxing** — *Sandbox agents' shell commands* limits what agents' shell commands can
   write to the run's workspace. Shell steps marked **Run in Docker** (like the test steps) run
   in the Docker image you set, with only the workspace mounted.
@@ -511,8 +544,10 @@ Budgets use these amounts either way, so they also protect your subscription lim
 
 ![Dashboard](images/dashboard.png)
 
-Spend today and over 30 days, success rate, runs that need a human, cost per day, results per
-flow and per repository, the steps where runs fail most, and eval results.
+Spend today and over 30 days, success rate, runs that need a human, the **Waiting** card (every
+labelled issue that isn't being worked on, with the reason — "needs your answer", "waits for
+#73", "waiting for /approve" — and a link), cost per day, results per flow and per repository,
+the steps where runs fail most, and eval results.
 
 ### Evals
 
@@ -544,7 +579,7 @@ the Dashboard.
 
 | Command | What it does |
 |---|---|
-| `factory ui [--port 4777] [--no-open]` | Web UI, queue and watchers |
+| `factory ui [--port 4777] [--no-open]` | Web UI, queue and watchers. Restarts itself when a new build is installed and no run is active (set `FACTORY_NO_SUPERVISE=1` to turn that off) |
 | `factory serve [--port 4777]` | The same without opening a browser |
 | `factory service install \| uninstall \| status` | Run `factory serve` in the background (macOS) |
 | `factory run <flow> --task "…" [--var k=v] [--repo dir]` | Run a flow |
@@ -563,6 +598,17 @@ built-in ones.
 ---
 
 ## 10. Troubleshooting
+
+**Nothing is happening to an issue.** Look at the **Waiting** card on the Dashboard — it says
+why (a question, a risky plan waiting for `/approve`, a dependency, another issue being built,
+the usage limit). See also [Why is nothing happening?](#why-is-nothing-happening).
+
+**A plan is waiting for approval.** Its risk score is above 75, or the issue has
+`Factory_review_plan`. Read the plan on the issue and reply `/approve` (with notes if you like)
+or `/reject` with what to change.
+
+**The factory pull request is a draft.** The daily full test run or build failed on it; the
+failing output is in the daily report comment. It becomes ready again when a later report passes.
 
 **A watcher shows an error.** Check that `gh auth status` works in the terminal where the
 factory runs and that you have access to the repository. **Check now** on the Watchers page

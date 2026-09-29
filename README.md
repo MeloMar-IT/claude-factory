@@ -14,8 +14,11 @@ a label, a red CI build, or a schedule.
 - **Two agents, any model.** Steps run on Claude Code or Codex (with your ChatGPT login), on
   Anthropic, OpenAI or local models (Ollama, LM Studio). Routing rules pick the model per step,
   with fallbacks when a model hits a limit.
-- **Hands-off from GitHub.** Watchers turn labelled issues into plans, code and pull requests,
-  answer review comments, fix a red main branch, and run recurring chores.
+- **Hands-off from GitHub.** Put one label on an issue — or a whole epic — and the factory asks
+  its open questions up front, then plans (Opus, checked by Codex) and codes (Sonnet, two Codex
+  reviews) each issue in dependency order, into one pull request you merge when you like. Plans
+  get a 0–100 risk score; above 75 a human approves first. Watchers also answer review comments,
+  fix a red main branch, and run recurring chores.
 - **Safe by default.** Every run gets its own git worktree or clone. Pushes to protected
   branches and pushes that contain secrets are blocked. Budgets per run and per day, approval
   steps, sandboxing (Claude Code's sandbox or Docker).
