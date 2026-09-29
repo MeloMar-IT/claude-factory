@@ -10,7 +10,8 @@ case "$1 $2" in
     esac ;;
   "issue view")
     case "$*" in *"-q .title"*) echo "Add a feature" ;;
-      *"--json comments,labels"*) printf '%s' "${FAKE_GH_COMMENTS:-{\"comments\":[]\}}" ;;
+      *"--json labels --jq"*) printf '%s\n' ${FAKE_GH_ISSUE_LABELS:-} ;;
+      *"--json comments,labels"*) c=${FAKE_GH_COMMENTS:-}; [ -n "$c" ] || c='{"comments":[]}'; printf '%s' "$c" ;;
       *) printf '# #%s: Add a feature\nhttps://github.com/owner/repo/issues/%s\n\nPlease add feature.txt\n' "$3" "$3"
          if [ -n "$FAKE_GH_ISSUE_EXTRA" ]; then printf '%s\n' "$FAKE_GH_ISSUE_EXTRA"; fi ;;
     esac ;;
@@ -24,6 +25,8 @@ case "$1 $2" in
   "issue list")  printf '%s' "${FAKE_GH_ISSUES:-[]}" ;;
   "pr list")     if [ -n "$FAKE_GH_PRS" ]; then printf '%s' "$FAKE_GH_PRS"; elif [ -f "$FAKE_GH_LOG.prs.json" ]; then cat "$FAKE_GH_LOG.prs.json"; else echo '[]'; fi ;;
   "issue edit"|"label create") ;;
+  "pr edit")     echo "--- pr edit: $*" >> "$FAKE_GH_LOG"; cat >> "$FAKE_GH_LOG" ;;
+  "pr ready")    ;;
   "repo clone")  git clone -q "$FAKE_GH_REMOTE" "$4" ;;
   "pr create")   echo "--- pr body:" >> "$FAKE_GH_LOG"; cat >> "$FAKE_GH_LOG"
                  head=""; prev=""; for a in "$@"; do [ "$prev" = "--head" ] && head="$a"; prev="$a"; done

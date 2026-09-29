@@ -62,6 +62,7 @@ steps:
       Paths that must not be changed: {{vars.forbidden_paths}}
       The issue text above already includes all of its comments — do not try to fetch them (gh and web
       access are not available here). They may contain a previous plan and feedback on it — the feedback wins.
+      If earlier questions were asked and the owner replied /defaults, take the recommendations as the answers.
 
       Investigate before you write (this is the most important part):
       - Read CLAUDE.md, the design docs it points to, and the parts of the code this issue touches.

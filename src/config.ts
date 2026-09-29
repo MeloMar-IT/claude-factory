@@ -35,6 +35,11 @@ const WatcherSchema = z
     wait_for_dependencies: z.boolean().default(true),
     /** issues: a dependency also counts as done (besides closed) when it has one of these labels. */
     dependency_done_labels: z.array(z.string()).default([]),
+    /**
+     * issues: before starting new issues, run this flow once over all of them (e.g. epic-questions,
+     * which asks every owner decision up front). Issues it asks about wait for an answer.
+     */
+    precheck_flow: z.string().optional(),
     /** issues: labels to remove when a run succeeds (e.g. the trigger label). */
     remove_on_done: z.array(z.string()).default([]),
     /** issues: post the failure reason and the failing step's output on the issue. */

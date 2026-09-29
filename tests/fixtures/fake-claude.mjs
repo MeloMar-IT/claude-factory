@@ -42,6 +42,11 @@ else if (prompt.includes("CI failed on this branch")) {
     writeFileSync("chore.txt", "done\n");
     canned = "- bumped a dependency";
   }
+} else if (prompt.includes("decisions that only the owner can make")) {
+  // Epic check: questions for the issues in FAKE_QUESTIONS_FOR ("6 7"), none for the others.
+  const ask = (process.env.FAKE_QUESTIONS_FOR ?? "").split(" ");
+  canned = [...prompt.matchAll(/ISSUE #(\d+)/g)].map(([, n]) =>
+    ask.includes(n) ? `### #${n}\n**Q1. Which package format?**\ndmg or pkg\n**Recommendation:** dmg — no admin prompt` : `### #${n}\nNO_QUESTIONS`).join("\n");
 } else if (prompt.includes("Check each review point in the code")) {
   if (process.env.FAKE_REVISE_COST) cost = Number(process.env.FAKE_REVISE_COST);
   canned = process.env.FAKE_REVISE ?? "## Goal\nAdd feature.txt (revised)\n## Review notes\n- adopted: add an edge-case test\nPLAN_STATUS: READY";
@@ -70,6 +75,10 @@ else if (prompt.includes("Address the review feedback")) {
   canned = "- added feature.txt";
 }
 
+// Plans asked for a risk score get one (FAKE_RISK, default 20) before the PLAN_STATUS line.
+if (canned && prompt.includes("RISK_SCORE: <0-100>") && /PLAN_STATUS: READY/.test(canned) && !/RISK_SCORE/.test(canned)) {
+  canned = canned.replace(/PLAN_STATUS: READY/, `## Risk\nsmall\nRISK_SCORE: ${process.env.FAKE_RISK ?? 20}\nRISK_REASON: ${process.env.FAKE_RISK_REASON ?? "small local change"}\nPLAN_STATUS: READY`);
+}
 const resumed = args[args.indexOf("--resume") + 1];
 const isError = prompt.includes("ERROR");
 emit({

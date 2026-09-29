@@ -14,6 +14,8 @@ import { Scheduler } from "./queue/scheduler.js";
 import { DEFAULT_FLOWS, Watcher } from "./queue/watcher.js";
 import { installService, serviceStatus, uninstallService } from "./service.js";
 import { fileURLToPath } from "node:url";
+import { dirname } from "node:path";
+import { restartOnNewBuild, supervise } from "./supervise.js";
 
 const USAGE = `claude-factory — run custom flows of headless Claude Code + shell steps
 
@@ -240,6 +242,10 @@ async function main(argv: string[]): Promise<number> {
     case "ui": {
       const port = Number(values.port ?? 4777);
       if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("--port must be 1-65535");
+      // Run the server as a child that is restarted when a new build is installed.
+      if (process.env.FACTORY_SUPERVISED !== "1" && process.env.FACTORY_NO_SUPERVISE !== "1") {
+        return supervise(fileURLToPath(import.meta.url), process.argv.slice(2), (m) => process.stdout.write(`${new Date().toISOString()} ${m}\n`));
+      }
       const { url, ctx } = await startServer({
         repo,
         port,
@@ -248,7 +254,13 @@ async function main(argv: string[]): Promise<number> {
       });
       const n = ctx.config().watchers.filter((w) => w.enabled).length;
       process.stdout.write(`claude-factory → ${url}\n  repo: ${repo}\n  watchers: ${n}\n  Ctrl+C to stop\n`);
-      if (cmd === "ui" && !values["no-open"] && process.platform === "darwin") execFile("open", [url]);
+      if (cmd === "ui" && !values["no-open"] && !process.env.FACTORY_NO_OPEN && process.platform === "darwin") execFile("open", [url]);
+      restartOnNewBuild({
+        distDir: dirname(fileURLToPath(import.meta.url)),
+        idle: () => { const q = ctx.scheduler.queue(); return q.active.length === 0 && q.pending.length === 0; },
+        beforeExit: () => ctx.watchers.stopAll?.(),
+        log: (m) => process.stdout.write(`${new Date().toISOString()} ${m}\n`),
+      });
       return new Promise<number>(() => {}); // run until killed
     }
 

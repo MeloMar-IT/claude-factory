@@ -333,15 +333,37 @@ export class Watcher {
     const paused = await this.pausingPr();
     if (paused && this.status.lastActions[0]?.includes(paused.text) !== true) this.act(`not starting new work while ${paused.text} is open`);
     const holds: Hold[] = [];
+    const checked = this.prechecked();
+    const toCheck: Issue[] = [];
 
     for (const issue of issues.sort((a, b) => a.number - b.number)) {
       const n = issue.number;
       if (issue.labels.some((l) => excluded.has(l.name))) continue;
-      if (this.d.scheduler.isLocked(this.lockFor(n))) continue;
       const status = issue.labels.map((l) => l.name).find((l) => this.allStatus.includes(l));
       const run = runs.get(String(n));
 
-      if (!status || (status === this.L.working && !run)) {
+      // Questions asked up front (no run yet): wait for an answer, then start like a new issue.
+      let answeredEarly = false;
+      if (status === this.L.needsInfo && !run) {
+        const answers = commentsAfter(await issueComments(this.repo, n), isBot);
+        if (!answers.length) {
+          holds.push({ issue: n, title: issue.title, reason: "needs your answer — reply on the issue (or /defaults) and it continues" });
+          continue;
+        }
+        answeredEarly = true;
+      }
+      if (this.d.scheduler.isLocked(this.lockFor(n))) {
+        if (this.cfg.one_at_a_time && (!status || answeredEarly) && run?.status !== "running") {
+          holds.push({ issue: n, title: issue.title, reason: "starts when the current run is finished (one at a time)" });
+        }
+        continue;
+      }
+
+      if (!status || (status === this.L.working && !run) || answeredEarly) {
+        if (this.cfg.precheck_flow && !status && !run && !checked.has(n)) {
+          toCheck.push(issue);
+          continue;
+        }
         // No run yet — also when the working label is left over from a start that failed.
         const blockers = await blockedBy(issue);
         const hold = (reason: string, url?: string) => holds.push({ issue: n, title: issue.title, reason, url });
@@ -396,10 +418,39 @@ export class Watcher {
         holds.push({ issue: n, title: issue.title, reason: `failed — see the comment on the issue; remove ${this.L.failed} to try again` });
       }
     }
+    if (toCheck.length) await this.precheck(toCheck, holds, budgetLeft);
     if (paused && !holds.some((x) => x.url === paused.url)) {
       holds.unshift({ reason: `paused while daily pull request #${paused.number} is open — merge it to continue`, url: paused.url });
     }
     this.status.holds = holds;
+  }
+
+  /** Issues already covered by a finished precheck run (a failed check doesn't hold issues back). */
+  private prechecked(): Set<number> {
+    const done = new Set<number>();
+    if (!this.cfg.precheck_flow) return done;
+    for (const r of this.d.scheduler.list(1000)) {
+      if (r.flow !== this.cfg.precheck_flow || r.vars?.github_repo !== this.repo || !r.vars.issues) continue;
+      if (!["succeeded", "failed", "stopped", "cancelled"].includes(r.status)) continue;
+      for (const x of r.vars.issues.split(/[\s,]+/)) if (/^\d+$/.test(x)) done.add(Number(x));
+    }
+    return done;
+  }
+
+  /** One run over all new issues that asks the owner's open questions before any of them is built. */
+  private async precheck(list: Issue[], holds: Hold[], budgetLeft: boolean) {
+    const lockKey = `${this.repo}#precheck:${this.cfg.id}`;
+    const hold = (reason: string) => { for (const i of list) holds.push({ issue: i.number, title: i.title, reason }); };
+    if (this.d.scheduler.isLocked(lockKey)) return hold("being checked for open questions (with the other new issues)");
+    if (!budgetLeft) return hold("daily budget used up — starts tomorrow");
+    const { flow } = loadFlow(this.cfg.precheck_flow!, this.d.repo);
+    const nums = list.map((i) => i.number);
+    const runId = this.d.scheduler.submit({
+      kind: "run", flow, task: "", repo: this.d.repo,
+      vars: { ...this.cfg.vars, github_repo: this.repo, issues: nums.join(" "), needs_info_label: this.L.needsInfo },
+    }, { lockKey, source: `watcher ${this.cfg.id} precheck ${nums.map((x) => `#${x}`).join(" ")}` });
+    this.act(`checking ${nums.map((x) => `#${x}`).join(", ")} for open questions → run ${runId}`);
+    hold("being checked for open questions (with the other new issues)");
   }
 
   /** First /approve or /reject after the run's approval request, from someone with write access. */

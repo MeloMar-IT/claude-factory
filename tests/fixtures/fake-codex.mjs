@@ -30,5 +30,8 @@ for (const line of prompt.split("\n")) {
 }
 emit({ type: "item.completed", item: { id: `item_${n++}`, type: "command_execution", command: "git status", aggregated_output: "clean\n", exit_code: 0, status: "completed" } });
 if (prompt.includes("VERDICT: APPROVE")) answer = process.env.FAKE_CODEX_VERDICT ?? "Fine.\nVERDICT: APPROVE";
+if (prompt.includes("VERDICT: APPROVE") && prompt.includes("RISK_SCORE:") && process.env.FAKE_CODEX_RISK) {
+  answer = answer.replace(/(\n?VERDICT:)/, `\nRISK_SCORE: ${process.env.FAKE_CODEX_RISK}$1`);
+}
 emit({ type: "item.completed", item: { id: `item_${n++}`, type: "agent_message", text: answer } });
 emit({ type: "turn.completed", usage: { input_tokens: 1000, cached_input_tokens: 0, output_tokens: 50 } });

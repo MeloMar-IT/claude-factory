@@ -10,7 +10,7 @@ flows, automating work from GitHub, choosing models, and keeping it all safe.
 - [4. Write your own flows](#4-write-your-own-flows)
 - [5. Models, agents and routing](#5-models-agents-and-routing)
 - [6. Automate with watchers](#6-automate-with-watchers)
-  - **[Label cheat sheet: which label does what](#the-label-pipeline-plan--code--daily-pull-request)**
+  - **[Label cheat sheet: which label does what](#the-label-pipeline-one-label--plan--code--one-pull-request)**
 - [7. Settings and safety](#7-settings-and-safety)
 - [8. Costs, dashboard and evals](#8-costs-dashboard-and-evals)
 - [9. Command line](#9-command-line)
@@ -334,41 +334,61 @@ watchers:
     remove_on_done: [Factory_ready]
 ```
 
-### The label pipeline: plan → code → daily pull request
+### The label pipeline: one label → plan + code → one pull request
 
-The built-in flows `issue-plan`, `issue-code-daily` and `daily-pr` form a pipeline that you
-drive with **two labels**. Everything else is set by the factory. (Label names below are the
-ones from the example configuration; yours are whatever you set in the watchers.)
+The built-in flows `epic-questions`, `issue-deliver` and `daily-pr` form a pipeline that you
+drive with **one label**. You only step in for three things: answering questions (asked all at
+once, up front), approving **risky** plans, and merging the pull request. (Label names below are
+the ones from the example configuration; yours are whatever you set in the watcher.)
 
 ```mermaid
 flowchart LR
-    R["<b>Factory_ready</b><br/>you add it"] --> P["Factory_planning<br/>Opus plans"]
-    P -->|plan posted| PL["<b>Factory_planned</b><br/>you read the plan"]
-    P -->|question / not code / too big| NI["Factory_needs_info<br/>you reply on the issue"]
-    NI -->|your reply| P
-    PL -->|"you add <b>Factory_code</b>"| W["Factory_working<br/>coding, tests, reviews"]
-    W -->|pushed to today's branch| D["Factory_done"]
-    W -->|3 failed fix rounds or an error| E["Factory_ERROR<br/>reason on the issue"]
+    G["<b>Factory_go</b><br/>you add it (to one issue<br/>or a whole batch)"] --> Q["questions check<br/>for all new issues"]
+    Q -->|questions| NI["Factory_needs_info<br/>you reply, or /defaults"]
+    NI --> W
+    Q -->|none| W["Factory_working<br/>Opus plans → Codex checks<br/>→ risk score"]
+    W -->|"risk > 75, or label<br/>Factory_review_plan"| A["Factory_waiting<br/>you reply /approve or /reject"]
+    A -->|/approve| C
+    A -->|/reject + what to change| W
+    W -->|risk ≤ 75| C["Sonnet codes, tests,<br/>2 Codex reviews, docs"]
+    C -->|pushed| D["Factory_done<br/>in the factory pull request"]
+    C -->|3 failed fix rounds or an error| E["Factory_ERROR<br/>reason on the issue"]
     E -->|you remove the label| W
-    D -->|17:00: daily pull request| M(["merged by you →<br/>issue closes"])
+    D --> M(["you merge the PR<br/>whenever you like → issues close"])
 ```
 
-#### Labels you set
+#### The only label you set
 
 | Label | Add it when… | What happens |
 |---|---|---|
-| **`Factory_ready`** | the issue describes the work well enough to plan | Opus investigates the code and writes a plan; Codex checks it against the code; Opus works in Codex's points; the plan is posted on the issue (if the revision fails or runs out of budget, the draft is posted with Codex's notes) |
-| **`Factory_code`** | you have read the plan and agree with it (comment first if you want changes in it) | Sonnet implements the plan on today's branch, with tests, two Codex review rounds and documentation, and reports on the issue |
+| **`Factory_go`** | the issue (or a batch of issues) should be built | New issues are first checked together for questions only you can answer. Then each issue is planned **right before it is coded**, in one run: Opus plans, Codex checks the plan against the code, both give a **risk score**, the plan is posted on the issue — and coding starts straight away unless the plan is risky. |
+| `Factory_review_plan` *(optional)* | you always want to approve this issue's plan yourself | The plan waits for your `/approve`, whatever its risk score |
+
+#### The risk score
+
+Every plan gets a score from 0 to 100 from Opus, and Codex gives its own; the higher one counts.
+
+| Score | Typical change |
+|---|---|
+| 0–25 | local, well covered by tests, easy to undo |
+| 26–50 | several modules, or behaviour users see |
+| 51–75 | persistence or migrations, concurrency, public APIs or file formats, hard to test |
+| **76–100** | security or trust (signing, secrets, auth), installing/updating/deleting software or user data, irreversible steps, privacy — or assumptions the planner couldn't verify |
+
+**Above 75 a human decides:** the plan is posted with the score and the reason, and the run waits
+(label `Factory_waiting`). Reply **`/approve`** (optionally with notes for the coder) to start
+coding, or **`/reject` followed by what to change** — it then plans again with your feedback. Only
+people with write access to the repository can approve. (The threshold is the `risk_threshold`
+variable, default 75.)
 
 #### Labels the factory sets
 
 | Label | Means | What you do |
 |---|---|---|
-| `Factory_planning` | A plan is being written | Wait (a few minutes) |
-| `Factory_planned` | The plan is posted on the issue | Read it → add `Factory_code`, or comment and re-plan (below) |
-| `Factory_needs_info` | The factory asked questions, thinks it is not a coding task, or proposes splitting it | Reply on the issue — it continues by itself |
-| `Factory_working` | Coding is running, or waiting until the daily pull request is merged | Wait; follow it on the Runs page |
-| `Factory_done` | Implemented, tested, reviewed and pushed to today's branch | Nothing — it goes to `main` with the daily pull request |
+| `Factory_needs_info` | Questions for you — asked up front for the whole batch, or by the planner | Reply on the issue — or just **`/defaults`** to accept the recommendations. It continues by itself. |
+| `Factory_working` | Planning and coding are running (or paused for the usage limit) | Wait; follow it on the Runs page |
+| `Factory_waiting` | A risky plan waits for your decision | `/approve` or `/reject` + feedback on the issue |
+| `Factory_done` | Implemented, tested, reviewed and in the factory pull request | Nothing — merge the pull request when you like |
 | `Factory_ERROR` | It failed; the reason and the failing output are commented on the issue | Fix the cause if needed, then remove the label to retry |
 
 Issues with an excluded label (e.g. `geni`) are never picked up, whatever other labels they have.
@@ -377,13 +397,13 @@ Issues with an excluded label (e.g. `geni`) are never picked up, whatever other 
 
 | I want to… | Do this |
 |---|---|
-| Get a plan | Add `Factory_ready` |
-| Change the plan | Comment what should change, remove `Factory_planned`, add `Factory_ready` again |
-| Answer the factory's questions | Reply on the issue (the label is `Factory_needs_info`) |
-| Start coding | Add `Factory_code` (keep or remove `Factory_planned`, it doesn't matter) |
+| Build an issue, or a whole epic | Add `Factory_go` to each issue (select them all in GitHub's issue list → Labels). Give stories a **Depends on** section so they are built in order. |
+| Answer the questions | Reply on the issue, or `/defaults` |
+| Check a plan before it is coded | Add `Factory_review_plan` before (or together with) `Factory_go` |
+| Approve / reject a risky plan | `/approve` (+ notes), or `/reject` + what to change |
 | Retry after an error | Remove `Factory_ERROR` |
-| Stop the factory from touching an issue | Remove `Factory_ready` / `Factory_code`, or add an excluded label |
-| Get the day's work into `main` | Merge the daily pull request (opened at 17:00) |
+| Stop the factory from touching an issue | Remove `Factory_go`, or add an excluded label |
+| Get the work into `main` | Merge the factory pull request — any time |
 
 #### Why is nothing happening?
 
@@ -391,36 +411,42 @@ Look at the **Dashboard**: the **Waiting** card lists every labelled issue that 
 worked on right now, with the reason and a link to what it waits for (the same list is on each
 watcher's card on the **Watchers** page). The usual reasons:
 
-- **A daily pull request is still open.** No new coding starts until you merge it
-  (`Factory_code` issues wait, planning continues).
-- **Another issue is being coded.** Only one coding run per repository runs at a time; the
-  others wait in the queue (Runs page).
+- **It needs you:** a question (`Factory_needs_info`), a risky plan (`Factory_waiting`) or an
+  error (`Factory_ERROR`).
+- **It waits for another issue.** If the issue has a **Depends on** (or **Blocked by**) line or
+  section, it starts only when those issues are done — closed, or `Factory_done` (in the factory
+  pull request). You can name them as `#72` or by title (`Story 4 — Download the update safely`).
+  So you can put `Factory_go` on a whole chain at once; each story is planned and coded on top of
+  the code of the one before it.
+- **Another issue is being built.** One issue at a time per repository; the rest start after it.
+- **New issues are being checked for questions** (a few minutes, once per batch).
 - **The usage limit or the daily budget is reached.** Runs pause and continue by themselves
   later; the label stays `Factory_working`.
 - **The factory isn't running.** Watchers only run while `factory ui` / `factory serve` runs.
-- **The issue still has a status label** from an earlier round (e.g. `Factory_planned` when you
-  add `Factory_ready` again) — remove it.
 - **It has an excluded label** such as `geni`.
-- **It waits for another issue.** If the issue has a **Depends on** (or **Blocked by**) line or
-  section, it isn't planned or coded until those issues are done — closed, or labelled
-  `Factory_done` (coded, waiting in the daily pull request). You can name them as `#72` or by
-  title (`Story 4 — Download the update safely`). The watcher shows "#73 waits for #72" on the
-  Admin page. So you can put `Factory_ready` on a whole chain of stories at once; they are
-  planned one after the other, each on top of the code of the one before it (planning uses the
-  newest unmerged daily branch, not just `main`).
 
-#### Branches and the daily pull request
+#### Branches and the factory pull request
 
-- Each day's coding goes to one branch, `factory/daily-YYYY-MM-DD`; every issue is one commit
-  `Resolve #N: title`. Nothing is ever pushed to `main`.
-- At **17:00** the day's branch goes to `main` in one pull request that closes all its issues,
-  after a full test run and build (a draft if those fail). You review and merge it.
-- The next day's branch starts from `main` once that pull request is merged.
+- All work goes to one branch, `factory/daily-YYYY-MM-DD` (named after the day it started); every
+  issue is one commit `Resolve #N: title`. Nothing is ever pushed to `main`.
+- The **pull request is opened with the first finished issue** and grows as more are finished —
+  coding never waits for a merge. Merge it whenever you like; after that, work continues on a
+  fresh branch from `main`.
+- Every day at **17:00** the factory runs the full tests and build on it and comments the result
+  on the pull request. While they fail, the pull request is a draft.
+
+#### Older two-label pipeline
+
+The flows `issue-plan` (label `Factory_ready`) and `issue-code-daily` (label `Factory_code`) still
+exist: plan first, you approve every plan by adding `Factory_code`, and coding pauses while the
+daily pull request is open. Use them if you want to see every plan before any code is written.
 
 ### Keep it running
 
-Watchers only run while `factory ui` (or `factory serve`) runs. To keep the factory running in
-the background on macOS, also after a restart:
+Watchers only run while `factory ui` (or `factory serve`) runs. When a new version of
+claude-factory is built (`npm run build`), the running server restarts itself as soon as no run
+is active — no need to stop and start it. To keep the factory running in the background on macOS,
+also after a restart of your Mac:
 
 ```bash
 factory service install     # uninstall | status

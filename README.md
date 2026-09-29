@@ -70,7 +70,8 @@ evals and the CLI.
 | `github-issue` | Issue → plan (or questions) → code → tests → review → push → report on the issue |
 | `github-pr` | Like `github-issue`, then PR → wait for CI and fix it → learn |
 | `github-auto` | Triage first: small fix, full feature, split into sub-issues, or ask |
-| `issue-plan`, `issue-code-daily`, `daily-pr` | Label-driven pipeline with one branch per day and a daily PR |
+| `epic-questions`, `issue-deliver`, `daily-pr` | One-label pipeline: questions up front, plan (with a risk score — a human approves above 75) and code in one run, one rolling PR with a daily report |
+| `issue-plan`, `issue-code-daily` | Older two-label pipeline: approve every plan, pause while the daily PR is open |
 | `pr-feedback` | Address review comments on a factory PR |
 | `ci-fix` | Fix CI that is red on the default branch |
 | `chore` | Scheduled maintenance; opens a PR only if something changed |

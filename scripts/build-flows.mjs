@@ -19,7 +19,7 @@ ${header.lines.map((l) => `# ${l}`).join("\n")}
 `;
   // Flows that change code: one run per repository at a time. Planning / PR-only flows run in parallel.
   const { description, workspace, ...rest } = flow;
-  const coding = !["issue-plan", "daily-pr"].includes(name);
+  const coding = !["issue-plan", "daily-pr", "epic-questions"].includes(name);
   const ordered = { name, description, workspace, ...(coding ? { one_per_repo: true } : {}), ...rest };
   writeFileSync(join(root, "flows", `${name}.yaml`), text + stringify(ordered, { lineWidth: 0 }));
   console.log(`wrote flows/${name}.yaml (${flow.steps.length} steps)`);
@@ -300,32 +300,20 @@ const PICK_PLAN = [
   'elif [ -n "$FACTORY_OUT_PLAN_REVIEW" ]; then notes="$FACTORY_OUT_PLAN_REVIEW"; fi',
 ].join("\n");
 
-write("issue-plan", {
-  title: "Plan a GitHub issue and post the plan (label-driven)",
-  lines: [
-    "factory run issue-plan --var github_repo=owner/repo --var issue=42",
-    "(a watcher on the plan label runs this; when it succeeds the watcher swaps the labels)",
-    "",
-    "pull ticket → clone → plan (Opus 5.5, xhigh effort, read-only)",
-    "  ─┬─ READY → Codex checks the plan against the code ─┬─ approved → post plan → done",
-    "   │                                                  └─ issues → Opus revises (fresh, targeted) → post plan → done",
-    "   │     (if the revision fails or the budget runs out, the draft is posted with Codex's notes)",
-    "   └─ NEEDS_INFO / NOT_CODE / TOO_BIG → post why → stop (resumes and re-plans when you reply)",
-  ],
-}, {
-  description: "Plan an issue with Opus (xhigh effort), have Codex check it against the code, revise, post; send back unclear/non-code/too-big issues",
-  workspace: "empty",
-  defaults: { timeout_sec: 2400 },
-  limits: { max_cost_usd: 10 },
-  vars: { github_repo: "owner/repo", issue: "", code_label: "Factory_code", ready_label: "Factory_ready", forbidden_paths: "" },
-  steps: [
-    ...steps("pull-ticket"),
-    {
-      ...clone,
-      description: "Clone, then check out the newest daily branch that is not in main yet (so the plan sees unmerged work)",
-      run: clone.run + '\nb=$("$FACTORY_TOOLS/daily-branch" latest 2>/dev/null || echo NONE)\n' +
-        'if [ "$b" != NONE ] && git checkout -q --detach "origin/$b"; then echo "Code: main plus unmerged work on $b"; else echo "Code: main"; fi',
-    },
+// Opus plans (xhigh), Codex checks the plan against the code, Opus revises in a fresh session;
+// unclear / non-code / too-big issues are sent back with questions. `post` is the step after a
+// READY plan. With `risk`, the plan (and Codex) also score how risky the change is (0-100).
+const RISK_RUBRIC = [
+  "",
+  "Also score how risky it is to build this plan without a human checking it first (0-100):",
+  "- 0-25: a local change, well covered by tests, easy to undo.",
+  "- 26-50: several modules, or new behaviour users see; tests can cover it.",
+  "- 51-75: persistence or migrations, concurrency, public APIs or file formats, or hard to test automatically.",
+  "- 76-100: security or trust (authentication, signing, secrets, crypto), installing/updating/deleting",
+  "  software or user data, irreversible operations, privacy/legal, or the plan rests on assumptions",
+  "  you could not verify in the code.",
+];
+const planPhase = (post, { risk = false } = {}) => [
     {
       id: "plan",
       type: "claude",
@@ -343,6 +331,7 @@ write("issue-plan", {
         "Paths that must not be changed: {{vars.forbidden_paths}}",
         "The issue text above already includes all of its comments — do not try to fetch them (gh and web",
         "access are not available here). They may contain a previous plan and feedback on it — the feedback wins.",
+        "If earlier questions were asked and the owner replied /defaults, take the recommendations as the answers.",
         "",
         "Investigate before you write (this is the most important part):",
         "- Read CLAUDE.md, the design docs it points to, and the parts of the code this issue touches.",
@@ -368,6 +357,10 @@ write("issue-plan", {
         "  ## Documentation — what goes in the changelog / user guide.",
         "  ## Risks & open points — what could go wrong, migrations, performance, security, compatibility.",
         "  No new dependencies unless the issue asks for them. Be concrete; skip filler.",
+        ...(risk ? [...RISK_RUBRIC,
+          "For READY, end the plan with a \"## Risk\" section explaining the score, then these two lines:",
+          "RISK_SCORE: <0-100>",
+          "RISK_REASON: <one line>"] : []),
         "",
         "End with exactly one line: PLAN_STATUS: READY | NEEDS_INFO | NOT_CODE | TOO_BIG",
       ].join("\n"),
@@ -396,12 +389,13 @@ write("issue-plan", {
         "",
         "=== PLAN ===",
         "{{steps.plan.output}}",
+        ...(risk ? [...RISK_RUBRIC, "Give your own score (not the plan's) as a line: RISK_SCORE: <0-100>"] : []),
         "",
         "End with exactly one line: VERDICT: APPROVE   or   VERDICT: CHANGES",
       ].join("\n"),
-      routes: [{ if: "^VERDICT: APPROVE\\s*$", goto: "post_plan" }],
+      routes: [{ if: "^VERDICT: APPROVE\\s*$", goto: post }],
       on_success: "revise_plan",
-      on_failure: "post_plan",
+      on_failure: post,
     },
     {
       id: "revise_plan",
@@ -421,6 +415,8 @@ write("issue-plan", {
         "and ignore the ones that are wrong. Then output the complete final plan (all sections, not just the",
         "changes), followed by a short \"## Review notes\" section listing which points you adopted and which you",
         "rejected, with one line why.",
+        ...(risk ? ["Keep the \"## Risk\" section and the RISK_SCORE / RISK_REASON lines, updated if the review changed",
+          "the picture (never lower the score just because the reviewer scored lower)."] : []),
         "",
         "{{steps.pull_ticket.output}}",
         "",
@@ -433,9 +429,9 @@ write("issue-plan", {
         "End with exactly one line: PLAN_STATUS: READY | NEEDS_INFO | NOT_CODE | TOO_BIG",
       ].join("\n"),
       // READY → post it; another status → send back; no status (cut off) or a failure → post the draft.
-      routes: [{ if: "^PLAN_STATUS: READY\\s*$", goto: "post_plan" }, { if: "^PLAN_STATUS: [A-Z_]+\\s*$", goto: "send_back" }],
-      on_success: "post_plan",
-      on_failure: "post_plan",
+      routes: [{ if: "^PLAN_STATUS: READY\\s*$", goto: post }, { if: "^PLAN_STATUS: [A-Z_]+\\s*$", goto: "send_back" }],
+      on_success: post,
+      on_failure: post,
     },
     {
       id: "send_back",
@@ -460,6 +456,35 @@ write("issue-plan", {
       ].join("\n"),
       on_success: "stop",
     },
+];
+
+write("issue-plan", {
+  title: "Plan a GitHub issue and post the plan (label-driven)",
+  lines: [
+    "factory run issue-plan --var github_repo=owner/repo --var issue=42",
+    "(a watcher on the plan label runs this; when it succeeds the watcher swaps the labels)",
+    "",
+    "pull ticket → clone → plan (Opus 5.5, xhigh effort, read-only)",
+    "  ─┬─ READY → Codex checks the plan against the code ─┬─ approved → post plan → done",
+    "   │                                                  └─ issues → Opus revises (fresh, targeted) → post plan → done",
+    "   │     (if the revision fails or the budget runs out, the draft is posted with Codex's notes)",
+    "   └─ NEEDS_INFO / NOT_CODE / TOO_BIG → post why → stop (resumes and re-plans when you reply)",
+  ],
+}, {
+  description: "Plan an issue with Opus (xhigh effort), have Codex check it against the code, revise, post; send back unclear/non-code/too-big issues",
+  workspace: "empty",
+  defaults: { timeout_sec: 2400 },
+  limits: { max_cost_usd: 10 },
+  vars: { github_repo: "owner/repo", issue: "", code_label: "Factory_code", ready_label: "Factory_ready", forbidden_paths: "" },
+  steps: [
+    ...steps("pull-ticket"),
+    {
+      ...clone,
+      description: "Clone, then check out the newest daily branch that is not in main yet (so the plan sees unmerged work)",
+      run: clone.run + '\nb=$("$FACTORY_TOOLS/daily-branch" latest 2>/dev/null || echo NONE)\n' +
+        'if [ "$b" != NONE ] && git checkout -q --detach "origin/$b"; then echo "Code: main plus unmerged work on $b"; else echo "Code: main"; fi',
+    },
+    ...planPhase("post_plan"),
     {
       id: "post_plan",
       type: "shell",
@@ -579,7 +604,7 @@ write("issue-plan", {
       type: "shell",
       description: "Clone, then check out today's branch — or wait while the daily PR is unmerged",
       // On a resume or retry, throw away half-done work from the failed attempt first.
-      run: 'if [ -d .git ]; then git reset -q --hard && git clean -qfd && git fetch -q origin; else gh repo clone "$FACTORY_VAR_GITHUB_REPO" . -- -q; fi\n"$FACTORY_TOOLS/daily-branch" prepare',
+      run: 'if [ -d .git ]; then git reset -q --hard && git clean -qfd && git fetch -q origin; else gh repo clone "$FACTORY_VAR_GITHUB_REPO" . -- -q; fi\n"$FACTORY_TOOLS/daily-branch" prepare --wait-for-merge',
       routes: [{ if: "^WAIT:", goto: "wait_for_merge" }],
     },
     { ...tests("baseline_tests", "baseline_failed")[0], description: "Tests must pass before we change anything", on_failure: "baseline_failed" },
@@ -726,19 +751,207 @@ write("issue-plan", {
     },
     steps: s,
   });
+
+  // ── issue-deliver: plan right before coding, in one run; a risky plan waits for a human ──
+  const byId = (id) => structuredClone(s.find((x) => x.id === id));
+  const riskGate = {
+    id: "risk_gate",
+    type: "shell",
+    description: "Post the plan with its risk score; above the threshold (or with the review label) a human approves first",
+    run: [
+      PICK_PLAN,
+      'score() { printf \'%s\\n\' "$1" | sed -n \'s/^RISK_SCORE: *\\([0-9][0-9]*\\).*/\\1/p\' | tail -1; }',
+      'p=$(score "$out"); [ -n "$p" ] || p=$(score "$FACTORY_OUT_PLAN"); c=$(score "$FACTORY_OUT_PLAN_REVIEW")',
+      'reason=$(printf \'%s\\n\' "$out" | sed -n \'s/^RISK_REASON: *//p\' | tail -1)',
+      'if [ -z "$p" ]; then risk=100; reason="the plan has no risk score"; else risk=$p; fi',
+      'if [ -n "$c" ] && [ "$c" -gt "$risk" ]; then risk=$c; reason="${reason:+$reason — }Codex scored it $c"; fi',
+      '[ "$risk" -gt 100 ] && risk=100',
+      'limit=${FACTORY_VAR_RISK_THRESHOLD:-75}; gate=no; why=""',
+      'if [ "$risk" -gt "$limit" ]; then gate=yes; why="the risk score is above $limit"; fi',
+      'if [ -n "$FACTORY_VAR_REVIEW_PLAN_LABEL" ] && gh issue view "$FACTORY_VAR_ISSUE" --repo "$FACTORY_VAR_GITHUB_REPO" --json labels --jq \'.labels[].name\' 2>/dev/null | grep -qx "$FACTORY_VAR_REVIEW_PLAN_LABEL"; then',
+      '  gate=yes; why="${why:+$why, and }the issue has the \\`$FACTORY_VAR_REVIEW_PLAN_LABEL\\` label"',
+      'fi',
+      'plan=$(printf \'%s\\n\' "$out" | sed \'/^PLAN_STATUS:/d; /^RISK_SCORE:/d; /^RISK_REASON:/d\')',
+      'reviewed=""; [ -n "$FACTORY_OUT_PLAN_REVIEW" ] && reviewed=" (checked against the code by Codex)"',
+      '[ -n "$notes" ] && reviewed=" (draft — the revision did not finish; Codex\'s review notes are below)"',
+      '{ echo "🤖 **claude-factory plan**$reviewed"; echo; echo "**Risk: $risk/100**${reason:+ — $reason}"; echo',
+      '  printf \'%s\\n\' "$plan"',
+      '  if [ -n "$notes" ]; then echo; echo "## Codex review notes (not yet worked in)"; echo; printf \'%s\\n\' "$notes" | sed \'/^VERDICT:/d; /^RISK_SCORE:/d\'; fi',
+      '  echo',
+      '  if [ "$gate" = yes ]; then',
+      '    echo "✋ **A human decides before coding starts:** $why."',
+      '    echo "Reply **/approve** to start coding (optionally with notes), or **/reject** followed by what to change — it then plans again."',
+      '    echo; echo "<!-- claude-factory run=$FACTORY_RUN_ID approval -->"',
+      '  else',
+      '    echo "_Coding starts now; the result goes into the factory pull request, where you review it._"',
+      '    echo; echo "<!-- claude-factory run=$FACTORY_RUN_ID plan -->"',
+      '  fi; } | gh issue comment "$FACTORY_VAR_ISSUE" --repo "$FACTORY_VAR_GITHUB_REPO" --body-file - >/dev/null',
+      'printf \'%s\\n\' "$plan"',
+      '[ -n "$notes" ] && { echo; echo "## Review notes to work in"; printf \'%s\\n\' "$notes" | sed \'/^VERDICT:/d; /^RISK_SCORE:/d\'; }',
+      'echo; echo "RISK: $risk"; echo "GATE: $gate"',
+    ].join("\n"),
+    routes: [{ if: "^GATE: yes\\s*$", goto: "approve_plan" }],
+    on_success: "implement",
+  };
+  const approvePlan = {
+    id: "approve_plan",
+    type: "approval",
+    jump_only: true,
+    message: "Approve the plan for {{vars.github_repo}}#{{vars.issue}} (reply /approve or /reject on the issue)",
+    on_success: "implement",
+    // Rejected: read the issue again (with the feedback) and plan again.
+    on_failure: "pull_ticket",
+  };
+  const implement = byId("implement");
+  implement.prompt = implement.prompt.replace(
+    "Follow the plan in the latest \"claude-factory plan\" comment, including any later comments from\npeople, which override it.",
+    "Follow this plan (comments from people on the issue override it):\n\n{{steps.risk_gate.output}}\n\nNotes from the person who approved the plan, if any: {{steps.approve_plan.output}}\n");
+  const branch = byId("daily_branch");
+  branch.description = "Clone, then check out the branch of the open factory PR (or a new one from main)";
+  branch.run = branch.run.replace(" prepare --wait-for-merge", " prepare");
+  delete branch.routes;
+  const report = byId("report");
+  report.run = report.run
+    .replace("_This goes to main with the daily pull request._", "_It is in the factory pull request: $FACTORY_OUT_OPEN_PR — merge it whenever you like._");
+  const deliver = [
+    byId("pull_ticket"),
+    branch,
+    byId("baseline_tests"),
+    ...planPhase("risk_gate", { risk: true }),
+    riskGate,
+    approvePlan,
+    implement,
+    ...s.slice(s.findIndex((x) => x.id === "guard"), s.findIndex((x) => x.id === "report")).map((x) => structuredClone(x)),
+    {
+      id: "open_pr",
+      type: "shell",
+      description: "Open the factory pull request, or add this issue to the open one",
+      run: '"$FACTORY_TOOLS/daily-branch" ensure-pr "$(git branch --show-current)"',
+    },
+    report,
+    byId("baseline_failed"),
+  ];
+  for (const id of ["plan", "revise_plan"]) deliver.find((x) => x.id === id).max_budget_usd = 8;
+  write("issue-deliver", {
+    title: "Plan and code an issue in one run (label-driven)",
+    lines: [
+      "factory run issue-deliver --var github_repo=owner/repo --var issue=42 --var test_cmd=\"./gradlew test\"",
+      "",
+      "pull ticket → branch of the open factory PR (or a new one) → baseline tests",
+      "  → Opus plans (xhigh) → Codex checks it (+ its own risk score) → Opus revises",
+      "      NEEDS_INFO / NOT_CODE / TOO_BIG → ask on the issue → stop (continues when you reply)",
+      "  → post the plan with its risk score ─┬─ risk > 75 or label Factory_review_plan → wait for /approve",
+      "                                       │     (/reject + feedback → plans again)",
+      "                                       └─ otherwise → code straight away",
+      "  → Sonnet codes → guard → tests ⟲ fix → 2 × (Codex review → fix → tests) → docs → guard",
+      "  → commit \"Resolve #N\" → push → open/update the factory PR → report on the issue",
+    ],
+  }, {
+    description: "Plan (Opus + Codex check + risk score) and code (Sonnet + 2 Codex reviews) an issue in one run; risky plans wait for a human",
+    workspace: "empty",
+    defaults: { model: "claude-sonnet-5-5", timeout_sec: 2400, max_budget_usd: 6 },
+    limits: { max_cost_usd: 40 },
+    vars: {
+      github_repo: "owner/repo", issue: "", test_cmd: "auto", branch_prefix: "factory/daily-", timezone: "Europe/Berlin",
+      forbidden_paths: "", docs_required: "", risk_threshold: "75", review_plan_label: "Factory_review_plan",
+    },
+    steps: deliver,
+  });
 }
 
+// ── epic-questions: ask all owner decisions for a batch of issues up front ──
+write("epic-questions", {
+  title: "Ask the open questions for a batch of issues up front",
+  lines: [
+    "factory run epic-questions --var github_repo=owner/repo --var issues=\"73 74 75\"",
+    "(the issue watcher runs this once for new issues with its label, before building any of them)",
+    "",
+    "clone (+ newest factory branch) → read all issues → Opus lists the decisions only the owner can make",
+    "  → posts them on each issue that has some (label needs-info); reply or /defaults and it continues",
+  ],
+}, {
+  description: "Before building a batch of issues, ask every question only the owner can answer, in one go",
+  workspace: "empty",
+  defaults: { timeout_sec: 2400 },
+  limits: { max_cost_usd: 10 },
+  vars: { github_repo: "owner/repo", issues: "", needs_info_label: "Factory_needs_info", forbidden_paths: "" },
+  steps: [
+    {
+      ...clone,
+      description: "Clone, then check out the newest factory branch that is not in main yet",
+      run: clone.run + '\nb=$("$FACTORY_TOOLS/daily-branch" latest 2>/dev/null || echo NONE)\n' +
+        'if [ "$b" != NONE ] && git checkout -q --detach "origin/$b"; then echo "Code: main plus unmerged work on $b"; else echo "Code: main"; fi',
+    },
+    {
+      id: "read_issues",
+      type: "shell",
+      run: [
+        'for n in $FACTORY_VAR_ISSUES; do',
+        '  case "$n" in *[!0-9]*) echo "not an issue number: $n"; exit 1;; esac',
+        '  echo "=================== ISSUE #$n ==================="',
+        '  gh issue view "$n" --repo "$FACTORY_VAR_GITHUB_REPO" --json number,title,body,labels,comments --jq \'',
+        '    "# #\\(.number): \\(.title)\\nLabels: \\([.labels[].name] | join(", "))\\n\\n\\(.body)\\n"',
+        '    + ([.comments[] | "\\n--- comment by \\(.author.login):\\n\\(.body)"] | join("\\n"))\'',
+        'done',
+      ].join("\n"),
+    },
+    {
+      id: "ask",
+      type: "claude",
+      model: "claude-opus-5-5",
+      effort: "high",
+      max_budget_usd: 8,
+      permission_mode: "dontAsk",
+      allowed_tools: ["Read", "Glob", "Grep", "Bash(git log*)", "Bash(git show*)", "Bash(git grep*)", "Bash(ls*)"],
+      prompt: [
+        "You are the lead architect for this repository. The GitHub issues below will be built one after",
+        "another by an automated factory (in their \"Depends on\" order); each is planned in detail right",
+        "before it is coded. Before any of that starts, find the decisions that only the owner can make, so",
+        "they can all be answered now instead of blocking the work later. Do NOT modify files.",
+        "",
+        "{{steps.clone.output}}",
+        "Paths that must not be changed: {{vars.forbidden_paths}}",
+        "",
+        "Read the issues, CLAUDE.md and the design docs, and look at the code they touch. Then, per issue:",
+        "- Ask only what matters and cannot be decided from the issue, the docs or the code: scope, product",
+        "  choices, trade-offs with real consequences, security/data decisions, and contracts between these",
+        "  issues (what one hands to the next). Don't ask what the detailed plan can decide itself.",
+        "- Each question: short context, the options you see, and your recommendation with one line why.",
+        "- Questions already answered in an issue's comments are answered — don't ask them again.",
+        "- Put a question that concerns several issues on the earliest one, and mention the others.",
+        "",
+        "{{steps.read_issues.output}}",
+        "",
+        "Output one section per issue, in this exact form, and nothing else:",
+        "### #<number>",
+        "NO_QUESTIONS",
+        "or",
+        "### #<number>",
+        "**Q1. <question>**",
+        "<context and options>",
+        "**Recommendation:** <option> — <why>",
+      ].join("\n"),
+    },
+    {
+      id: "post",
+      type: "shell",
+      run: 'printf \'%s\\n\' "$FACTORY_OUT_ASK" | "$FACTORY_TOOLS/post-questions"',
+    },
+  ],
+});
+
 write("daily-pr", {
-  title: "Open the daily pull request to main",
+  title: "Daily report on the factory pull request",
   lines: [
     "factory run daily-pr --var github_repo=owner/repo --var test_cmd=\"./gradlew test\"",
     "(a schedule watcher runs this at a set time, e.g. 17:00 Europe/Berlin)",
     "",
-    "clone → daily branch with commits and no PR? ─┬─ none → end",
-    "                                              └─ full tests + build → open PR (draft if red)",
+    "clone → factory branch not in main yet? ─┬─ none → end",
+    "                                         └─ full tests + build → open the PR if needed → comment the",
+    "                                            result on it (draft while red, ready when green)",
   ],
 }, {
-  description: "Open the day's PR to main after running the full tests and build (draft if they fail)",
+  description: "Every day: full tests and build on the factory branch, result as a comment on its PR (draft while red)",
   workspace: "empty",
   defaults: { timeout_sec: 3600 },
   vars: { github_repo: "owner/repo", test_cmd: "auto", build_cmd: "", branch_prefix: "factory/daily-", timezone: "Europe/Berlin" },
@@ -747,7 +960,7 @@ write("daily-pr", {
     {
       id: "find_branch",
       type: "shell",
-      run: '"$FACTORY_TOOLS/daily-branch" pending | head -1',
+      run: '"$FACTORY_TOOLS/daily-branch" latest',
       routes: [{ if: "^NONE$", goto: "end" }],
     },
     {
@@ -763,17 +976,22 @@ write("daily-pr", {
         'if [ -n "$FACTORY_VAR_BUILD_CMD" ]; then sh -c "$FACTORY_VAR_BUILD_CMD" > "{{run.dir}}/build.log" 2>&1 || ok=no; fi',
         '{ echo "### Checks on this branch"; echo \'```\'; echo "\\$ $cmd"; "$FACTORY_TOOLS/test-summary" "$marker"',
         '  [ -n "$FACTORY_VAR_BUILD_CMD" ] && echo "\\$ $FACTORY_VAR_BUILD_CMD → $(grep -q "BUILD SUCCESSFUL" "{{run.dir}}/build.log" 2>/dev/null && echo ok || tail -1 "{{run.dir}}/build.log")"',
-        '  echo \'```\'; [ "$ok" = yes ] || echo "⚠ **Checks failed** — opened as a draft. See the run log for details."; } > "{{run.dir}}/checks.md"',
+        '  echo \'```\'; [ "$ok" = yes ] || echo "⚠ **Checks failed** — marked as draft until they pass. See the run log for details."; } > "{{run.dir}}/checks.md"',
         'cat "{{run.dir}}/checks.md"; echo "CHECKS: $ok"',
       ].join("\n"),
     },
     {
-      id: "open_pr",
+      id: "report",
       type: "shell",
+      description: "Open the PR if there is none yet; comment the checks on it; draft while they fail",
       run: [
         'branch=$(printf \'%s\\n\' "$FACTORY_OUT_FIND_BRANCH" | head -1)',
-        'draft=""; printf \'%s\\n\' "$FACTORY_OUT_VERIFY" | grep -q "^CHECKS: no" && draft=--draft',
-        '"$FACTORY_TOOLS/daily-branch" open-pr "$branch" $draft --note-file "{{run.dir}}/checks.md"',
+        'url=$("$FACTORY_TOOLS/daily-branch" ensure-pr "$branch") || exit 1; n=${url##*/}',
+        '{ echo "🤖 **claude-factory daily report** — $(date \'+%Y-%m-%d %H:%M\')"; echo; cat "{{run.dir}}/checks.md"',
+        '  echo; echo "_Merge whenever you like — the factory keeps working either way; after a merge it continues on a fresh branch._"',
+        '  echo; echo "<!-- claude-factory run=$FACTORY_RUN_ID daily -->"; } | gh pr comment "$n" --repo "$FACTORY_VAR_GITHUB_REPO" --body-file - >/dev/null',
+        'if printf \'%s\\n\' "$FACTORY_OUT_VERIFY" | grep -q "^CHECKS: no"; then gh pr ready "$n" --repo "$FACTORY_VAR_GITHUB_REPO" --undo >/dev/null 2>&1 || true; echo "checks failed — $url is a draft"',
+        'else gh pr ready "$n" --repo "$FACTORY_VAR_GITHUB_REPO" >/dev/null 2>&1 || true; echo "checks passed — $url is ready to merge"; fi',
       ].join("\n"),
     },
   ],

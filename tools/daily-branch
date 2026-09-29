@@ -1,9 +1,13 @@
 #!/usr/bin/env node
-// Daily work branches (one per day, e.g. factory/daily-2026-09-28) that go to main in one PR.
+// Factory work branches (e.g. factory/daily-2026-09-28) that go to main in one rolling PR.
 // Run inside a clone of the repo.
 //
-//   daily-branch prepare               check out today's branch → prints "BRANCH: <name>", or
-//                                      "WAIT: <why>" when a daily PR is open (or had to be opened)
+//   daily-branch prepare               check out the branch to work on → prints "BRANCH: <name>":
+//                                      the branch of the open factory PR (work keeps going onto it),
+//                                      else unfinished work without a PR, else a new branch from main
+//   daily-branch prepare --wait-for-merge
+//                                      old behaviour: "WAIT: <why>" while a factory PR is open
+//   daily-branch ensure-pr <branch>    open the PR for <branch>, or update the open one's title and body
 //   daily-branch pending               daily branches with commits and no PR yet, newest first ("NONE" if none)
 //   daily-branch latest                newest daily branch not yet in main (no PR, or its PR still open), or "NONE"
 //   daily-branch open-pr <branch> [--draft] [--note-file <file>]
@@ -44,14 +48,30 @@ function base() {
 function state() {
   git("fetch", "-q", "--prune", "origin");
   const branches = git("for-each-ref", "--sort=-refname", "--format=%(refname:lstrip=3)", `refs/remotes/origin/${prefix}*`).split("\n").filter(Boolean);
-  const prs = JSON.parse(gh("pr", "list", "--repo", repo, "--state", "all", "--limit", "300", "--json", "number,headRefName,state,url") || "[]")
+  const prs = JSON.parse(gh("pr", "list", "--repo", repo, "--state", "all", "--limit", "300", "--json", "number,headRefName,headRefOid,state,url") || "[]")
     .filter((p) => p.headRefName.startsWith(prefix));
-  const ahead = (b) => Number(git("rev-list", "--count", `${base()}..origin/${b}`));
-  const pending = branches.filter((b) => !prs.some((p) => p.headRefName === b) && ahead(b) > 0);
-  return { branches, prs, pending };
+  const ahead = (b, from = base()) => Number(git("rev-list", "--count", `${from}..origin/${b}`));
+  const openPrOf = (b) => prs.find((p) => p.headRefName === b && p.state === "OPEN");
+  // Work that is in no open PR: commits after the branch's last merged/closed PR (squash-safe), or
+  // any commits not in main when it never had a PR.
+  const leftover = (b) => {
+    if (openPrOf(b)) return false;
+    const done = prs.find((p) => p.headRefName === b && p.headRefOid);
+    if (done) {
+      try {
+        return ahead(b, done.headRefOid) > 0;
+      } catch {
+        return false;
+      }
+    }
+    return ahead(b) > 0;
+  };
+  const pending = branches.filter(leftover);
+  const open = prs.filter((p) => p.state === "OPEN");
+  return { branches, prs, pending, open, openPrOf };
 }
 
-function openPr(branch, { draft = false, note = "" } = {}) {
+function prText(branch, note = "") {
   const b = base();
   const subjects = git("log", "--reverse", "--format=%s", `${b}..origin/${branch}`).split("\n").filter(Boolean);
   const issues = [];
@@ -59,9 +79,10 @@ function openPr(branch, { draft = false, note = "" } = {}) {
     const m = /^Resolve #(\d+):?\s*(.*)$/.exec(s);
     if (m && !issues.some((i) => i.n === m[1])) issues.push({ n: m[1], title: m[2] });
   }
-  const day = branch.slice(prefix.length);
   const body = [
-    `Daily batch from claude-factory (${day}).`,
+    "Work from claude-factory. This pull request stays open and grows as issues are finished; merge it",
+    "whenever you like — new work continues on a fresh branch after that. Every day at the report time",
+    "the factory runs the full tests and build here and comments the result.",
     "",
     "### Issues",
     ...(issues.length ? issues.map((i) => `- #${i.n} ${i.title}`) : ["- (no issue commits)"]),
@@ -74,10 +95,26 @@ function openPr(branch, { draft = false, note = "" } = {}) {
     "",
     `<!-- claude-factory run=${process.env.FACTORY_RUN_ID ?? ""} daily -->`,
   ].join("\n");
-  const title = `claude-factory daily ${day}${issues.length ? `: ${issues.map((i) => `#${i.n}`).join(", ")}` : ""}`;
-  const args = ["pr", "create", "--repo", repo, "--base", b.replace(/^origin\//, ""), "--head", branch, "--title", title, "--body-file", "-"];
+  const nums = issues.map((i) => `#${i.n}`);
+  const title = `claude-factory: ${nums.length ? (nums.length > 8 ? `${nums.slice(0, 8).join(", ")} +${nums.length - 8} more` : nums.join(", ")) : branch.slice(prefix.length)}`;
+  return { title, body, base: b.replace(/^origin\//, "") };
+}
+
+function openPr(branch, { draft = false, note = "" } = {}) {
+  const t = prText(branch, note);
+  const args = ["pr", "create", "--repo", repo, "--base", t.base, "--head", branch, "--title", t.title, "--body-file", "-"];
   if (draft) args.push("--draft");
-  return run(process.env.FACTORY_GH_BIN || "gh", args, body).split("\n").pop();
+  return run(process.env.FACTORY_GH_BIN || "gh", args, t.body).split("\n").pop();
+}
+
+/** Open the PR for the branch, or bring the open one's title and issue list up to date. */
+function ensurePr(branch) {
+  const { openPrOf } = state();
+  const pr = openPrOf(branch);
+  if (!pr) return openPr(branch);
+  const t = prText(branch);
+  run(process.env.FACTORY_GH_BIN || "gh", ["pr", "edit", String(pr.number), "--repo", repo, "--title", t.title, "--body-file", "-"], t.body);
+  return pr.url;
 }
 
 const [cmd, ...rest] = process.argv.slice(2);
@@ -95,31 +132,49 @@ if (cmd === "pending") {
   const note = i >= 0 ? readFileSync(rest[i + 1], "utf8") : "";
   git("fetch", "-q", "origin");
   console.log(openPr(branch, { draft: rest.includes("--draft"), note }));
+} else if (cmd === "ensure-pr") {
+  const branch = rest[0];
+  if (!branch?.startsWith(prefix)) fail(`ensure-pr needs a ${prefix}* branch`);
+  console.log(ensurePr(branch));
 } else if (cmd === "prepare") {
-  const { branches, prs, pending } = state();
-  const open = prs.find((p) => p.state === "OPEN");
-  if (open) {
-    console.log(`WAIT: daily PR #${open.number} (${open.headRefName}) is not merged yet — ${open.url}`);
+  const { branches, prs, pending, open } = state();
+  const checkout = (name, from) => git("checkout", "-q", "-B", name, from);
+  if (rest.includes("--wait-for-merge")) {
+    if (open.length) {
+      console.log(`WAIT: daily PR #${open[0].number} (${open[0].headRefName}) is not merged yet — ${open[0].url}`);
+      process.exit(0);
+    }
+    const older = pending.filter((b) => !b.startsWith(`${prefix}${today()}`));
+    if (older.length) {
+      const urls = older.map((b) => openPr(b));
+      console.log(`WAIT: opened the PR for earlier work first (${urls.join(", ")}) — continuing after it is merged`);
+      process.exit(0);
+    }
+  } else if (open.length) {
+    // Rolling: keep adding to the open factory PR.
+    const b = open[0].headRefName;
+    checkout(b, `origin/${b}`);
+    console.log(`BRANCH: ${b} (continuing — PR #${open[0].number} is open)`);
+    console.log(git("log", "--oneline", "-1"));
+    process.exit(0);
+  } else if (pending.length) {
+    checkout(pending[0], `origin/${pending[0]}`);
+    console.log(`BRANCH: ${pending[0]} (continuing unfinished work)`);
+    console.log(git("log", "--oneline", "-1"));
     process.exit(0);
   }
+  // A new branch from main; today's name, or -2, -3, … when that name was used before.
   const t = today();
-  // Rule: before a new day's branch is created, the previous day's work goes to main in a PR.
-  const older = pending.filter((b) => !b.startsWith(`${prefix}${t}`));
-  if (older.length) {
-    const urls = older.map((b) => openPr(b));
-    console.log(`WAIT: opened the PR for earlier work first (${urls.join(", ")}) — continuing after it is merged`);
-    process.exit(0);
-  }
-  // Today's branch; if today's was already merged via a PR, continue on -2, -3, …
   for (let n = 1; n < 50; n++) {
     const name = `${prefix}${t}${n > 1 ? `-${n}` : ""}`;
     if (prs.some((p) => p.headRefName === name)) continue;
-    git("checkout", "-q", "-B", name, branches.includes(name) ? `origin/${name}` : base());
+    if (branches.includes(name) && !pending.includes(name)) continue;
+    checkout(name, branches.includes(name) ? `origin/${name}` : base());
     console.log(`BRANCH: ${name}${branches.includes(name) ? " (continuing)" : ` (new, from ${base()})`}`);
     console.log(git("log", "--oneline", "-1"));
     process.exit(0);
   }
   fail("no free branch name for today");
 } else {
-  fail("usage: daily-branch prepare | pending | latest | open-pr <branch> [--draft] [--note-file f]");
+  fail("usage: daily-branch prepare [--wait-for-merge] | ensure-pr <branch> | pending | latest | open-pr <branch> [--draft] [--note-file f]");
 }
