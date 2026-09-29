@@ -7,7 +7,7 @@ flows, automating work from GitHub, choosing models, and keeping it all safe.
 - [1. Start](#1-start)
 - [2. Run a flow](#2-run-a-flow)
 - [3. Follow, approve and resume runs](#3-follow-approve-and-resume-runs)
-- [4. Write your own flows](#4-write-your-own-flows)
+- [4. Write your own flows](#4-write-your-own-flows) — or [let any AI write one](#let-any-ai-write-a-flow)
 - [5. Models, agents and routing](#5-models-agents-and-routing)
 - [6. Automate with watchers](#6-automate-with-watchers)
   - **[Label cheat sheet: which label does what](#the-label-pipeline-one-label--plan--code--one-pull-request)**
@@ -134,6 +134,30 @@ how steps connect: grey = next, green = on success, red dashed = on failure, pur
 - **✨ Draft flow with Claude** — describe what you want and Claude writes the YAML.
   **Ask Claude** changes the open flow the same way.
 - **+ From library** inserts a block from the [Library](#the-block-library).
+
+### Let any AI write a flow
+
+[`docs/FLOW_AUTHORING.md`](FLOW_AUTHORING.md) is a complete, self-contained description of the
+flow format written for AI assistants: every field, step type, template and environment
+variable, the common patterns (test/fix loops, review gates, asking a human, pull requests), a
+checklist and a full example. Give it to any assistant — ChatGPT, Claude, Gemini, Codex or a
+local model — and describe the flow you want:
+
+```bash
+factory flow-guide > flow-guide.md        # or copy docs/FLOW_AUTHORING.md
+```
+
+1. Paste (or attach) the guide in a new chat, then write what the flow should do, e.g. *"Opus
+   plans a database migration, I approve the plan, Sonnet implements it with pytest tests, up to
+   3 fix rounds, Codex reviews once, then push the branch and open a PR."*
+2. Save the YAML it answers with as `<repo>/.claude-factory/flows/<name>.yaml` (or in
+   `~/.claude-factory/flows/`).
+3. Check it: `factory validate <name>` — it names the field and step for anything that is wrong;
+   paste that back to the assistant to fix it. Then open it in the editor to see the graph.
+
+**✨ Draft flow with Claude** in the editor uses the same guide, so both ways produce the same
+kind of flow. The examples in the guide are checked by the test suite, so they always match the
+current format.
 
 ### Step types
 
@@ -588,6 +612,7 @@ the Dashboard.
 | `factory flows` / `factory blocks` | List flows / library blocks |
 | `factory new <name> [--from <flow>] [--global]` | Create a flow from a template |
 | `factory validate <flow or file>` | Check a flow |
+| `factory flow-guide` | Print the flow-writing guide for AI assistants ([Let any AI write a flow](#let-any-ai-write-a-flow)) |
 | `factory watch [flow] --var github_repo=o/r [--source …] [--once]` | Run one watcher from the terminal |
 | `factory eval <suite.yaml> [--flows a,b] [--models …]` | Run an eval suite |
 | `factory clean [--older-than 7] [--purge] [--dry-run]` | Remove old run workspaces |

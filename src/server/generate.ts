@@ -1,14 +1,20 @@
-import { mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FACTORY_HOME, flowDir, parseFlow } from "../flow/load.js";
 import { runClaude } from "../steps/claude.js";
 
-const SYSTEM = `You design workflow files for "claude-factory", a tool that runs YAML flows of
-headless Claude Code CLI steps and shell steps against a git repository.
-Reply with ONLY the complete flow as YAML inside a single \`\`\`yaml code fence. No other text.
-Use only the fields documented in the reference. Keep prompts specific and actionable.
-Prefer loops with on_failure/on_success + max_visits for verify/fix cycles, and pass_if gates for reviews.`;
+const SYSTEM = `You design workflow files for "claude-factory". The reference you get describes the
+complete format. Reply with ONLY the complete flow as YAML inside a single \`\`\`yaml code fence.
+No other text. Use only the fields documented in the reference.`;
+
+/** The flow-writing guide for AI assistants (docs/FLOW_AUTHORING.md); also printed by `factory flow-guide`. */
+export const FLOW_GUIDE_PATH = join(flowDir("builtin", ""), "..", "docs", "FLOW_AUTHORING.md");
+
+export function flowGuide(): string {
+  if (existsSync(FLOW_GUIDE_PATH)) return readFileSync(FLOW_GUIDE_PATH, "utf8");
+  return readFileSync(join(flowDir("builtin", ""), "feature.yaml"), "utf8"); // older installs
+}
 
 function extractYaml(text: string): string {
   const m = text.match(/```ya?ml\s*\n([\s\S]*?)```/);
@@ -26,14 +32,14 @@ export interface GenerateResult {
  * validation error if the first draft is not a valid flow.
  */
 export async function generateFlow(request: string, current?: string, claudeBin?: string): Promise<GenerateResult> {
-  const reference = readFileSync(join(flowDir("builtin", ""), "feature.yaml"), "utf8");
+  const reference = flowGuide();
   const logDir = join(FACTORY_HOME, "generate");
   mkdirSync(logDir, { recursive: true });
   const logFile = join(logDir, `${Date.now()}.log`);
 
   const prompt = current
-    ? `Reference flow (documents the format):\n\n${reference}\n\nCurrent flow:\n\n\`\`\`yaml\n${current}\`\`\`\n\nChange it as follows: ${request}`
-    : `Reference flow (documents the format):\n\n${reference}\n\nWrite a new flow for: ${request}`;
+    ? `Reference (the complete flow format):\n\n${reference}\n\nCurrent flow:\n\n\`\`\`yaml\n${current}\`\`\`\n\nChange it as follows: ${request}`
+    : `Reference (the complete flow format):\n\n${reference}\n\nWrite a new flow for: ${request}`;
 
   const base = {
     cwd: tmpdir(),

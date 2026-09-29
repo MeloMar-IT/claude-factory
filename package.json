@@ -17,7 +17,8 @@
     "ui",
     "blocks",
     "tools",
-    "evals"
+    "evals",
+    "docs/FLOW_AUTHORING.md"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json && chmod +x dist/cli.js",

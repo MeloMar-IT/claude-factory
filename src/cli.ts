@@ -31,6 +31,8 @@ Usage:
   factory flows [--repo <dir>]                   List available flows
   factory blocks [--repo <dir>]                  List reusable step blocks (the library)
   factory validate <flow|file.yaml>              Check a flow definition
+  factory flow-guide                             Print the flow-writing guide for AI assistants
+                                                 (give it to any LLM, then ask it for a flow)
   factory new <name> [--from <flow>] [--global]  Create your own flow (copies a template)
   factory ui [--port 4777] [--no-open]           Web UI + queue + watchers from config.yaml
   factory serve [--port 4777]                    Same without opening a browser (for services)
@@ -171,6 +173,12 @@ async function main(argv: string[]): Promise<number> {
         const label = b.block ? `${b.block.category} · ${b.block.name}` : `INVALID — ${b.error?.split("\n")[1]?.trim()}`;
         process.stdout.write(`${b.id.padEnd(16)} ${label}  [${b.scope}]\n`);
       }
+      return 0;
+    }
+
+    case "flow-guide": {
+      const { flowGuide } = await import("./server/generate.js");
+      process.stdout.write(flowGuide());
       return 0;
     }
 

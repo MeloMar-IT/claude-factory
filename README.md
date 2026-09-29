@@ -63,6 +63,10 @@ The **[user guide](docs/USER_GUIDE.md)** covers everything with screenshots: wri
 running and resuming them, the GitHub watchers, models and routing, safety settings, costs,
 evals and the CLI.
 
+To have **any AI assistant write a flow** for you, give it
+**[docs/FLOW_AUTHORING.md](docs/FLOW_AUTHORING.md)** (or the output of `factory flow-guide`) and
+describe the flow you want; check the result with `factory validate`.
+
 ## Built-in flows
 
 | Flow | What it does |
