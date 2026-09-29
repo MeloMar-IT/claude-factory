@@ -8,7 +8,7 @@ description: Jira ticket → plan (posted to Jira) → code → tests → review
 workspace: worktree
 one_per_repo: true
 defaults:
-  model: sonnet
+  model: claude-sonnet-5-5
   timeout_sec: 1800
 limits:
   max_cost_usd: 15
@@ -29,7 +29,7 @@ steps:
           + ([.fields.comment.comments[]? | "\n--- comment by \(.author.displayName):\n\(.body | text)"] | join("\n"))'
   - id: plan
     type: claude
-    model: opus
+    model: claude-opus-5-5
     permission_mode: dontAsk
     allowed_tools:
       - Read
@@ -131,7 +131,7 @@ steps:
     on_success: run_tests
   - id: review
     type: claude
-    model: opus
+    model: claude-opus-5-5
     max_visits: 3
     permission_mode: dontAsk
     allowed_tools:

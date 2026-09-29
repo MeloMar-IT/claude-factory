@@ -7,7 +7,7 @@ workspace: worktree
 one_per_repo: true
 
 defaults:
-  model: sonnet
+  model: claude-sonnet-5-5
   permission_mode: acceptEdits
   allowed_tools: [Read, Edit, Write, Glob, Grep, "Bash(npm *)", "Bash(npx *)"]
 

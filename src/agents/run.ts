@@ -22,6 +22,7 @@ async function runOn(t: Target, step: ClaudeStep, scope: Scope, engine: Engine, 
   const d = flow.defaults;
   const local = LOCAL_KINDS.includes(t.provider.kind);
   const sandboxed = step.sandbox ?? flow.sandbox.claude ?? engine.config.sandbox.claude ?? false;
+  const effort = step.effort ?? d.effort;
   const prev = step.resume ? ctx.steps[step.resume] : undefined;
   const prevAgent = String(prev?.agent || "claude").split(":")[0];
   const resumeId = prev && prevAgent === t.agent && typeof prev.session_id === "string" && prev.session_id ? prev.session_id : undefined;
@@ -48,6 +49,7 @@ async function runOn(t: Target, step: ClaudeStep, scope: Scope, engine: Engine, 
       localProvider: local ? t.provider.kind : undefined,
       localBaseUrl: local && t.provider.base_url !== builtinUrl ? t.provider.base_url : undefined,
       sandbox: codexSandbox(step, scope, sandboxed),
+      effort,
     });
     const p = t.provider.price;
     const costUsd = p ? (r.inputTokens * p.input_per_mtok + r.outputTokens * p.output_per_mtok) / 1e6 : 0;
@@ -65,6 +67,8 @@ async function runOn(t: Target, step: ClaudeStep, scope: Scope, engine: Engine, 
     maxBudgetUsd: caps.length ? Math.max(0.01, Math.min(...caps)) : undefined,
     sandbox: sandboxed,
     noMcp: local,
+    isolated: engine.config.isolate_agents,
+    effort,
   });
   return {
     ok: r.ok,

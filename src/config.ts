@@ -110,6 +110,11 @@ export const ConfigSchema = z
     concurrency: z.number().int().positive().default(2),
     /** Pushes to these branches are refused (glob patterns). */
     protected_branches: z.array(z.string()).default(["main", "master", "develop", "release/*"]),
+    /**
+     * Run agent steps without your personal Claude Code setup (MCP servers, plugins, skills,
+     * hooks, user settings). Smaller context every turn and no off-task detours.
+     */
+    isolate_agents: z.boolean().default(true),
     /** Block pushes whose new commits add secrets (API keys, private keys, .env files). */
     secret_scan: z.boolean().default(true),
     notify: z

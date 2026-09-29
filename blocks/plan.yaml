@@ -4,7 +4,7 @@ description: Claude reads the code and ticket and writes a plan. If the ticket i
 steps:
   - id: plan
     type: claude
-    model: opus
+    model: claude-opus-5-5
     permission_mode: dontAsk
     allowed_tools: [Read, Glob, Grep, "Bash(git log*)", "Bash(ls*)"]
     prompt: |

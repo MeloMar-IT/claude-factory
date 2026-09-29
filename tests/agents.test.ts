@@ -10,6 +10,7 @@ import { readTranscript } from "../src/engine/transcript.js";
 import { withModel } from "../src/evals.js";
 import { parseFlow } from "../src/flow/load.js";
 import type { ClaudeStep } from "../src/flow/schema.js";
+import { buildClaudeArgs } from "../src/steps/claude.js";
 import { buildCodexArgs } from "../src/steps/codex.js";
 
 const claudeBin = resolve("tests/fixtures/fake-claude.mjs");
@@ -85,6 +86,16 @@ steps:
     const scope = { flow: f } as Parameters<typeof codexSandbox>[1];
     const mode = (id: string, sbx = false) => codexSandbox(f.steps.find((s) => s.id === id) as ClaudeStep, scope, sbx);
     expect([mode("plan"), mode("ro"), mode("rw"), mode("yolo"), mode("yolo", true)]).toEqual(["read-only", "read-only", "workspace-write", "danger-full-access", "workspace-write"]);
+  });
+
+  it("isolates Claude Code from the user's setup and passes effort", () => {
+    const args = buildClaudeArgs({ prompt: "p", cwd: "/w", logFile: "/l", isolated: true, effort: "xhigh", systemPrompt: "extra" });
+    expect(args).toEqual(expect.arrayContaining(["--strict-mcp-config", "--setting-sources", "project,local", "--disable-slash-commands", "--effort", "xhigh"]));
+    const sys = args[args.indexOf("--append-system-prompt") + 1]!;
+    expect(sys).toContain("running unattended as one step of a claude-factory flow");
+    expect(sys).toContain("extra");
+    expect(buildClaudeArgs({ prompt: "p", cwd: "/w", logFile: "/l" })).not.toContain("--setting-sources");
+    expect(buildCodexArgs({ prompt: "p", cwd: "/w", logFile: "/l", sandbox: "read-only", effort: "max" })).toContain('model_reasoning_effort="xhigh"');
   });
 
   it("builds codex exec args for new, local and resumed sessions", () => {

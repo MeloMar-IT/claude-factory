@@ -10,6 +10,7 @@ flows, automating work from GitHub, choosing models, and keeping it all safe.
 - [4. Write your own flows](#4-write-your-own-flows)
 - [5. Models, agents and routing](#5-models-agents-and-routing)
 - [6. Automate with watchers](#6-automate-with-watchers)
+  - **[Label cheat sheet: which label does what](#the-label-pipeline-plan--code--daily-pull-request)**
 - [7. Settings and safety](#7-settings-and-safety)
 - [8. Costs, dashboard and evals](#8-costs-dashboard-and-evals)
 - [9. Command line](#9-command-line)
@@ -333,19 +334,77 @@ watchers:
     remove_on_done: [Factory_ready]
 ```
 
-### Example: a label-driven daily pipeline
+### The label pipeline: plan → code → daily pull request
 
-The built-in flows `issue-plan`, `issue-code-daily` and `daily-pr` form a pipeline:
+The built-in flows `issue-plan`, `issue-code-daily` and `daily-pr` form a pipeline that you
+drive with **two labels**. Everything else is set by the factory. (Label names below are the
+ones from the example configuration; yours are whatever you set in the watchers.)
 
-1. Label an issue **`Factory_ready`** → Opus writes a plan and posts it on the issue (or asks
-   questions, or says the issue is not a coding task or too big and proposes a split).
-2. Read the plan, comment if needed, and label it **`Factory_code`** → the issue is coded on the
-   day's branch `factory/daily-YYYY-MM-DD`: tests before and after, up to 3 fix rounds, two
-   review rounds by Codex with Claude fixing the findings, documentation, commit
-   `Resolve #N: …`, push, and a report on the issue. After 3 failed fix rounds it labels the
-   issue as failed and comments why — nothing is pushed.
-3. **Once a day** (e.g. 17:00) the day's branch goes to `main` in one pull request that closes
-   all its issues, after a full test run and build. No new coding starts until you merge it.
+```mermaid
+flowchart LR
+    R["<b>Factory_ready</b><br/>you add it"] --> P["Factory_planning<br/>Opus plans"]
+    P -->|plan posted| PL["<b>Factory_planned</b><br/>you read the plan"]
+    P -->|question / not code / too big| NI["Factory_needs_info<br/>you reply on the issue"]
+    NI -->|your reply| P
+    PL -->|"you add <b>Factory_code</b>"| W["Factory_working<br/>coding, tests, reviews"]
+    W -->|pushed to today's branch| D["Factory_done"]
+    W -->|3 failed fix rounds or an error| E["Factory_ERROR<br/>reason on the issue"]
+    E -->|you remove the label| W
+    D -->|17:00: daily pull request| M(["merged by you →<br/>issue closes"])
+```
+
+#### Labels you set
+
+| Label | Add it when… | What happens |
+|---|---|---|
+| **`Factory_ready`** | the issue describes the work well enough to plan | Opus investigates the code and writes a plan; Codex checks it against the code; the plan is posted on the issue |
+| **`Factory_code`** | you have read the plan and agree with it (comment first if you want changes in it) | Sonnet implements the plan on today's branch, with tests, two Codex review rounds and documentation, and reports on the issue |
+
+#### Labels the factory sets
+
+| Label | Means | What you do |
+|---|---|---|
+| `Factory_planning` | A plan is being written | Wait (a few minutes) |
+| `Factory_planned` | The plan is posted on the issue | Read it → add `Factory_code`, or comment and re-plan (below) |
+| `Factory_needs_info` | The factory asked questions, thinks it is not a coding task, or proposes splitting it | Reply on the issue — it continues by itself |
+| `Factory_working` | Coding is running, or waiting until the daily pull request is merged | Wait; follow it on the Runs page |
+| `Factory_done` | Implemented, tested, reviewed and pushed to today's branch | Nothing — it goes to `main` with the daily pull request |
+| `Factory_ERROR` | It failed; the reason and the failing output are commented on the issue | Fix the cause if needed, then remove the label to retry |
+
+Issues with an excluded label (e.g. `geni`) are never picked up, whatever other labels they have.
+
+#### How do I…?
+
+| I want to… | Do this |
+|---|---|
+| Get a plan | Add `Factory_ready` |
+| Change the plan | Comment what should change, remove `Factory_planned`, add `Factory_ready` again |
+| Answer the factory's questions | Reply on the issue (the label is `Factory_needs_info`) |
+| Start coding | Add `Factory_code` (keep or remove `Factory_planned`, it doesn't matter) |
+| Retry after an error | Remove `Factory_ERROR` |
+| Stop the factory from touching an issue | Remove `Factory_ready` / `Factory_code`, or add an excluded label |
+| Get the day's work into `main` | Merge the daily pull request (opened at 17:00) |
+
+#### Why is nothing happening?
+
+- **A daily pull request is still open.** No new coding starts until you merge it
+  (`Factory_code` issues wait, planning continues).
+- **Another issue is being coded.** Only one coding run per repository runs at a time; the
+  others wait in the queue (Runs page).
+- **The usage limit or the daily budget is reached.** Runs pause and continue by themselves
+  later; the label stays `Factory_working`.
+- **The factory isn't running.** Watchers only run while `factory ui` / `factory serve` runs.
+- **The issue still has a status label** from an earlier round (e.g. `Factory_planned` when you
+  add `Factory_ready` again) — remove it.
+- **It has an excluded label** such as `geni`.
+
+#### Branches and the daily pull request
+
+- Each day's coding goes to one branch, `factory/daily-YYYY-MM-DD`; every issue is one commit
+  `Resolve #N: title`. Nothing is ever pushed to `main`.
+- At **17:00** the day's branch goes to `main` in one pull request that closes all its issues,
+  after a full test run and build (a draft if those fail). You review and merge it.
+- The next day's branch starts from `main` once that pull request is merged.
 
 ### Keep it running
 

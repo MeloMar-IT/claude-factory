@@ -41,8 +41,10 @@ else if (prompt.includes("CI failed on this branch")) {
     writeFileSync("chore.txt", "done\n");
     canned = "- bumped a dependency";
   }
-} else if (prompt.includes("You are the architect for this repository")) {
-  canned = process.env.FAKE_ISSUE_PLAN ?? "## Approach\nAdd feature.txt\n## Tests to add\nfeature test\nPLAN_STATUS: READY";
+} else if (prompt.includes("architect for this repository")) {
+  canned = process.env.FAKE_ISSUE_PLAN ?? "## Goal\nAdd feature.txt\n## Tests\nfeature test\nPLAN_STATUS: READY";
+} else if (prompt.includes("Another reviewer checked your plan")) {
+  canned = "## Goal\nAdd feature.txt (revised)\n## Review notes\n- adopted: add an edge-case test\nPLAN_STATUS: READY";
 } else if (prompt.includes("Implement GitHub issue below")) {
   const issue = /# #(\d+):/.exec(prompt)?.[1] ?? "?";
   writeFileSync("feature.txt", process.env.FAKE_IMPL_BUG ? "BUG\n" : `implemented #${issue}\n`);

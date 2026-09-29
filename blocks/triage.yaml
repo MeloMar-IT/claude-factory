@@ -8,7 +8,7 @@ vars:
 steps:
   - id: triage
     type: claude
-    model: sonnet
+    model: claude-sonnet-5-5
     permission_mode: dontAsk
     allowed_tools: [Read, Glob, Grep, "Bash(git log*)", "Bash(ls*)"]
     prompt: |

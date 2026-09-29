@@ -36,6 +36,8 @@ export interface CodexRunOptions {
   localBaseUrl?: string;
   systemPrompt?: string;
   sandbox: CodexSandbox;
+  /** low | medium | high | xhigh | max (max is sent as xhigh) */
+  effort?: string;
   resumeSessionId?: string;
   timeoutMs?: number;
   signal?: AbortSignal;
@@ -79,6 +81,7 @@ export function buildCodexArgs(o: CodexRunOptions): string[] {
   if (o.resumeSessionId) args.push("resume");
   args.push("--json", "--skip-git-repo-check", "-c", `sandbox_mode=${toml(o.sandbox)}`, "-c", `approval_policy=${toml("never")}`);
   if (o.model) args.push("-m", o.model);
+  if (o.effort) args.push("-c", `model_reasoning_effort=${toml(o.effort === "max" ? "xhigh" : o.effort)}`);
   if (o.localProvider) args.push("-c", `model_provider=${toml(o.localProvider)}`);
   if (o.resumeSessionId) args.push(o.resumeSessionId);
   else args.push("-C", o.cwd, "--color", "never");

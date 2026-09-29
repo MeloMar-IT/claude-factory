@@ -8,7 +8,7 @@ description: Check out a PR, address its review comments, test, push, reply on t
 workspace: empty
 one_per_repo: true
 defaults:
-  model: sonnet
+  model: claude-sonnet-5-5
   timeout_sec: 1800
 limits:
   max_cost_usd: 10

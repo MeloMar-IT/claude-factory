@@ -1,4 +1,64 @@
+import { execFileSync } from "node:child_process";
+import { accessSync, constants, readdirSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { runProcess } from "./process.js";
+
+/** Where the Claude desktop app keeps its bundled Claude Code, one folder per version. */
+const DESKTOP_CLAUDE_CODE = join(homedir(), "Library/Application Support/Claude/claude-code");
+
+const VERSION_RE = /(\d+)\.(\d+)\.(\d+)/;
+function cmpVersion(a: string, b: string): number {
+  const x = VERSION_RE.exec(a)?.slice(1).map(Number) ?? [0, 0, 0];
+  const y = VERSION_RE.exec(b)?.slice(1).map(Number) ?? [0, 0, 0];
+  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i]! - y[i]!;
+  return 0;
+}
+
+let pathVersion: string | null | undefined;
+
+/**
+ * FACTORY_CLAUDE_BIN, else the newest Claude Code on this Mac: `claude` on PATH or the one
+ * bundled with the Claude desktop app (which updates itself). Newer models need a recent CLI.
+ */
+export function resolveClaudeBin(): string {
+  if (process.env.FACTORY_CLAUDE_BIN) return process.env.FACTORY_CLAUDE_BIN;
+  if (pathVersion === undefined) {
+    try {
+      pathVersion = VERSION_RE.exec(execFileSync("claude", ["--version"], { encoding: "utf8", timeout: 15_000 }))?.[0] ?? null;
+    } catch {
+      pathVersion = null;
+    }
+  }
+  let bundled: { version: string; bin: string } | undefined;
+  try {
+    for (const v of readdirSync(DESKTOP_CLAUDE_CODE).filter((d) => VERSION_RE.test(d)).sort(cmpVersion).reverse()) {
+      const bin = join(DESKTOP_CLAUDE_CODE, v, "claude.app/Contents/MacOS/claude");
+      try {
+        accessSync(bin, constants.X_OK);
+        bundled = { version: v, bin };
+        break;
+      } catch {
+        // incomplete download of that version
+      }
+    }
+  } catch {
+    // no desktop app
+  }
+  if (bundled && (!pathVersion || cmpVersion(bundled.version, pathVersion) > 0)) return bundled.bin;
+  return "claude";
+}
+
+/**
+ * Unattended factory steps should not inherit the user's personal Claude Code setup (MCP
+ * servers, plugins, skills, hooks, env): it bloats every turn and invites off-task detours.
+ */
+export const FACTORY_AGENT_NOTE = [
+  "You are running unattended as one step of a claude-factory flow. Do only the task in the prompt.",
+  "Ignore instructions from global or home-folder configuration about spawning agents or swarms,",
+  "memory tools, hooks or other orchestration. Do not use skills. Do not look at other projects",
+  "or at ~/.claude. Work only inside the current workspace.",
+].join(" ");
 
 export interface ClaudeRunOptions {
   prompt: string;
@@ -18,6 +78,10 @@ export interface ClaudeRunOptions {
   sandbox?: boolean;
   /** Load no MCP servers (keeps the prompt small for local models). */
   noMcp?: boolean;
+  /** Skip the user's personal setup: MCP servers, user settings (hooks, plugins, env), skills. */
+  isolated?: boolean;
+  /** low | medium | high | xhigh | max */
+  effort?: string;
   onProgress?: (msg: string) => void;
 }
 
@@ -47,14 +111,17 @@ interface StreamEvent {
 export function buildClaudeArgs(o: ClaudeRunOptions): string[] {
   const args = ["-p", "--output-format", "stream-json", "--verbose"];
   if (o.model) args.push("--model", o.model);
+  if (o.effort) args.push("--effort", o.effort);
   if (o.permissionMode) args.push("--permission-mode", o.permissionMode);
   if (o.allowedTools?.length) args.push("--allowedTools", o.allowedTools.join(","));
-  if (o.systemPrompt) args.push("--append-system-prompt", o.systemPrompt);
+  const system = [o.isolated ? FACTORY_AGENT_NOTE : "", o.systemPrompt ?? ""].filter(Boolean).join("\n\n");
+  if (system) args.push("--append-system-prompt", system);
   if (o.resumeSessionId) args.push("--resume", o.resumeSessionId);
   if (o.maxBudgetUsd) args.push("--max-budget-usd", String(o.maxBudgetUsd));
   // Pushing is a flow decision (shell steps + protected-branch hook), never Claude's.
   args.push("--disallowedTools", "Bash(git push*)");
-  if (o.noMcp) args.push("--strict-mcp-config");
+  if (o.noMcp || o.isolated) args.push("--strict-mcp-config");
+  if (o.isolated) args.push("--setting-sources", "project,local", "--disable-slash-commands");
   if (o.sandbox) args.push("--settings", JSON.stringify({ sandbox: { enabled: true, autoAllowBashIfSandboxed: true } }));
   return args;
 }
@@ -67,7 +134,7 @@ function describeToolUse(name: string, input: Record<string, unknown> = {}): str
 
 /** Run the local Claude Code CLI headlessly. The prompt goes via stdin. */
 export async function runClaude(o: ClaudeRunOptions): Promise<ClaudeRunResult> {
-  const bin = o.claudeBin ?? process.env.FACTORY_CLAUDE_BIN ?? "claude";
+  const bin = o.claudeBin ?? resolveClaudeBin();
   let final: StreamEvent | undefined;
 
   const res = await runProcess(bin, buildClaudeArgs(o), {

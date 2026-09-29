@@ -69,6 +69,22 @@ describe("label-driven issue pipeline", () => {
     expect(log).not.toMatch(/issue edit 8 /);
   });
 
+  it("revises the plan when Codex finds problems, and posts the revised plan", async () => {
+    process.env.FAKE_CODEX_VERDICT = "The plan misses an edge case.\nVERDICT: CHANGES";
+    issues([5, ["Factory_ready"]]);
+    await planWatcher().tick();
+    await settle();
+    const run = runOf("issue-plan", "5")!;
+    expect(run.history.map((h) => h.id)).toEqual(["pull_ticket", "clone", "plan", "plan_review", "revise_plan", "post_plan"]);
+    expect(run.history.find((h) => h.id === "plan")!.agent).toBe("claude:anthropic:claude-opus-5-5");
+    expect(run.history.find((h) => h.id === "plan_review")!.agent).toBe("codex:openai");
+    // The revision continues the planning session.
+    expect(run.history.find((h) => h.id === "revise_plan")!.sessionId).toBe(run.history.find((h) => h.id === "plan")!.sessionId);
+    const log = gh.ghLog();
+    expect(log).toContain("claude-factory plan** (checked against the code by Codex)");
+    expect(log).toContain("Add feature.txt (revised)");
+  });
+
   it("sends non-code issues back with the reason and stops", async () => {
     process.env.FAKE_ISSUE_PLAN = "This is a legal approval task.\nPLAN_STATUS: NOT_CODE";
     issues([1, ["Factory_ready"]]);
@@ -92,6 +108,10 @@ describe("label-driven issue pipeline", () => {
     expect(ids).toEqual(["pull_ticket", "daily_branch", "baseline_tests", "implement", "guard", "run_tests", "review_1", "address_review_1",
       "run_tests_1", "review_2", "address_review_2", "run_tests_2", "docs", "final_guard", "commit", "push", "report"]);
     expect(run.history.find((h) => h.id === "review_1")!.agent).toBe("codex:openai");
+    expect(run.history.find((h) => h.id === "implement")!.agent).toBe("claude:anthropic:claude-sonnet-5-5");
+    // Review fixes and docs continue the coding session instead of re-reading the code.
+    const sess = run.history.find((h) => h.id === "implement")!.sessionId;
+    expect(["address_review_1", "address_review_2", "docs"].map((id) => run.history.find((h) => h.id === id)!.sessionId)).toEqual([sess, sess, sess]);
 
     const branch = `factory/daily-${today}`;
     expect(gh.remoteGit("log", "--format=%s", "-1", branch).trim()).toBe("Resolve #5: Add a feature");

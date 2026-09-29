@@ -13,8 +13,9 @@ description: "Code a planned issue on the day's branch: tests, 2 Codex reviews, 
 workspace: empty
 one_per_repo: true
 defaults:
-  model: sonnet
+  model: claude-sonnet-5-5
   timeout_sec: 2400
+  max_budget_usd: 6
 limits:
   max_cost_usd: 30
 vars:
@@ -102,6 +103,7 @@ steps:
     on_failure: fix_guard
   - id: fix_guard
     type: claude
+    resume: implement
     jump_only: true
     max_visits: 2
     prompt: |-
@@ -127,6 +129,7 @@ steps:
     on_failure: fix_tests
   - id: fix_tests
     type: claude
+    resume: implement
     jump_only: true
     max_visits: 3
     prompt: |-
@@ -157,6 +160,7 @@ steps:
         goto: docs
   - id: address_review_1
     type: claude
+    resume: implement
     prompt: |-
       A reviewer (Codex) looked at your changes. Fix every point you agree with. For points you
       disagree with, explain why in one line each. Keep tests passing; don't write docs yet.
@@ -180,6 +184,7 @@ steps:
     on_failure: fix_tests_1
   - id: fix_tests_1
     type: claude
+    resume: implement
     jump_only: true
     max_visits: 3
     prompt: |-
@@ -210,6 +215,7 @@ steps:
         goto: docs
   - id: address_review_2
     type: claude
+    resume: implement
     prompt: |-
       A reviewer (Codex) looked at your changes. Fix every point you agree with. For points you
       disagree with, explain why in one line each. Keep tests passing; don't write docs yet.
@@ -233,6 +239,7 @@ steps:
     on_failure: fix_tests_2
   - id: fix_tests_2
     type: claude
+    resume: implement
     jump_only: true
     max_visits: 3
     prompt: |-
@@ -243,6 +250,7 @@ steps:
     on_success: run_tests_2
   - id: docs
     type: claude
+    resume: implement
     prompt: |-
       Now document the change you made for this issue, following the repository's documentation rules
       (CLAUDE.md). If there are none: update README/docs where behaviour changed, and add doc comments

@@ -16,6 +16,9 @@ export const PERMISSION_MODES = [
 /** Coding agent CLI that runs a claude-type step. */
 export const AGENTS = ["claude", "codex"] as const;
 
+/** How hard the agent thinks; more effort = better answers, more tokens. */
+export const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+
 const stepId = z
   .string()
   .regex(/^[a-zA-Z][\w-]*$/, "step id must start with a letter and contain only letters, digits, _ or -");
@@ -55,6 +58,7 @@ export const ClaudeStepSchema = z
     agent: z.enum(AGENTS).optional(),
     /** Provider name from config (anthropic, openai, ollama, lmstudio, or your own). */
     provider: z.string().optional(),
+    effort: z.enum(EFFORTS).optional(),
     system_prompt: z.string().optional(),
     permission_mode: z.enum(PERMISSION_MODES).optional(),
     allowed_tools: z.array(z.string()).optional(),
@@ -118,6 +122,7 @@ export const DefaultsSchema = z
     model: z.string().optional(),
     agent: z.enum(AGENTS).optional(),
     provider: z.string().optional(),
+    effort: z.enum(EFFORTS).optional(),
     permission_mode: z.enum(PERMISSION_MODES).optional(),
     allowed_tools: z.array(z.string()).optional(),
     max_visits: z.number().int().positive().optional(),

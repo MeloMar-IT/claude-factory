@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Config } from "../config.js";
-import { runClaude } from "../steps/claude.js";
+import { resolveClaudeBin, runClaude } from "../steps/claude.js";
 import { resolveCodexBin, runCodex } from "../steps/codex.js";
 import { claudeProviderEnv, LOCAL_KINDS, providers, specOf, toTarget } from "./targets.js";
 
@@ -40,11 +40,11 @@ async function getJson(url: string, headers: Record<string, string> = {}): Promi
 }
 
 export async function agentStatuses(): Promise<AgentStatus[]> {
-  const claudeBin = process.env.FACTORY_CLAUDE_BIN ?? "claude";
+  const claudeBin = resolveClaudeBin();
   const codexBin = resolveCodexBin();
   const [cv, xv, xl] = await Promise.all([run(claudeBin, ["--version"]), run(codexBin, ["--version"]), run(codexBin, ["login", "status"])]);
   return [
-    { agent: "claude", installed: cv.ok, version: cv.ok ? cv.out.split("\n")[0] : undefined, detail: cv.ok ? "Claude Code CLI" : "not found — install Claude Code" },
+    { agent: "claude", installed: cv.ok, version: cv.ok ? cv.out.split("\n")[0] : undefined, detail: !cv.ok ? "not found — install Claude Code" : claudeBin.includes("Application Support/Claude") ? "Claude Code from the Claude desktop app (newer than the one on PATH)" : "Claude Code CLI" },
     {
       agent: "codex",
       installed: xv.ok,
