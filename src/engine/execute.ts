@@ -6,7 +6,7 @@ import { runAgentStep } from "../agents/run.js";
 import type { Target } from "../agents/targets.js";
 import { runShell } from "../steps/shell.js";
 import type { RunSummary, StepRecord } from "./state.js";
-import { outputEnvName, render, varEnvName, type TemplateContext } from "./template.js";
+import { outputEnvName, render, varEnvName, withScfAliases, type TemplateContext } from "./template.js";
 
 /** Shell commands may only template trusted values; task and outputs go via env. */
 export const SHELL_TEMPLATE_ROOTS = ["vars", "workdir", "run"] as const;
@@ -70,7 +70,7 @@ export function stepEnv(scope: Scope, engine: Engine): Record<string, string> {
   const env: Record<string, string> = { ...engine.baseEnv };
   for (const [k, v] of Object.entries(scope.ctx.vars)) env[varEnvName(k)] = v;
   for (const [id, s] of Object.entries(scope.ctx.steps)) env[outputEnvName(id)] = String(s.output ?? "");
-  return env;
+  return withScfAliases(env);
 }
 
 export function historySummary(summary: RunSummary): string {

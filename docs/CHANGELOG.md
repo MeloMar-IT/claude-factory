@@ -4,6 +4,8 @@ Changes that are merged but not yet in a release go under **Unreleased**. Newest
 
 ## Unreleased
 
+- New command `scf` (Spaghetti Code Foundry) and package name `spaghetti-code-foundry`; `factory` keeps working and prints a short note. Settings work as `SCF_…` or `FACTORY_…` (`SCF_…` wins); steps and notify commands get every `FACTORY_…` variable also as `SCF_…`. The login service is now `com.spaghetti-code-foundry.server` — run `scf service install` once to replace the old one; if that fails, the old service is put back.
+
 - Comments and pull requests from the issue pipelines say "Spaghetti Code Foundry" (PR titles "Foundry: #…"). Both the old `<!-- claude-factory` and the new `<!-- spaghetti-code-foundry` markers are recognised, so approvals, answers and splits work with comments from before and after the rename; new comments still carry the old marker.
 - Fix: a split is no longer skipped when a comment merely mentions the split marker; issues that depended on a split issue now wait for its parts.
 - Coding agents may run the project's build and tests; `agent_env` passes settings such as `JAVA_HOME`.

@@ -156,7 +156,7 @@ export async function renderWatchers(main) {
       h("button", { class: "primary", onClick: async () => (await editWatcher(null, flows)) && reload() }, "+ Add watcher")),
     h("p", { class: "muted", style: { marginTop: "16px" } },
       "Watchers run inside this server. To keep them running after you close the terminal or restart your Mac: ",
-      h("code", {}, "factory service install")));
+      h("code", {}, "scf service install")));
 }
 
 // ── disk ──
@@ -178,7 +178,7 @@ function diskSection(section) {
     }
   };
   return section("Disk",
-    h("p", { class: "muted", style: { margin: 0 } }, "Each run keeps its workspace (worktree or clone) so you can inspect or resume it. Clean up old ones here or with ", h("code", {}, "factory clean"), "."),
+    h("p", { class: "muted", style: { margin: 0 } }, "Each run keeps its workspace (worktree or clone) so you can inspect or resume it. Clean up old ones here or with ", h("code", {}, "scf clean"), "."),
     h("div", { class: "row" }, h("span", {}, "Runs finished more than"), days, h("span", {}, "days ago")),
     purge.row, paused.row,
     h("div", { class: "row" }, h("button", { onClick: () => go(true) }, "Preview"), h("button", { class: "danger", onClick: () => go(false) }, "Clean up"), out));

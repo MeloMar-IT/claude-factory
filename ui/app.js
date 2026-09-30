@@ -267,7 +267,7 @@ async function runDialog() {
   if (!c.validation?.ok) return toast("Fix the errors before running", "error");
   const flow = c.validation.flow;
   const runId = await modal(`Run ${flow.name}`, (close) => {
-    const usesTask = /\{\{\s*task\s*\}\}|FACTORY_TASK/.test(c.yaml);
+    const usesTask = /\{\{\s*task\s*\}\}|(FACTORY|SCF)_TASK/.test(c.yaml);
     const task = h("textarea", { rows: 5, placeholder: "Describe the task, e.g. “Add a --json flag to the export command”" });
     const repo = h("input", { class: "mono", value: S.info.repo });
     const vars = Object.entries(flow.vars).map(([k, v]) => [k, h("input", { class: "mono", value: v })]);

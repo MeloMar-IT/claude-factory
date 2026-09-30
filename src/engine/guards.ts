@@ -109,7 +109,8 @@ export function dockerCommand(image: string, workdir: string, command: string, e
     "-w", "/work",
     "-e", "HOME=/tmp",
     "-e", "FACTORY_TOOLS=/factory-tools",
-    ...envNames.filter((n) => n !== "FACTORY_TOOLS").flatMap((n) => ["-e", n]), // values come from our env, not the command line
+    "-e", "SCF_TOOLS=/factory-tools",
+    ...envNames.filter((n) => n !== "FACTORY_TOOLS" && n !== "SCF_TOOLS").flatMap((n) => ["-e", n]), // values come from our env, not the command line
     image, "sh", "-c", command,
   ];
   return { cmd: "docker", args };

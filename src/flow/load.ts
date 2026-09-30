@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
 import { FlowSchema, type Flow } from "./schema.js";
 
-export const FACTORY_HOME = process.env.FACTORY_HOME ?? join(homedir(), ".claude-factory");
+export const FACTORY_HOME = process.env.SCF_HOME ?? process.env.FACTORY_HOME ?? join(homedir(), ".claude-factory");
 const BUILTIN_FLOWS = resolve(dirname(fileURLToPath(import.meta.url)), "../../flows");
 
 export type FlowScope = "repo" | "global" | "builtin";

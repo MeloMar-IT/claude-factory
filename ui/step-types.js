@@ -49,7 +49,7 @@ export function stepBody(flow, step, i, { onChange, rerender, vars, earlier, pri
     }
     case "approval":
       return [
-        field("Question for the approver", area(step, "message", onChange, { rows: 2 }), "The run pauses here. Approve → on success, reject → on failure. Approve in the UI, with `factory approve`, or /approve on the ticket."),
+        field("Question for the approver", area(step, "message", onChange, { rows: 2 }), "The run pauses here. Approve → on success, reject → on failure. Approve in the UI, with `scf approve`, or /approve on the ticket."),
       ];
     case "parallel": {
       const candidates = flow.steps.filter((s) => s !== step && (s.type === "claude" || s.type === "shell"));

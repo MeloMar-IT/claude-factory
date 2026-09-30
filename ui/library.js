@@ -65,11 +65,13 @@ export async function pickBlock() {
   });
 }
 
-/** Variables a step refers to, via {{vars.x}} or $FACTORY_VAR_X. */
+/** Variables a step refers to, via {{vars.x}} or $FACTORY_VAR_X / $SCF_VAR_X. */
 function referencedVars(step, flowVars) {
   const text = JSON.stringify(step);
-  return Object.fromEntries(Object.entries(flowVars ?? {}).filter(([k]) =>
-    text.includes(`vars.${k}`) || text.includes(`FACTORY_VAR_${k.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`)));
+  return Object.fromEntries(Object.entries(flowVars ?? {}).filter(([k]) => {
+    const suffix = k.toUpperCase().replace(/[^A-Z0-9]/g, "_");
+    return text.includes(`vars.${k}`) || text.includes(`FACTORY_VAR_${suffix}`) || text.includes(`SCF_VAR_${suffix}`);
+  }));
 }
 
 /** Save one step (plus the vars it uses) as a reusable block. */
