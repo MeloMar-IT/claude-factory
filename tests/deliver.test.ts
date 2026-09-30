@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { ConfigSchema, WatcherSchema } from "../src/config.js";
 import { runFlow } from "../src/engine/runner.js";
-import { loadFlow } from "../src/flow/load.js";
+import { loadFlow, parseFlow } from "../src/flow/load.js";
 import { Scheduler } from "../src/queue/scheduler.js";
 import { Watcher } from "../src/queue/watcher.js";
 import { buildStamp, RESTART_CODE, supervise } from "../src/supervise.js";
@@ -65,7 +65,7 @@ describe("deliver pipeline", () => {
     const log = gh.ghLog();
     expect(log).toContain("**Risk: 20/100** — small local change");
     expect(log).toContain("Coding starts now");
-    expect(log).toContain("It is in the factory pull request: https://github.com/owner/repo/pull/99");
+    expect(log).toContain("It is in the Foundry pull request: https://github.com/owner/repo/pull/99");
     expect(prs()).toHaveLength(1);
     expect(log).toMatch(/gh issue edit 5 .*--remove-label Factory_go.*--add-label Factory_done/);
   });
@@ -80,7 +80,9 @@ describe("deliver pipeline", () => {
     await settle();
     expect(runOf("issue-deliver", "6")?.status).toBe("succeeded");
     expect(prs()).toHaveLength(1); // same PR, updated
-    expect(gh.ghLog()).toMatch(/--- pr edit: pr edit 99 .*--title claude-factory: #5, #6/);
+    expect(gh.ghLog()).toMatch(/--- pr edit: pr edit 99 .*--title Foundry: #5, #6/);
+    expect(gh.ghLog()).toContain("Work from Spaghetti Code Foundry.");
+    expect(gh.ghLog()).toContain("the Foundry runs the full tests");
     const branch = prs()[0]!.headRefName;
     expect(gh.remoteGit("log", "--format=%s", `main..${branch}`)).toMatch(/Resolve #6[\s\S]*Resolve #5/);
   });
@@ -147,15 +149,33 @@ describe("deliver pipeline", () => {
     expect(log).toContain("**Epic:** Updates\n\nPart 1 of 2 of #5");
     expect(log).toContain("### Depends on\n#101, #70"); // part 1 became #101; the planner's own section is replaced
     expect(log).not.toContain("### Depends on\nPart A");
-    expect(log).toContain("split this issue into 2 issues");
+    expect(log).toContain("🤖 **Spaghetti Code Foundry** split this issue into 2 issues");
+    expect(log).toContain("<!-- claude-factory split run=");
+    expect(log).toContain("split by Spaghetti Code Foundry.");
     expect(log).toMatch(/gh issue close 5 --repo acme\/app --reason not planned/);
     expect(log).not.toMatch(/gh issue edit 5 .*--add-label Factory_done/); // closed in favour of the parts, not "done"
+  });
+
+  it.each([
+    ["old heading, old marker", "🤖 **claude-factory** split this issue into", "<!-- claude-factory split run=r1 -->"],
+    ["new heading, old marker", "🤖 **Spaghetti Code Foundry** split this issue into", "<!-- claude-factory split run=r1 -->"],
+    ["new heading, new marker", "🤖 **Spaghetti Code Foundry** split this issue into", "<!-- spaghetti-code-foundry split run=r1 -->"],
+  ])("treats an earlier finished split as done (%s)", (_name, head, mark) => {
+    process.env.FAKE_GH_PARENT = JSON.stringify({ title: "Add a feature", body: "", labels: [],
+      comments: [{ author: { login: "bot" }, body: `${head} 2 issues, built in this order:\n\n- #101 Part A\n- #102 Part B\n\nClosing this one in favour of them.\n\n${mark}` }] });
+    const r = spawnSync(process.execPath, [resolve("tools/create-split")], { input: SPLIT(20), encoding: "utf8",
+      env: { ...process.env, FACTORY_VAR_GITHUB_REPO: REPO, FACTORY_VAR_ISSUE: "5", FACTORY_RUN_ID: "again" } });
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("already split: #101 #102");
+    const log = gh.ghLog();
+    expect(log).not.toContain("created issue");
+    expect(log).not.toContain("issue close");
   });
 
   it("isn't fooled by a comment that only mentions the split marker, and moves dependents onto the parts", async () => {
     process.env.FAKE_ISSUE_PLAN = SPLIT(20);
     process.env.FAKE_GH_PARENT = JSON.stringify({ title: "Add a feature", body: "Please add it", labels: [{ name: "Factory_go" }],
-      comments: [{ author: { login: "bot" }, body: "Question: markers like `<!-- claude-factory split` …\n<!-- claude-factory run=x questions -->" }] });
+      comments: [{ author: { login: "bot" }, body: "Question: markers like `<!-- claude-factory split` or `<!-- spaghetti-code-foundry split run=x -->` …\n<!-- claude-factory run=x questions -->" }] });
     issues([5, ["Factory_go"]]);
     const w = watcher();
     await w.tick();
@@ -245,7 +265,7 @@ describe("deliver pipeline", () => {
     expect(check.vars.issues).toBe("5 6");
     expect(runOf("issue-deliver", "5")).toBeUndefined(); // nothing is built before the check
     const log = gh.ghLog();
-    expect(log).toContain("has questions before it builds this issue");
+    expect(log).toContain("🤖 **Spaghetti Code Foundry** has questions before it builds this issue");
     expect(log).toContain("**Q1. Which package format?**");
     expect(log).toMatch(/gh issue edit 6 .*--add-label Factory_needs_info/);
     expect(log).not.toMatch(/gh issue edit 5 .*Factory_needs_info/);
@@ -258,6 +278,15 @@ describe("deliver pipeline", () => {
     expect(runOf("issue-deliver", "6")).toBeUndefined();
     expect(w.status.lastError).toBeUndefined();
     expect(w.status.holds).toEqual([{ issue: 6, title: "issue 6", reason: "needs your answer — reply on the issue (or /defaults) and it continues" }]);
+
+    // A bot comment with only the new marker is not an answer.
+    process.env.FAKE_GH_COMMENTS = JSON.stringify({ comments: [
+      { author: { login: "bot" }, body: "questions <!-- spaghetti-code-foundry run=x questions -->", createdAt: "2026-01-01T00:00:00Z" },
+    ] });
+    issues([6, ["Factory_go", "Factory_needs_info"]]);
+    await w.tick();
+    await settle();
+    expect(runOf("issue-deliver", "6")).toBeUndefined();
 
     process.env.FAKE_GH_COMMENTS = JSON.stringify({ comments: [
       { author: { login: "bot" }, body: "questions <!-- claude-factory run=x questions -->", createdAt: "2026-01-01T00:00:00Z" },
@@ -277,7 +306,8 @@ describe("deliver pipeline", () => {
     const ok = await runFlow(loadFlow("daily-pr", gh.tmp).flow, { task: "", repo: gh.tmp, runsDir: runsDir(), claudeBin, config, vars: { github_repo: REPO, test_cmd: "true" } });
     expect(ok.status).toBe("succeeded");
     expect(ok.history.at(-1)!.output).toContain("checks passed — https://github.com/owner/repo/pull/99 is ready to merge");
-    expect(gh.ghLog()).toContain("claude-factory daily report");
+    expect(gh.ghLog()).toContain("Spaghetti Code Foundry daily report");
+    expect(gh.ghLog()).toContain("the Foundry keeps working either way");
     const red = await runFlow(loadFlow("daily-pr", gh.tmp).flow, { task: "", repo: gh.tmp, runsDir: runsDir(), claudeBin, config, vars: { github_repo: REPO, test_cmd: "false" } });
     expect(red.history.at(-1)!.output).toContain("is a draft");
     expect(gh.ghLog()).toMatch(/gh pr ready 99 --repo acme\/app --undo/);
@@ -303,5 +333,40 @@ describe("restart on a new build", () => {
     expect(await supervise(script, [], (m) => logs.push(m))).toBe(0);
     expect(logs).toEqual(["restarting with the new version…"]);
     expect(spawnSync(process.execPath, [script]).status).toBe(RESTART_CODE);
+  });
+});
+
+describe("generated issue flows", () => {
+  const FLOWS = ["pr-feedback", "issue-plan", "issue-code-daily", "issue-deliver", "issue-gitflow", "release-daily", "daily-pr"];
+  const text = (f: string) => readFileSync(`flows/${f}.yaml`, "utf8");
+  const step = (f: string, id: string) => JSON.stringify(parseFlow(text(f), f).steps.find((s) => s.id === id));
+
+  it("names both plan headings in the implement prompt", () => {
+    const p = step("issue-code-daily", "implement");
+    expect(p).toContain('\\"Spaghetti Code Foundry plan\\" comment (older ones are headed');
+    expect(p).toContain('\\"claude-factory plan\\")');
+  });
+
+  it.each(["issue-deliver", "issue-gitflow"])("%s swaps the implement prompt to the approved plan", (f) => {
+    const p = step(f, "implement");
+    expect(p).toContain("Follow this plan (comments from people on the issue override it)");
+    expect(p).not.toContain("Follow the plan in the latest");
+  });
+
+  it("the gitflow report still points at the daily release pull request", () => {
+    const r = step("issue-gitflow", "report");
+    expect(r).toContain("with the daily release pull request");
+    expect(r).not.toContain("Foundry pull request");
+  });
+
+  it("pr-feedback leaves out comments with the new marker", () => {
+    expect(step("pr-feedback", "pr_comments").split('contains(\\"spaghetti-code-foundry\\")')).toHaveLength(3);
+  });
+
+  it("writes the old marker only", () => {
+    for (const f of FLOWS) {
+      expect(text(f)).not.toMatch(/🤖 \*\*claude-factory/);
+      expect(text(f)).not.toContain("<!-- spaghetti-code-foundry");
+    }
   });
 });

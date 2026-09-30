@@ -134,7 +134,7 @@ describe("gitflow pipeline", () => {
     const log = gh.ghLog();
     expect(log).toMatch(/gh pr create --repo acme\/app --base main --head develop --title Release/);
     expect(log).toContain("Closes #5");
-    expect(log).toContain("claude-factory daily release check");
+    expect(log).toContain("Spaghetti Code Foundry daily release check");
   });
 });
 

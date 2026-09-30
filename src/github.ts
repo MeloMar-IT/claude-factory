@@ -5,6 +5,8 @@ const exec = promisify(execFile);
 
 /** Marker in every comment the factory writes, e.g. <!-- claude-factory run=… --> */
 export const BOT_MARKER = "<!-- claude-factory";
+/** Markers that identify our own comments: the one we write, and the new product name's. */
+export const BOT_MARKERS = [BOT_MARKER, "<!-- spaghetti-code-foundry"] as const;
 
 export async function gh(args: string[], env?: NodeJS.ProcessEnv): Promise<string> {
   const { stdout } = await exec(process.env.FACTORY_GH_BIN ?? "gh", args, {
@@ -33,7 +35,7 @@ export interface Issue {
   state?: string;
 }
 
-export const isBot = (c: { body: string }) => c.body.includes(BOT_MARKER);
+export const isBot = (c: { body: string }) => BOT_MARKERS.some((m) => c.body.includes(m));
 
 export async function issueComments(repo: string, issue: number | string): Promise<Comment[]> {
   const r = await ghJson<{ comments: Comment[] }>(["issue", "view", String(issue), "--repo", repo, "--json", "comments,labels"]);

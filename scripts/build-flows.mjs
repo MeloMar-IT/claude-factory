@@ -10,6 +10,8 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const block = (id) => parse(readFileSync(join(root, "blocks", `${id}.yaml`), "utf8")).steps;
 const steps = (...ids) => ids.flatMap((id) => (typeof id === "string" ? block(id) : [id]));
 const patch = (list, id, fields) => Object.assign(list.find((s) => s.id === id), fields);
+// issue-deliver/gitflow replace this sentence in the implement prompt — keep one copy.
+const FOLLOW_PLAN = "Follow the plan in the latest \"Spaghetti Code Foundry plan\" comment (older ones are headed\n\"claude-factory plan\"), including any later comments from people, which override it.";
 
 function write(name, header, flow) {
   const text = `# ${"─".repeat(3)} ${header.title} ${"─".repeat(Math.max(3, 66 - header.title.length))}
@@ -170,7 +172,7 @@ write("pr-feedback", {
       run: [
         "git add -A",
         'git diff --cached --quiet && { echo "no code changes"; exit 0; }',
-        'git commit -q -m "Address review comments" -m "Automated by claude-factory (run $FACTORY_RUN_ID)"',
+        'git commit -q -m "Address review comments" -m "Automated by Spaghetti Code Foundry (run $FACTORY_RUN_ID)"',
         "git push -q && git log --oneline -1",
       ].join("\n"),
     },
@@ -178,7 +180,7 @@ write("pr-feedback", {
       id: "reply",
       type: "shell",
       run: [
-        '{ echo "🤖 **claude-factory** went through the review comments:"; echo',
+        '{ echo "🤖 **Spaghetti Code Foundry** went through the review comments:"; echo',
         '  printf \'%s\\n\' "$FACTORY_OUT_ADDRESS_COMMENTS"',
         '  echo; echo "<!-- claude-factory run=$FACTORY_RUN_ID -->"; } \\',
         '  | gh pr comment "$FACTORY_VAR_PR" --repo "$FACTORY_VAR_GITHUB_REPO" --body-file -',
@@ -504,7 +506,7 @@ const planPhase = (post, { risk = false, split = false, sized = false } = {}) =>
         '  TOO_BIG) head="thinks this issue is too big for one change and proposes splitting it:" ;;',
         '  *) echo "planning failed: no PLAN_STATUS line"; exit 1 ;;',
         "esac",
-        '{ echo "🤖 **claude-factory** $head"; echo',
+        '{ echo "🤖 **Spaghetti Code Foundry** $head"; echo',
         '  printf \'%s\\n\' "$out" | sed \'/^PLAN_STATUS:/d\'',
         '  echo; echo "_Reply on this issue and it plans again._"',
         '  echo; echo "<!-- claude-factory run=$FACTORY_RUN_ID -->"; } \\',
@@ -549,7 +551,7 @@ write("issue-plan", {
         PICK_PLAN,
         'reviewed=""; [ -n "$FACTORY_OUT_PLAN_REVIEW" ] && reviewed=" (checked against the code by Codex)"',
         '[ -n "$notes" ] && reviewed=" (draft — the revision did not finish; Codex\'s review notes are below)"',
-        '{ echo "🤖 **claude-factory plan**$reviewed"; echo',
+        '{ echo "🤖 **Spaghetti Code Foundry plan**$reviewed"; echo',
         '  printf \'%s\\n\' "$out" | sed \'/^PLAN_STATUS:/d\'',
         '  if [ -n "$notes" ]; then echo; echo "## Codex review notes (not yet worked in)"; echo',
         '    printf \'%s\\n\' "$notes" | sed \'/^VERDICT:/d\'; fi',
@@ -673,8 +675,8 @@ write("issue-plan", {
         "",
         "{{steps.pull_ticket.output}}",
         "",
-        "Follow the plan in the latest \"claude-factory plan\" comment, including any later comments from",
-        "people, which override it. Follow the repository's CLAUDE.md conventions.",
+        FOLLOW_PLAN,
+        "Follow the repository's CLAUDE.md conventions.",
         "- Add or update tests for everything you change.",
         "- Do not add new dependencies. Do not change: {{vars.forbidden_paths}}",
         "- Do not write documentation yet; that is a separate step.",
@@ -736,7 +738,7 @@ write("issue-plan", {
       run: [
         "git add -A",
         'title=$(gh issue view "$FACTORY_VAR_ISSUE" --repo "$FACTORY_VAR_GITHUB_REPO" --json title -q .title 2>/dev/null)',
-        'git commit -q -m "Resolve #$FACTORY_VAR_ISSUE: $title" -m "Written by Claude, reviewed by Codex, tests passing. claude-factory run $FACTORY_RUN_ID"',
+        'git commit -q -m "Resolve #$FACTORY_VAR_ISSUE: $title" -m "Written by Claude, reviewed by Codex, tests passing. Spaghetti Code Foundry run $FACTORY_RUN_ID"',
         "git log --oneline -1",
       ].join("\n"),
     },
@@ -755,7 +757,7 @@ write("issue-plan", {
       run: [
         "branch=$(git branch --show-current); sha=$(git rev-parse HEAD)",
         'verdict() { printf \'%s\\n\' "$1" | sed -n \'s/^VERDICT: *//p\' | tail -1; }',
-        '{ echo "🤖 **claude-factory** implemented this on branch \\`$branch\\` (commit https://github.com/$FACTORY_VAR_GITHUB_REPO/commit/$sha)."',
+        '{ echo "🤖 **Spaghetti Code Foundry** implemented this on branch \\`$branch\\` (commit https://github.com/$FACTORY_VAR_GITHUB_REPO/commit/$sha)."',
         '  echo; echo "### What was done"; printf \'%s\\n\' "$FACTORY_OUT_IMPLEMENT"',
         '  echo; echo "### Review (Codex)"',
         '  echo "- round 1: $(verdict "$FACTORY_OUT_REVIEW_1")"',
@@ -832,7 +834,7 @@ write("issue-plan", {
       'plan=$(printf \'%s\\n\' "$out" | sed \'/^PLAN_STATUS:/d; /^RISK_SCORE:/d; /^RISK_REASON:/d\')',
       'reviewed=""; [ -n "$FACTORY_OUT_PLAN_REVIEW" ] && reviewed=" (checked against the code by Codex)"',
       '[ -n "$notes" ] && reviewed=" (draft — the revision did not finish; Codex\'s review notes are below)"',
-      '{ echo "🤖 **claude-factory plan**$reviewed"; echo; echo "**Risk: $risk/100**${reason:+ — $reason}"; echo',
+      '{ echo "🤖 **Spaghetti Code Foundry plan**$reviewed"; echo; echo "**Risk: $risk/100**${reason:+ — $reason}"; echo',
       '  printf \'%s\\n\' "$plan"',
       '  if [ -n "$notes" ]; then echo; echo "## Codex review notes (not yet worked in)"; echo; printf \'%s\\n\' "$notes" | sed \'/^VERDICT:/d; /^RISK_SCORE:/d\'; fi',
       '  echo',
@@ -841,7 +843,7 @@ write("issue-plan", {
       '    echo "Reply **/approve** to start coding (optionally with notes), or **/reject** followed by what to change — it then plans again."',
       '    echo; echo "<!-- claude-factory run=$FACTORY_RUN_ID approval -->"',
       '  else',
-      '    echo "_Coding starts now; the result goes into the factory pull request, where you review it._"',
+      '    echo "_Coding starts now; the result goes into the Foundry pull request, where you review it._"',
       '    echo; echo "<!-- claude-factory run=$FACTORY_RUN_ID plan -->"',
       '  fi; } | gh issue comment "$FACTORY_VAR_ISSUE" --repo "$FACTORY_VAR_GITHUB_REPO" --body-file - >/dev/null',
       'printf \'%s\\n\' "$plan"',
@@ -869,9 +871,9 @@ write("issue-plan", {
         'if [ -n "$agreed" ]; then echo "The owner already agreed to the split — creating the issues."; echo "GATE: no"; exit 0; fi',
         'if [ "$risk" -le "$limit" ] && [ -z "$forced" ]; then echo "Split risk $risk/100 (≤ $limit) — creating the issues without asking."; echo "GATE: no"; exit 0; fi',
         'why="the split risk is $risk/100 (above $limit)"; [ -n "$forced" ] && why="the issue has the \\`$FACTORY_VAR_REVIEW_PLAN_LABEL\\` label"',
-        '{ echo "🤖 **claude-factory** thinks this issue is too big for one change and proposes splitting it (**split risk: $risk/100**):"; echo',
+        '{ echo "🤖 **Spaghetti Code Foundry** thinks this issue is too big for one change and proposes splitting it (**split risk: $risk/100**):"; echo',
         '  printf \'%s\\n\' "$out" | sed \'/^PLAN_STATUS:/d; /^SPLIT_RISK:/d; /^SPLIT_APPROVED:/d\'',
-        '  echo; echo "✋ **You decide** ($why). Reply **/approve** and the factory creates these issues (with \\`Depends on\\` and the build label) and closes this one — or **/reject** followed by what to change."',
+        '  echo; echo "✋ **You decide** ($why). Reply **/approve** and the Foundry creates these issues (with \\`Depends on\\` and the build label) and closes this one — or **/reject** followed by what to change."',
         '  echo; echo "<!-- claude-factory run=$FACTORY_RUN_ID approval -->"; } | gh issue comment "$FACTORY_VAR_ISSUE" --repo "$FACTORY_VAR_GITHUB_REPO" --body-file - >/dev/null',
         'echo "asked the owner: $why"; echo "GATE: yes"',
       ].join("\n"),
@@ -906,7 +908,7 @@ write("issue-plan", {
   };
   const implement = byId("implement");
   implement.prompt = implement.prompt.replace(
-    "Follow the plan in the latest \"claude-factory plan\" comment, including any later comments from\npeople, which override it.",
+    FOLLOW_PLAN,
     "Follow this plan (comments from people on the issue override it):\n\n{{steps.risk_gate.output}}\n\nNotes from the person who approved the plan, if any: {{steps.approve_plan.output}}\n");
   const branch = byId("daily_branch");
   branch.description = "Clone, then check out the branch of the open factory PR (or a new one from main)";
@@ -914,7 +916,7 @@ write("issue-plan", {
   delete branch.routes;
   const report = byId("report");
   report.run = report.run
-    .replace("_This goes to main with the daily pull request._", "_It is in the factory pull request: $FACTORY_OUT_OPEN_PR — merge it whenever you like._");
+    .replace("_This goes to main with the daily pull request._", "_It is in the Foundry pull request: $FACTORY_OUT_OPEN_PR — merge it whenever you like._");
   const deliver = [
     byId("pull_ticket"),
     branch,
@@ -1157,7 +1159,7 @@ write("issue-plan", {
   gitflowReport.run = gitflowReport.run
     .replace("branch=$(git branch --show-current); sha=$(git rev-parse HEAD)", 'branch=$(cat "{{run.dir}}/feature-branch"); sha=$(git rev-parse HEAD)')
     .replace("implemented this on branch \\`$branch\\` (commit", "implemented this on \\`$branch\\` and merged it into \\`$FACTORY_VAR_DEVELOP_BRANCH\\` (commit")
-    .replace("_It is in the factory pull request: $FACTORY_OUT_OPEN_PR — merge it whenever you like._", "_It goes to \\`$FACTORY_VAR_MAIN_BRANCH\\` with the daily release pull request._")
+    .replace("_It is in the Foundry pull request: $FACTORY_OUT_OPEN_PR — merge it whenever you like._", "_It goes to \\`$FACTORY_VAR_MAIN_BRANCH\\` with the daily release pull request._")
     .replace("git show --stat --format= HEAD | tail -40", 'git diff --stat "$(cat "{{run.dir}}/develop-before")" HEAD | tail -40');
   const gitflowSteps = [
     byId("pull_ticket"),
@@ -1282,7 +1284,7 @@ write("release-daily", {
         '  | node -e \'let d="";process.stdin.on("data",(c)=>(d+=c)).on("end",()=>{const p=JSON.parse(d||"[]").find((x)=>x.headRefName===process.argv[1]&&x.state==="OPEN");process.stdout.write(p?String(p.number):"")})\' "$dev")',
         'if [ -n "$pr" ]; then gh pr edit "$pr" --repo "$FACTORY_VAR_GITHUB_REPO" --title "$title" --body-file - < "{{run.dir}}/pr.md" >/dev/null',
         'else pr=$(gh pr create --repo "$FACTORY_VAR_GITHUB_REPO" --base "$main" --head "$dev" --title "$title" --body-file - < "{{run.dir}}/pr.md" | tail -1); pr=${pr##*/}; fi',
-        '{ echo "🤖 **claude-factory daily release check** — $(date \'+%Y-%m-%d %H:%M\')"; echo; cat "{{run.dir}}/checks.md"; echo; echo "<!-- claude-factory run=$FACTORY_RUN_ID daily -->"; } \\',
+        '{ echo "🤖 **Spaghetti Code Foundry daily release check** — $(date \'+%Y-%m-%d %H:%M\')"; echo; cat "{{run.dir}}/checks.md"; echo; echo "<!-- claude-factory run=$FACTORY_RUN_ID daily -->"; } \\',
         '  | gh pr comment "$pr" --repo "$FACTORY_VAR_GITHUB_REPO" --body-file - >/dev/null',
         'if printf \'%s\\n\' "$FACTORY_OUT_VERIFY" | grep -q "^CHECKS: no"; then gh pr ready "$pr" --repo "$FACTORY_VAR_GITHUB_REPO" --undo >/dev/null 2>&1 || true; echo "checks failed — PR #$pr is a draft"',
         'else gh pr ready "$pr" --repo "$FACTORY_VAR_GITHUB_REPO" >/dev/null 2>&1 || true; echo "checks passed — PR #$pr ($title) is ready to merge"; fi',
@@ -1420,8 +1422,8 @@ write("daily-pr", {
       run: [
         'branch=$(printf \'%s\\n\' "$FACTORY_OUT_FIND_BRANCH" | head -1)',
         'url=$("$FACTORY_TOOLS/daily-branch" ensure-pr "$branch") || exit 1; n=${url##*/}',
-        '{ echo "🤖 **claude-factory daily report** — $(date \'+%Y-%m-%d %H:%M\')"; echo; cat "{{run.dir}}/checks.md"',
-        '  echo; echo "_Merge whenever you like — the factory keeps working either way; after a merge it continues on a fresh branch._"',
+        '{ echo "🤖 **Spaghetti Code Foundry daily report** — $(date \'+%Y-%m-%d %H:%M\')"; echo; cat "{{run.dir}}/checks.md"',
+        '  echo; echo "_Merge whenever you like — the Foundry keeps working either way; after a merge it continues on a fresh branch._"',
         '  echo; echo "<!-- claude-factory run=$FACTORY_RUN_ID daily -->"; } | gh pr comment "$n" --repo "$FACTORY_VAR_GITHUB_REPO" --body-file - >/dev/null',
         'if printf \'%s\\n\' "$FACTORY_OUT_VERIFY" | grep -q "^CHECKS: no"; then gh pr ready "$n" --repo "$FACTORY_VAR_GITHUB_REPO" --undo >/dev/null 2>&1 || true; echo "checks failed — $url is a draft"',
         'else gh pr ready "$n" --repo "$FACTORY_VAR_GITHUB_REPO" >/dev/null 2>&1 || true; echo "checks passed — $url is ready to merge"; fi',
