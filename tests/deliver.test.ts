@@ -152,6 +152,24 @@ describe("deliver pipeline", () => {
     expect(log).not.toMatch(/gh issue edit 5 .*--add-label Factory_done/); // closed in favour of the parts, not "done"
   });
 
+  it("isn't fooled by a comment that only mentions the split marker, and moves dependents onto the parts", async () => {
+    process.env.FAKE_ISSUE_PLAN = SPLIT(20);
+    process.env.FAKE_GH_PARENT = JSON.stringify({ title: "Add a feature", body: "Please add it", labels: [{ name: "Factory_go" }],
+      comments: [{ author: { login: "bot" }, body: "Question: markers like `<!-- claude-factory split` …\n<!-- claude-factory run=x questions -->" }] });
+    issues([5, ["Factory_go"]]);
+    const w = watcher();
+    await w.tick();
+    // #7 depends on #5; once #5 is split it must wait for the parts, not for the closed #5.
+    process.env.FAKE_GH_ISSUES = JSON.stringify([
+      { number: 5, title: "issue 5", labels: [{ name: "Factory_go" }], state: "OPEN", body: "" },
+      { number: 7, title: "issue 7", labels: [], state: "OPEN", body: "Do it.\n\n### Depends on\n#5\n\n### Notes\nx" },
+    ]);
+    await settle();
+    const log = gh.ghLog();
+    expect(log).toContain("created issue: issue create --repo acme/app --title Part A");
+    expect(log).toContain("--- issue body edit: issue edit 7 --repo acme/app --body-file -\nDo it.\n\n### Depends on\n#5, #101, #102 (parts of #5)\n\n### Notes");
+  });
+
   it("asks before a risky split, and creates the issues after /approve", async () => {
     process.env.FAKE_ISSUE_PLAN = SPLIT(70);
     issues([5, ["Factory_go"]]);
