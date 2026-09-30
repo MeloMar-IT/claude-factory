@@ -313,7 +313,24 @@ const RISK_RUBRIC = [
   "  software or user data, irreversible operations, privacy/legal, or the plan rests on assumptions",
   "  you could not verify in the code.",
 ];
-const planPhase = (post, { risk = false } = {}) => [
+// With `split`, a TOO_BIG answer carries the parts in a fixed format so the factory can create
+// the issues itself (see splitSteps), plus a score for how risky it is to split without the owner.
+const SPLIT_FORMAT = [
+  "  For TOO_BIG, write the split in exactly this format so the factory can create the issues:",
+  "    ## Split",
+  "    ### ISSUE 1: <title>",
+  "    DEPENDS_ON: none   (or earlier parts by number, e.g. 1 or 1, 2; or existing issues, e.g. #72)",
+  "    <the issue text: the user story, a \"### Acceptance criteria\" checklist, and \"### Notes for this codebase\">",
+  "    ### ISSUE 2: <title>",
+  "    …",
+  "  Each part must be buildable and testable on its own; together they cover every acceptance criterion",
+  "  of this issue. Then score how risky it is to create these issues WITHOUT the owner looking (0-100):",
+  "  0-25 a mechanical split along existing boundaries, nothing dropped or decided; 26-50 only ordering or",
+  "  boundary choices; 51-75 some scope is deferred or reinterpreted; 76-100 the split changes what the issue",
+  "  asks for, or needs decisions only the owner can make. Write it as the line: SPLIT_RISK: <0-100>",
+  "  If the owner already agreed to split this issue (in the comments above), also write: SPLIT_APPROVED: yes",
+];
+const planPhase = (post, { risk = false, split = false } = {}) => [
     {
       id: "plan",
       type: "claude",
@@ -344,6 +361,7 @@ const planPhase = (post, { risk = false } = {}) => [
         "- NOT_CODE: not a coding task (legal, approval, research, rollout, …). Explain why.",
         "- TOO_BIG: cannot be done well as one focused, reviewable change. Propose a split into smaller",
         "  issues (title + 2-3 lines each) that can each be built and tested on their own, in order.",
+        ...(split ? SPLIT_FORMAT : []),
         "- NEEDS_INFO: a decision only the owner can make, or missing requirements. Ask specific questions",
         "  with the options you see and your recommendation. Do not guess on things that matter.",
         "- READY: write the plan with these sections:",
@@ -364,7 +382,7 @@ const planPhase = (post, { risk = false } = {}) => [
         "",
         "End with exactly one line: PLAN_STATUS: READY | NEEDS_INFO | NOT_CODE | TOO_BIG",
       ].join("\n"),
-      routes: [{ if: "^PLAN_STATUS: READY\\s*$", goto: "plan_review" }],
+      routes: [{ if: "^PLAN_STATUS: READY\\s*$", goto: "plan_review" }, ...(split ? [{ if: "^PLAN_STATUS: TOO_BIG\\s*$", goto: "split_gate" }] : [])],
       on_success: "send_back",
     },
     {
@@ -429,7 +447,11 @@ const planPhase = (post, { risk = false } = {}) => [
         "End with exactly one line: PLAN_STATUS: READY | NEEDS_INFO | NOT_CODE | TOO_BIG",
       ].join("\n"),
       // READY → post it; another status → send back; no status (cut off) or a failure → post the draft.
-      routes: [{ if: "^PLAN_STATUS: READY\\s*$", goto: post }, { if: "^PLAN_STATUS: [A-Z_]+\\s*$", goto: "send_back" }],
+      routes: [
+        { if: "^PLAN_STATUS: READY\\s*$", goto: post },
+        ...(split ? [{ if: "^PLAN_STATUS: TOO_BIG\\s*$", goto: "split_gate" }] : []),
+        { if: "^PLAN_STATUS: [A-Z_]+\\s*$", goto: "send_back" },
+      ],
       on_success: post,
       on_failure: post,
     },
@@ -793,6 +815,50 @@ write("issue-plan", {
     routes: [{ if: "^GATE: yes\\s*$", goto: "approve_plan" }],
     on_success: "implement",
   };
+  // TOO_BIG with a machine-readable split: create the parts as issues and close this one — by
+  // itself when the split is low risk (or the owner already agreed), else after /approve.
+  const splitSteps = [
+    {
+      id: "split_gate",
+      type: "shell",
+      jump_only: true,
+      description: "Low-risk split (or already agreed): create the issues; otherwise ask the owner",
+      run: [
+        `out=${PLAN_OUT}`,
+        'printf \'%s\\n\' "$out" | grep -q "^### ISSUE [0-9]" || { echo "SPLIT: none (no parts in the answer)"; exit 0; }',
+        'risk=$(printf \'%s\\n\' "$out" | sed -n \'s/^SPLIT_RISK: *\\([0-9][0-9]*\\).*/\\1/p\' | tail -1); risk=${risk:-100}',
+        'limit=${FACTORY_VAR_AUTO_SPLIT_MAX_RISK:-50}; agreed=""; forced=""',
+        'printf \'%s\\n\' "$out" | grep -q "^SPLIT_APPROVED: *yes" && agreed=yes',
+        'if [ -n "$FACTORY_VAR_REVIEW_PLAN_LABEL" ] && gh issue view "$FACTORY_VAR_ISSUE" --repo "$FACTORY_VAR_GITHUB_REPO" --json labels --jq \'.labels[].name\' 2>/dev/null | grep -qx "$FACTORY_VAR_REVIEW_PLAN_LABEL"; then forced=yes; fi',
+        'if [ -n "$agreed" ]; then echo "The owner already agreed to the split — creating the issues."; echo "GATE: no"; exit 0; fi',
+        'if [ "$risk" -le "$limit" ] && [ -z "$forced" ]; then echo "Split risk $risk/100 (≤ $limit) — creating the issues without asking."; echo "GATE: no"; exit 0; fi',
+        'why="the split risk is $risk/100 (above $limit)"; [ -n "$forced" ] && why="the issue has the \\`$FACTORY_VAR_REVIEW_PLAN_LABEL\\` label"',
+        '{ echo "🤖 **claude-factory** thinks this issue is too big for one change and proposes splitting it (**split risk: $risk/100**):"; echo',
+        '  printf \'%s\\n\' "$out" | sed \'/^PLAN_STATUS:/d; /^SPLIT_RISK:/d; /^SPLIT_APPROVED:/d\'',
+        '  echo; echo "✋ **You decide** ($why). Reply **/approve** and the factory creates these issues (with \\`Depends on\\` and the build label) and closes this one — or **/reject** followed by what to change."',
+        '  echo; echo "<!-- claude-factory run=$FACTORY_RUN_ID approval -->"; } | gh issue comment "$FACTORY_VAR_ISSUE" --repo "$FACTORY_VAR_GITHUB_REPO" --body-file - >/dev/null',
+        'echo "asked the owner: $why"; echo "GATE: yes"',
+      ].join("\n"),
+      routes: [{ if: "^SPLIT: none", goto: "send_back" }, { if: "^GATE: yes\\s*$", goto: "approve_split" }],
+      on_success: "create_split",
+    },
+    {
+      id: "approve_split",
+      type: "approval",
+      jump_only: true,
+      message: "Split {{vars.github_repo}}#{{vars.issue}} into the proposed issues? (reply /approve or /reject on the issue)",
+      on_success: "create_split",
+      on_failure: "pull_ticket",
+    },
+    {
+      id: "create_split",
+      type: "shell",
+      jump_only: true,
+      description: "Create the parts as issues (in order, with Depends on and the build label), then close this issue",
+      run: `printf '%s\\n' ${PLAN_OUT} | "$FACTORY_TOOLS/create-split"`,
+      on_success: "end",
+    },
+  ];
   const approvePlan = {
     id: "approve_plan",
     type: "approval",
@@ -817,7 +883,8 @@ write("issue-plan", {
     byId("pull_ticket"),
     branch,
     byId("baseline_tests"),
-    ...planPhase("risk_gate", { risk: true }),
+    ...planPhase("risk_gate", { risk: true, split: true }),
+    ...splitSteps,
     riskGate,
     approvePlan,
     implement,
@@ -839,7 +906,9 @@ write("issue-plan", {
       "",
       "pull ticket → branch of the open factory PR (or a new one) → baseline tests",
       "  → Opus plans (xhigh) → Codex checks it (+ its own risk score) → Opus revises",
-      "      NEEDS_INFO / NOT_CODE / TOO_BIG → ask on the issue → stop (continues when you reply)",
+      "      NEEDS_INFO / NOT_CODE → ask on the issue → stop (continues when you reply)",
+      "      TOO_BIG → split risk ≤ 50 (or you already agreed) → create the parts as issues, close this one",
+      "              otherwise → post the split, wait for /approve",
       "  → post the plan with its risk score ─┬─ risk > 75 or label Factory_review_plan → wait for /approve",
       "                                       │     (/reject + feedback → plans again)",
       "                                       └─ otherwise → code straight away",
@@ -854,6 +923,7 @@ write("issue-plan", {
     vars: {
       github_repo: "owner/repo", issue: "", test_cmd: "auto", branch_prefix: "factory/daily-", timezone: "Europe/Berlin",
       forbidden_paths: "", docs_required: "", risk_threshold: "75", review_plan_label: "Factory_review_plan",
+      auto_split_max_risk: "50", trigger_label: "",
     },
     steps: deliver,
   });

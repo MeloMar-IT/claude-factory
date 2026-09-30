@@ -11,6 +11,7 @@ case "$1 $2" in
   "issue view")
     case "$*" in *"-q .title"*) echo "Add a feature" ;;
       *"--json labels --jq"*) printf '%s\n' ${FAKE_GH_ISSUE_LABELS:-} ;;
+      *"--json title,body,labels,comments"*) c=${FAKE_GH_PARENT:-}; [ -n "$c" ] || c='{"title":"Add a feature","body":"**Epic:** Updates\n\nPlease add feature.txt","labels":[{"name":"enhancement"},{"name":"Factory_go"},{"name":"Factory_working"}],"comments":[]}'; printf '%s' "$c" ;;
       *"--json comments,labels"*) c=${FAKE_GH_COMMENTS:-}; [ -n "$c" ] || c='{"comments":[]}'; printf '%s' "$c" ;;
       *) printf '# #%s: Add a feature\nhttps://github.com/owner/repo/issues/%s\n\nPlease add feature.txt\n' "$3" "$3"
          if [ -n "$FAKE_GH_ISSUE_EXTRA" ]; then printf '%s\n' "$FAKE_GH_ISSUE_EXTRA"; fi ;;
@@ -21,7 +22,9 @@ case "$1 $2" in
     esac
     echo "https://github.com/owner/repo/issues/$3#issuecomment-1" ;;
   "issue create") n=$(($(cat "$FAKE_GH_LOG.created" 2>/dev/null || echo 100) + 1)); echo "$n" > "$FAKE_GH_LOG.created"
-                  echo "--- created issue: $*" >> "$FAKE_GH_LOG"; echo "https://github.com/owner/repo/issues/$n" ;;
+                  echo "--- created issue: $*" >> "$FAKE_GH_LOG"; case "$*" in *--body-file*) cat >> "$FAKE_GH_LOG" ;; esac
+                  echo "https://github.com/owner/repo/issues/$n" ;;
+  "issue close") ;;
   "issue list")  printf '%s' "${FAKE_GH_ISSUES:-[]}" ;;
   "pr list")     if [ -n "$FAKE_GH_PRS" ]; then printf '%s' "$FAKE_GH_PRS"; elif [ -f "$FAKE_GH_LOG.prs.json" ]; then cat "$FAKE_GH_LOG.prs.json"; else echo '[]'; fi ;;
   "issue edit"|"label create") ;;

@@ -267,7 +267,9 @@ export class Watcher {
   private labelWhenDone(issue: number, runId: string) {
     void this.d.scheduler.wait(runId).then(async (s) => {
       if (!s || this.stopped) return;
-      const label = labelFor(s, this.L);
+      // A split original was closed in favour of its parts: clear its labels, don't mark it done.
+      const split = s.status === "succeeded" && s.history.at(-1)?.id === "create_split";
+      const label = split ? undefined : labelFor(s, this.L);
       const remove = s.status === "succeeded" ? [...this.allStatus, ...this.cfg.remove_on_done] : this.allStatus;
       await setLabels(this.repo, issue, label, remove).catch(() => {});
       if (label === this.L.failed && this.cfg.comment_on_failure) await this.commentFailure(issue, s).catch(() => {});
@@ -307,7 +309,7 @@ export class Watcher {
     const { flow } = loadFlow(this.flowName(), this.d.repo);
     const runId = this.submit(issue.number, "issue", {
       kind: "run", flow, task: "", repo: this.d.repo,
-      vars: { ...this.cfg.vars, github_repo: this.repo, issue: String(issue.number) },
+      vars: { trigger_label: this.cfg.label, ...this.cfg.vars, github_repo: this.repo, issue: String(issue.number) },
     });
     this.act(`#${issue.number} “${issue.title}” → run ${runId}`);
     return runId;

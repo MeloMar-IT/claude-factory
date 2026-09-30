@@ -16,7 +16,7 @@ import { claudeBin, fakeGithub } from "./helpers/fake-github.js";
 const REPO = "acme/app";
 const LABELS = { working: "Factory_working", done: "Factory_done", needs_info: "Factory_needs_info", waiting: "Factory_waiting", failed: "Factory_ERROR" };
 const VARS = { test_cmd: "! grep -q BUG feature.txt 2>/dev/null", forbidden_paths: "connector-geni/", docs_required: "docs/CHANGELOG.md" };
-const FAKES = ["FAKE_RISK", "FAKE_CODEX_RISK", "FAKE_CODEX_VERDICT", "FAKE_GH_ISSUE_LABELS", "FAKE_QUESTIONS_FOR", "FAKE_GH_COMMENTS", "FAKE_GH_PERMISSION", "FAKE_ISSUE_PLAN"];
+const FAKES = ["FAKE_GH_PARENT", "FAKE_RISK", "FAKE_CODEX_RISK", "FAKE_CODEX_VERDICT", "FAKE_GH_ISSUE_LABELS", "FAKE_QUESTIONS_FOR", "FAKE_GH_COMMENTS", "FAKE_GH_PERMISSION", "FAKE_ISSUE_PLAN"];
 
 beforeAll(() => {
   process.env.FACTORY_CODEX_BIN = resolve("tests/fixtures/fake-codex.mjs");
@@ -124,6 +124,60 @@ describe("deliver pipeline", () => {
     await w.tick();
     await settle();
     expect(gh.ghLog()).toMatch(/gh issue edit 5 .*--remove-label Factory_waiting.*--remove-label Factory_go.*--add-label Factory_done/);
+  });
+
+  const SPLIT = (risk: number, agreed = false) => [
+    "Too big: two concerns.", "## Split",
+    "### ISSUE 1: Part A — status model", "DEPENDS_ON: none", "As a user I see the status.", "### Acceptance criteria", "- [ ] model",
+    "### ISSUE 2: Part B — errors", "DEPENDS_ON: 1, #70", "As a user I understand errors.", "### Depends on", "Part A", "### Notes for this codebase", "- use strings.xml",
+    `SPLIT_RISK: ${risk}`, ...(agreed ? ["SPLIT_APPROVED: yes"] : []), "PLAN_STATUS: TOO_BIG",
+  ].join("\n");
+
+  it("splits a too-big issue by itself when the split is low risk", async () => {
+    process.env.FAKE_ISSUE_PLAN = SPLIT(20);
+    issues([5, ["Factory_go"]]);
+    await watcher().tick();
+    await settle();
+    const run = runOf("issue-deliver", "5")!;
+    expect(run.status).toBe("succeeded");
+    expect(run.history.map((h) => h.id).slice(-2)).toEqual(["split_gate", "create_split"]);
+    const log = gh.ghLog();
+    expect(log).toMatch(/created issue: issue create --repo acme\/app --title Part A — status model .*--label enhancement --label Factory_go/);
+    expect(log).not.toMatch(/created issue:.*Factory_working/);
+    expect(log).toContain("**Epic:** Updates\n\nPart 1 of 2 of #5");
+    expect(log).toContain("### Depends on\n#101, #70"); // part 1 became #101; the planner's own section is replaced
+    expect(log).not.toContain("### Depends on\nPart A");
+    expect(log).toContain("split this issue into 2 issues");
+    expect(log).toMatch(/gh issue close 5 --repo acme\/app --reason not planned/);
+    expect(log).not.toMatch(/gh issue edit 5 .*--add-label Factory_done/); // closed in favour of the parts, not "done"
+  });
+
+  it("asks before a risky split, and creates the issues after /approve", async () => {
+    process.env.FAKE_ISSUE_PLAN = SPLIT(70);
+    issues([5, ["Factory_go"]]);
+    const w = watcher();
+    await w.tick();
+    await settle();
+    const run = runOf("issue-deliver", "5")!;
+    expect(run.status).toBe("waiting");
+    expect(gh.ghLog()).toContain("split risk: 70/100");
+    expect(gh.ghLog()).not.toContain("created issue");
+    issues([5, ["Factory_go", "Factory_waiting"]]);
+    const request = { author: { login: "bot" }, body: `split <!-- claude-factory run=${run.runId} approval -->`, createdAt: "2026-01-01T00:00:00Z" };
+    process.env.FAKE_GH_COMMENTS = JSON.stringify({ comments: [request, { author: { login: "marcel" }, body: "/approve", createdAt: "2026-01-01T01:00:00Z" }] });
+    await w.tick();
+    await settle();
+    expect(runOf("issue-deliver", "5")!.status).toBe("succeeded");
+    expect(gh.ghLog()).toContain("created issue: issue create --repo acme/app --title Part B — errors");
+  });
+
+  it("splits without asking when the owner already agreed, whatever the score", async () => {
+    process.env.FAKE_ISSUE_PLAN = SPLIT(90, true);
+    issues([5, ["Factory_go"]]);
+    await watcher().tick();
+    await settle();
+    expect(runOf("issue-deliver", "5")!.status).toBe("succeeded");
+    expect(gh.ghLog()).toContain("created issue: issue create --repo acme/app --title Part A");
   });
 
   it("uses Codex's risk score when it is higher, and the review label always asks", async () => {

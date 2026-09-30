@@ -433,6 +433,23 @@ coding, or **`/reject` followed by what to change** — it then plans again with
 people with write access to the repository can approve. (The threshold is the `risk_threshold`
 variable, default 75.)
 
+#### Issues that are too big
+
+When the planner finds an issue too big for one change, it proposes a **split** into smaller
+issues that can each be built and tested on their own, and scores how risky it is to split
+without you looking (0–100: a mechanical split along existing boundaries is low; deferring or
+reinterpreting scope, or anything that needs your decision, is high).
+
+- **Split risk 50 or lower:** the factory creates the new issues by itself — with the original's
+  labels, `Factory_go`, and a **Depends on** section with the real issue numbers so they are built
+  in order — comments the list on the original and closes it. The new issues then go through the
+  questions check and are built like any other.
+- **Above 50**, or the issue has `Factory_review_plan`: the split is posted on the issue and waits
+  (`Factory_waiting`). Reply **/approve** and it creates the issues, or **/reject** + what to change.
+- **You already agreed** to a split in a comment ("split it"): it creates the issues without asking.
+
+The threshold is the `auto_split_max_risk` variable (default 50).
+
 #### Labels the factory sets
 
 | Label | Means | What you do |

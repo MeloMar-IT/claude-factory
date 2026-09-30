@@ -1,0 +1,107 @@
+#!/usr/bin/env node
+// Creates the parts of a split issue as new issues and closes the original.
+// Input (stdin): the planner's answer with a split in this format:
+//   ### ISSUE 1: <title>
+//   DEPENDS_ON: none | 1 | 1, 2 | #72
+//   <issue text>
+//   ### ISSUE 2: …
+// Each new issue gets the original's labels (minus claude-factory status labels), the build label
+// (FACTORY_VAR_TRIGGER_LABEL), the review label if the original had it, and a "Depends on" section
+// with the real issue numbers. Safe to run twice: a second run finds its earlier comment and stops.
+// Env: FACTORY_VAR_GITHUB_REPO, FACTORY_VAR_ISSUE, FACTORY_VAR_TRIGGER_LABEL,
+//      FACTORY_VAR_REVIEW_PLAN_LABEL, FACTORY_RUN_ID.
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+
+const repo = process.env.FACTORY_VAR_GITHUB_REPO;
+const parentNo = process.env.FACTORY_VAR_ISSUE;
+if (!repo || !/^[\w.-]+\/[\w.-]+$/.test(repo)) fail("set var github_repo to owner/repo");
+if (!/^\d+$/.test(parentNo ?? "")) fail("set var issue to the issue number");
+const trigger = process.env.FACTORY_VAR_TRIGGER_LABEL ?? "";
+const reviewLabel = process.env.FACTORY_VAR_REVIEW_PLAN_LABEL ?? "";
+const MARK = "<!-- claude-factory split";
+const gh = (args, input) => execFileSync(process.env.FACTORY_GH_BIN || "gh", args, { encoding: "utf8", input, stdio: [input ? "pipe" : "ignore", "pipe", "pipe"] }).trim();
+
+function fail(msg) {
+  console.error(`create-split: ${msg}`);
+  process.exit(1);
+}
+
+// ── parse the parts ──
+const text = readFileSync(0, "utf8");
+const parts = [];
+for (const line of text.split("\n")) {
+  const head = /^#{2,4}\s*ISSUE\s+(\d+)\s*:\s*(.+?)\s*$/.exec(line);
+  if (head) {
+    parts.push({ n: Number(head[1]), title: head[2], deps: [], lines: [] });
+    continue;
+  }
+  const part = parts.at(-1);
+  if (!part) continue;
+  const dep = /^DEPENDS_ON:\s*(.*)$/.exec(line);
+  if (dep) {
+    part.deps = /^(none|-|n\/a)?\s*$/i.test(dep[1]) ? [] : dep[1].split(/[,;\s]+/).filter(Boolean);
+    continue;
+  }
+  if (/^(PLAN_STATUS|SPLIT_RISK|SPLIT_APPROVED|RISK_SCORE|RISK_REASON):/.test(line)) continue;
+  part.lines.push(line);
+}
+if (parts.length < 2) fail(`expected at least 2 parts, found ${parts.length}`);
+
+// ── the original issue ──
+const parent = JSON.parse(gh(["issue", "view", parentNo, "--repo", repo, "--json", "title,body,labels,comments"]));
+const done = (parent.comments ?? []).find((c) => c.body.includes(MARK));
+if (done) {
+  console.log(`already split: ${(done.body.match(/#\d+/g) ?? []).join(" ")}`);
+  process.exit(0);
+}
+const isStatus = (l) => /^factory[:_]/i.test(l);
+const labels = new Set((parent.labels ?? []).map((l) => l.name).filter((l) => !isStatus(l)));
+if (trigger) labels.add(trigger);
+if (reviewLabel && (parent.labels ?? []).some((l) => l.name === reviewLabel)) labels.add(reviewLabel);
+const epic = /^\*\*Epic:\*\*.*$/m.exec(parent.body ?? "")?.[0];
+
+// ── create in order, mapping part numbers to the new issue numbers ──
+const created = new Map();
+for (const [i, p] of parts.entries()) {
+  const deps = p.deps.map((d) => {
+    const m = /^#?(\d+)$/.exec(d);
+    if (!m) return d;
+    if (d.startsWith("#")) return d; // an existing issue
+    const n = created.get(Number(m[1]));
+    if (!n) fail(`part ${p.n} depends on part ${m[1]}, which comes later or doesn't exist`);
+    return `#${n}`;
+  });
+  // Drop a "Depends on" section the planner wrote; we write our own with real issue numbers.
+  let skipping = false;
+  const kept = p.lines.filter((l) => {
+    if (/^#{2,4}\s/.test(l)) skipping = /^#{2,4}\s*Depends on\b/i.test(l);
+    return !skipping;
+  });
+  const body = kept.join("\n").trim();
+  const doc = [
+    ...(epic ? [epic, ""] : []),
+    `Part ${i + 1} of ${parts.length} of #${parentNo} (${parent.title}), split by claude-factory.`,
+    "",
+    body,
+    "",
+    "### Depends on",
+    deps.length ? deps.join(", ") : "None (can be built on its own).",
+  ].join("\n");
+  const args = ["issue", "create", "--repo", repo, "--title", p.title, "--body-file", "-"];
+  for (const l of labels) args.push("--label", l);
+  const url = gh(args, doc).split("\n").pop();
+  const num = Number(/(\d+)\s*$/.exec(url)?.[1]);
+  if (!num) fail(`could not read the new issue number from: ${url}`);
+  created.set(p.n, num);
+  console.log(`#${num} ${p.title}${deps.length ? ` (depends on ${deps.join(", ")})` : ""}`);
+}
+
+// ── close the original with the list ──
+const list = parts.map((p) => `- #${created.get(p.n)} ${p.title}`).join("\n");
+gh(["issue", "comment", parentNo, "--repo", repo, "--body-file", "-"],
+  `🤖 **claude-factory** split this issue into ${parts.length} issues, built in this order:\n\n${list}\n\nClosing this one in favour of them.\n\n${MARK} run=${process.env.FACTORY_RUN_ID ?? ""} -->`);
+const statusOnParent = (parent.labels ?? []).map((l) => l.name).filter((l) => isStatus(l) || l === trigger);
+if (statusOnParent.length) gh(["issue", "edit", parentNo, "--repo", repo, ...statusOnParent.flatMap((l) => ["--remove-label", l])]);
+gh(["issue", "close", parentNo, "--repo", repo, "--reason", "not planned"]);
+console.log(`SPLIT: ${[...created.values()].map((n) => `#${n}`).join(" ")} — #${parentNo} closed`);
