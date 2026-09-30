@@ -102,8 +102,9 @@ steps:
 
       {{steps.pull_ticket.output}}
 
-      Follow the plan in the latest "claude-factory plan" comment, including any later comments from
-      people, which override it. Follow the repository's CLAUDE.md conventions.
+      Follow the plan in the latest "Spaghetti Code Foundry plan" comment (older ones are headed
+      "claude-factory plan"), including any later comments from people, which override it.
+      Follow the repository's CLAUDE.md conventions.
       - Add or update tests for everything you change.
       - Do not add new dependencies. Do not change: {{vars.forbidden_paths}}
       - Do not write documentation yet; that is a separate step.
@@ -331,7 +332,7 @@ steps:
     run: |-
       git add -A
       title=$(gh issue view "$FACTORY_VAR_ISSUE" --repo "$FACTORY_VAR_GITHUB_REPO" --json title -q .title 2>/dev/null)
-      git commit -q -m "Resolve #$FACTORY_VAR_ISSUE: $title" -m "Written by Claude, reviewed by Codex, tests passing. claude-factory run $FACTORY_RUN_ID"
+      git commit -q -m "Resolve #$FACTORY_VAR_ISSUE: $title" -m "Written by Claude, reviewed by Codex, tests passing. Spaghetti Code Foundry run $FACTORY_RUN_ID"
       git log --oneline -1
   - id: push
     type: shell
@@ -344,7 +345,7 @@ steps:
     run: |-
       branch=$(git branch --show-current); sha=$(git rev-parse HEAD)
       verdict() { printf '%s\n' "$1" | sed -n 's/^VERDICT: *//p' | tail -1; }
-      { echo "🤖 **claude-factory** implemented this on branch \`$branch\` (commit https://github.com/$FACTORY_VAR_GITHUB_REPO/commit/$sha)."
+      { echo "🤖 **Spaghetti Code Foundry** implemented this on branch \`$branch\` (commit https://github.com/$FACTORY_VAR_GITHUB_REPO/commit/$sha)."
         echo; echo "### What was done"; printf '%s\n' "$FACTORY_OUT_IMPLEMENT"
         echo; echo "### Review (Codex)"
         echo "- round 1: $(verdict "$FACTORY_OUT_REVIEW_1")"

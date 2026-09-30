@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ConfigSchema, WatcherSchema } from "../src/config.js";
+import { BOT_MARKER, BOT_MARKERS, commentsAfter, isBot } from "../src/github.js";
 import { loadRun, saveRun } from "../src/engine/state.js";
 import { Scheduler } from "../src/queue/scheduler.js";
 import { parseInterval, Watcher } from "../src/queue/watcher.js";
@@ -91,6 +92,12 @@ describe("watcher", () => {
     await settle();
     expect(runFor("4").resumes ?? 0).toBe(0);
 
+    // A bot comment with only the new marker is not an answer either.
+    process.env.FAKE_GH_COMMENTS = JSON.stringify({ comments: [{ author: { login: "bot" }, body: "questions <!-- spaghetti-code-foundry run=x -->", createdAt: "2026-01-01T00:00:00Z" }] });
+    await w.tick();
+    await settle();
+    expect(runFor("4").resumes ?? 0).toBe(0);
+
     // Answered → resume the same run, which now plans successfully.
     delete process.env.FAKE_PLAN;
     process.env.FAKE_GH_COMMENTS = JSON.stringify({ comments: [
@@ -106,7 +113,7 @@ describe("watcher", () => {
     expect(lines.join("\n")).toContain("answered by @marcel");
   });
 
-  it("resumes an approval from a /approve comment by someone with write access", async () => {
+  it.each(["claude-factory", "spaghetti-code-foundry"])("resumes an approval from a /approve comment by someone with write access (%s marker)", async (marker) => {
     issues([6]);
     const w = watcher({ flow: "github-pr", vars: { test_cmd: "test -f feature.txt", require_approval: "yes", ci_settle_sec: "0" } });
     await w.tick();
@@ -116,7 +123,7 @@ describe("watcher", () => {
     expect(gh.ghLog()).toMatch(/gh issue edit 6 .*--add-label factory:waiting-approval/);
 
     issues([6, "factory:waiting-approval"]);
-    const request = { author: { login: "bot" }, body: `ready <!-- claude-factory run=${run.runId} approval -->`, createdAt: "2026-01-01T00:00:00Z" };
+    const request = { author: { login: "bot" }, body: `ready <!-- ${marker} run=${run.runId} approval -->`, createdAt: "2026-01-01T00:00:00Z" };
     process.env.FAKE_GH_COMMENTS = JSON.stringify({ comments: [request, { author: { login: "mallory" }, body: "/approve", createdAt: "2026-01-01T01:00:00Z" }] });
     process.env.FAKE_GH_PERMISSION = "read";
     await w.tick();
@@ -171,6 +178,19 @@ describe("watcher", () => {
     expect(scheduler.list().filter((s) => s.flow === "pr-feedback")).toHaveLength(1);
   });
 
+  it("a comment carrying only the new marker is not PR feedback", async () => {
+    process.env.FAKE_GH_PRS = JSON.stringify([{ number: 17, headRefName: "factory/x" }]);
+    process.env.FAKE_GH_PR_VIEW = JSON.stringify({
+      comments: [{ author: { login: "bot" }, body: "🤖 **Spaghetti Code Foundry** went through the review comments:\nok\n<!-- spaghetti-code-foundry run=x -->", createdAt: new Date(Date.now() - 60_000).toISOString() }],
+      reviews: [],
+      commits: [{ committedDate: new Date(Date.now() - 3_600_000).toISOString() }],
+    });
+    const w = watcher({ source: "pr-feedback", vars: { test_cmd: "true" } });
+    await w.tick();
+    await settle();
+    expect(scheduler.list().filter((s) => s.flow === "pr-feedback")).toHaveLength(0);
+  });
+
   it("opens a ci-fix run when CI is red on the default branch, once per CI run", async () => {
     const ciRun = (id: number, workflowName: string, conclusion: string) =>
       ({ databaseId: id, workflowName, status: "completed", conclusion, headSha: `abc${id}def0`, url: `https://ci/${id}` });
@@ -215,6 +235,24 @@ describe("watcher", () => {
 
   it("requires a task for schedule watchers", () => {
     expect(() => WatcherSchema.parse({ id: "s", github_repo: "a/b", source: "schedule" })).toThrow(/needs a task/);
+  });
+});
+
+describe("bot comments", () => {
+  const bot = (marker: string) => ({ author: { login: "bot" }, body: `x <!-- ${marker} run=1 -->`, createdAt: "2026-01-01T00:00:00Z" });
+  it("recognises the old and the new marker, and only as a comment", () => {
+    expect(isBot(bot("claude-factory"))).toBe(true);
+    expect(isBot(bot("spaghetti-code-foundry"))).toBe(true);
+    expect(isBot({ body: "spaghetti-code-foundry is nice" })).toBe(false);
+    expect(isBot({ body: "\"claude-factory\"" })).toBe(false);
+    expect(BOT_MARKER).toBe("<!-- claude-factory");
+    expect([...BOT_MARKERS]).toEqual(["<!-- claude-factory", "<!-- spaghetti-code-foundry"]);
+  });
+  it("a new-marker bot comment is not a human answer", () => {
+    const botNew = bot("spaghetti-code-foundry");
+    const human = { author: { login: "marcel" }, body: "Use Postgres", createdAt: "2026-01-01T01:00:00Z" };
+    expect(commentsAfter([botNew, human, botNew], isBot)).toEqual([]);
+    expect(commentsAfter([botNew, human], isBot)).toEqual([human]);
   });
 });
 

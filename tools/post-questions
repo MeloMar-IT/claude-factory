@@ -42,7 +42,7 @@ for (const [n, lines] of sections) {
     continue;
   }
   const comment = [
-    "🤖 **claude-factory** has questions before it builds this issue (asked up front for all issues in this batch):",
+    "🤖 **Spaghetti Code Foundry** has questions before it builds this issue (asked up front for all issues in this batch):",
     "",
     body,
     "",

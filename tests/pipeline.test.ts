@@ -63,7 +63,7 @@ describe("label-driven issue pipeline", () => {
     expect(runOf("issue-plan", "5")?.status).toBe("succeeded");
     expect(runOf("issue-plan", "8")).toBeUndefined();
     const log = gh.ghLog();
-    expect(log).toContain("claude-factory plan**");
+    expect(log).toContain("Spaghetti Code Foundry plan**");
     expect(log).toContain("Add the `Factory_code` label to start coding");
     expect(log).toMatch(/gh issue edit 5 .*--remove-label Factory_ready.*--add-label Factory_planned/);
     expect(log).not.toMatch(/issue edit 8 /);
@@ -81,7 +81,7 @@ describe("label-driven issue pipeline", () => {
     // The revision is a fresh, targeted session (cheaper than replaying the planning session).
     expect(run.history.find((h) => h.id === "revise_plan")!.sessionId).not.toBe(run.history.find((h) => h.id === "plan")!.sessionId);
     const log = gh.ghLog();
-    expect(log).toContain("claude-factory plan** (checked against the code by Codex)");
+    expect(log).toContain("Spaghetti Code Foundry plan** (checked against the code by Codex)");
     expect(log).toContain("Add feature.txt (revised)");
   });
 
