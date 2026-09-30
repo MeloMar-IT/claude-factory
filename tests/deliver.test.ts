@@ -16,7 +16,7 @@ import { claudeBin, fakeGithub } from "./helpers/fake-github.js";
 const REPO = "acme/app";
 const LABELS = { working: "Factory_working", done: "Factory_done", needs_info: "Factory_needs_info", waiting: "Factory_waiting", failed: "Factory_ERROR" };
 const VARS = { test_cmd: "! grep -q BUG feature.txt 2>/dev/null", forbidden_paths: "connector-geni/", docs_required: "docs/CHANGELOG.md" };
-const FAKES = ["FAKE_GH_PARENT", "FAKE_RISK", "FAKE_CODEX_RISK", "FAKE_CODEX_VERDICT", "FAKE_GH_ISSUE_LABELS", "FAKE_QUESTIONS_FOR", "FAKE_GH_COMMENTS", "FAKE_GH_PERMISSION", "FAKE_ISSUE_PLAN"];
+const FAKES = ["FAKE_GH_CLOSED_ISSUES", "FAKE_GH_PARENT", "FAKE_RISK", "FAKE_CODEX_RISK", "FAKE_CODEX_VERDICT", "FAKE_GH_ISSUE_LABELS", "FAKE_QUESTIONS_FOR", "FAKE_GH_COMMENTS", "FAKE_GH_PERMISSION", "FAKE_ISSUE_PLAN"];
 
 beforeAll(() => {
   process.env.FACTORY_CODEX_BIN = resolve("tests/fixtures/fake-codex.mjs");
@@ -178,6 +178,26 @@ describe("deliver pipeline", () => {
     await settle();
     expect(runOf("issue-deliver", "5")!.status).toBe("succeeded");
     expect(gh.ghLog()).toContain("created issue: issue create --repo acme/app --title Part A");
+  });
+
+  it("tidies labels on issues closed by a merged pull request", async () => {
+    issues([5, ["Factory_go"]]);
+    const w = watcher();
+    await w.tick();
+    await settle();
+    expect(runOf("issue-deliver", "5")!.status).toBe("succeeded");
+    // #5 got closed by the merge while a stale error label was on it; #9 was closed by hand mid-way.
+    issues();
+    process.env.FAKE_GH_CLOSED_ISSUES = JSON.stringify([
+      { number: 5, state: "CLOSED", labels: [{ name: "Factory_ERROR" }, { name: "Factory_go" }] },
+      { number: 9, state: "CLOSED", labels: [{ name: "Factory_waiting" }, { name: "enhancement" }] },
+      { number: 11, state: "CLOSED", labels: [{ name: "Factory_done" }] },
+    ]);
+    await w.tick();
+    const log = gh.ghLog();
+    expect(log).toMatch(/gh issue edit 5 --repo acme\/app --remove-label Factory_ERROR --remove-label Factory_go --add-label Factory_done/);
+    expect(log).toMatch(/gh issue edit 9 --repo acme\/app --remove-label Factory_waiting\n/);
+    expect(log).not.toMatch(/gh issue edit 11 /);
   });
 
   it("uses Codex's risk score when it is higher, and the review label always asks", async () => {

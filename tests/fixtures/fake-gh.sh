@@ -25,7 +25,7 @@ case "$1 $2" in
                   echo "--- created issue: $*" >> "$FAKE_GH_LOG"; case "$*" in *--body-file*) cat >> "$FAKE_GH_LOG" ;; esac
                   echo "https://github.com/owner/repo/issues/$n" ;;
   "issue close") ;;
-  "issue list")  printf '%s' "${FAKE_GH_ISSUES:-[]}" ;;
+  "issue list")  case "$*" in *"--state closed"*) printf '%s' "${FAKE_GH_CLOSED_ISSUES:-[]}" ;; *) printf '%s' "${FAKE_GH_ISSUES:-[]}" ;; esac ;;
   "pr list")     if [ -n "$FAKE_GH_PRS" ]; then printf '%s' "$FAKE_GH_PRS"; elif [ -f "$FAKE_GH_LOG.prs.json" ]; then cat "$FAKE_GH_LOG.prs.json"; else echo '[]'; fi ;;
   "issue edit"|"label create") ;;
   "pr edit")     echo "--- pr edit: $*" >> "$FAKE_GH_LOG"; cat >> "$FAKE_GH_LOG" ;;

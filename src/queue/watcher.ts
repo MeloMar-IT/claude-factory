@@ -428,10 +428,31 @@ export class Watcher {
       }
     }
     if (toCheck.length) await this.precheck(toCheck, holds, budgetLeft);
+    await this.tidyClosed(runs).catch((e) => this.d.log(`[${this.cfg.id}] tidying closed issues: ${(e as Error).message}`));
     if (paused && !holds.some((x) => x.url === paused.url)) {
       holds.unshift({ reason: `paused while daily pull request #${paused.number} is open — merge it to continue`, url: paused.url });
     }
     this.status.holds = holds;
+  }
+
+  /**
+   * Closed issues (e.g. by a merged pull request) that still carry a waiting/working/error label:
+   * done if their last run succeeded, otherwise just without the stale status labels.
+   */
+  private async tidyClosed(runs: Map<string, RunSummary>) {
+    const stale = [this.L.working, this.L.waiting, this.L.needsInfo, this.L.failed];
+    const closed = await ghJson<Issue[]>(["issue", "list", "--repo", this.repo, "--state", "closed", "--limit", "30",
+      "--search", `label:${stale.map((l) => `"${l}"`).join(",")} sort:updated-desc`, "--json", "number,labels,state"]);
+    for (const issue of closed) {
+      if (issue.state && issue.state.toUpperCase() !== "CLOSED") continue;
+      const names = issue.labels.map((l) => l.name);
+      if (!names.some((l) => stale.includes(l))) continue;
+      const run = runs.get(String(issue.number));
+      if (run && ["running", "waiting"].includes(run.status)) continue; // still busy; leave it
+      const done = run?.status === "succeeded" && run.history.at(-1)?.id !== "create_split";
+      await setLabels(this.repo, issue.number, done ? this.L.done : undefined, [...this.allStatus, ...this.cfg.remove_on_done].filter((l) => names.includes(l)));
+      this.act(`#${issue.number} (closed) label → ${done ? this.L.done : "none"}`);
+    }
   }
 
   /** Issues already covered by a finished precheck run (a failed check doesn't hold issues back). */
