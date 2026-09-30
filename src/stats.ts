@@ -9,6 +9,30 @@ export interface Stats {
   loops: { step: string; extraVisits: number }[];
 }
 
+/** What a run works on: a GitHub issue / PR / CI run / chore, or (without those) just itself. */
+function workKey(r: RunSummary): string {
+  const v = r.vars ?? {};
+  const repo = v.github_repo;
+  if (repo && v.issue) return `${repo}#issue:${v.issue}`;
+  if (repo && v.pr) return `${repo}#pr:${v.pr}`;
+  if (repo && v.ci_run) return `${repo}#ci:${v.ci_run}`;
+  return r.runId;
+}
+
+/**
+ * Runs that a newer run on the same issue/PR replaced (e.g. an old stopped plan run after the issue
+ * was built by a later run). They no longer need a human, whatever their own status says.
+ */
+export function supersededRuns(runs: RunSummary[]): Set<string> {
+  const newest = new Map<string, RunSummary>();
+  for (const r of runs) {
+    const k = workKey(r);
+    const cur = newest.get(k);
+    if (!cur || r.startedAt > cur.startedAt) newest.set(k, r);
+  }
+  return new Set(runs.filter((r) => newest.get(workKey(r)) !== r).map((r) => r.runId));
+}
+
 const dayKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 
 /** Aggregate run history for the dashboard. */
@@ -24,11 +48,14 @@ export function computeStats(runs: RunSummary[], days = 30, now = new Date()): S
   const stepFail = new Map<string, { failures: number; runs: Set<string> }>();
   const loops = new Map<string, number>();
   const totals = { runs: 0, costUsd: 0, succeeded: 0, failed: 0, stopped: 0, waiting: 0 };
+  const replaced = supersededRuns(runs);
 
   for (const r of inRange) {
     totals.runs++;
     totals.costUsd += r.totalCostUsd;
-    if (r.status in totals) (totals as Record<string, number>)[r.status]! += 1;
+    // Stopped/waiting runs that a newer run on the same issue replaced don't need a human any more.
+    const stale = (r.status === "stopped" || r.status === "waiting") && replaced.has(r.runId);
+    if (r.status in totals && !stale) (totals as Record<string, number>)[r.status]! += 1;
     const d = byDay.get(dayKey(new Date(r.startedAt)));
     if (d) {
       d.costUsd += r.totalCostUsd;

@@ -178,6 +178,7 @@ export async function runClaude(o: ClaudeRunOptions): Promise<ClaudeRunResult> {
     numTurns: final.num_turns,
     inputTokens: final.usage ? (final.usage.input_tokens ?? 0) + (final.usage.cache_read_input_tokens ?? 0) + (final.usage.cache_creation_input_tokens ?? 0) : undefined,
     outputTokens: final.usage?.output_tokens,
-    error: ok ? undefined : `claude result: ${final.subtype ?? "error"}`,
+    // An API error comes back as is_error with subtype "success": show its message, not "success".
+    error: ok ? undefined : final.subtype && final.subtype !== "success" ? `claude result: ${final.subtype}` : (final.result || "claude reported an error").slice(0, 300),
   };
 }

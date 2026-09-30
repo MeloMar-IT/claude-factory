@@ -16,7 +16,8 @@ export async function renderRunsList(main) {
   const draw = async () => {
     const [runs, queue] = await Promise.all([api.runs(), api.queue()]);
     if (!main.isConnected) return;
-    const needsYou = runs.filter((r) => r.status === "waiting" || r.status === "stopped");
+    // Not runs that a newer run on the same issue replaced (e.g. an old stopped plan run).
+    const needsYou = runs.filter((r) => (r.status === "waiting" || r.status === "stopped") && !r.superseded);
     const flowOf = new Map(runs.map((r) => [r.runId, r.flow]));
     const row = (r) => h("tr", { class: "link", onClick: () => (location.hash = `#/runs/${r.runId}`) },
       h("td", {}, pill(r.status)),

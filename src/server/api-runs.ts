@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { supersededRuns } from "../stats.js";
 import { resolve } from "node:path";
 import { runDiff } from "../engine/diff.js";
 import { readTranscript } from "../engine/transcript.js";
@@ -11,7 +12,11 @@ export const runRoutes: Route = async ({ opts, scheduler }, req, res, seg, metho
   if (seg[0] !== "runs") return false;
   const id = seg[1];
 
-  if (!id && method === "GET") return send(res, 200, scheduler.list(200)), true;
+  if (!id && method === "GET") {
+    const runs = scheduler.list(200);
+    const replaced = supersededRuns(runs);
+    return send(res, 200, runs.map((r) => (replaced.has(r.runId) ? { ...r, superseded: true } : r))), true;
+  }
   if (!id && method === "POST") {
     const body = await readJson(req);
     const task = str(body, "task", false).trim();
