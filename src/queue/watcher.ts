@@ -394,6 +394,12 @@ export class Watcher {
           await setLabels(this.repo, n, labelFor(run, this.L), this.allStatus);
           this.act(`#${n} label → ${labelFor(run, this.L)}`);
         }
+      } else if (run && (status === this.L.waiting || status === this.L.needsInfo) && !["waiting", "stopped", "running"].includes(run.status)) {
+        // Reconcile: the run went on (e.g. approved in the UI, or the server restarted meanwhile)
+        // but the label still says it waits for someone.
+        const label = labelFor(run, this.L);
+        await setLabels(this.repo, n, label, run.status === "succeeded" ? [...this.allStatus, ...this.cfg.remove_on_done] : this.allStatus);
+        this.act(`#${n} label → ${label}`);
       } else if (status === this.L.needsInfo && run?.status === "stopped") {
         const comments = await issueComments(this.repo, n);
         const answers = commentsAfter(comments, isBot);

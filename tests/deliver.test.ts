@@ -108,6 +108,24 @@ describe("deliver pipeline", () => {
     expect(done.history.find((h) => h.id === "approve_plan")!.output).toContain("approved by marcel: keep it small");
   });
 
+  it("fixes a waiting label when the run was approved elsewhere (e.g. in the UI)", async () => {
+    process.env.FAKE_RISK = "85";
+    issues([5, ["Factory_go"]]);
+    const w = watcher();
+    await w.tick();
+    await settle();
+    const run = runOf("issue-deliver", "5")!;
+    expect(run.status).toBe("waiting");
+    // Approved from the UI: the watcher didn't resume it, so nothing updated the label.
+    scheduler.submit({ kind: "resume", runId: run.runId, decision: { approved: true, by: "ui" } });
+    await settle();
+    expect(runOf("issue-deliver", "5")!.status).toBe("succeeded");
+    issues([5, ["Factory_go", "Factory_waiting"]]);
+    await w.tick();
+    await settle();
+    expect(gh.ghLog()).toMatch(/gh issue edit 5 .*--remove-label Factory_waiting.*--remove-label Factory_go.*--add-label Factory_done/);
+  });
+
   it("uses Codex's risk score when it is higher, and the review label always asks", async () => {
     process.env.FAKE_CODEX_RISK = "90";
     issues([5, ["Factory_go"]]);
