@@ -43,7 +43,7 @@ async function runOn(t: Target, step: ClaudeStep, scope: Scope, engine: Engine, 
     const builtinUrl = BUILTIN_PROVIDERS[t.providerName]?.base_url;
     const r = await runCodex({
       ...common,
-      env: stepEnv(scope, engine),
+      env: { ...stepEnv(scope, engine), ...agentEnv(scope.ctx.vars.agent_env) },
       codexBin: engine.codexBin,
       model: t.model,
       localProvider: local ? t.provider.kind : undefined,
@@ -59,7 +59,7 @@ async function runOn(t: Target, step: ClaudeStep, scope: Scope, engine: Engine, 
   const caps = t.free ? [] : [step.max_budget_usd ?? d.max_budget_usd, engine.remainingBudget()].filter((n): n is number => n !== undefined);
   const r = await runClaude({
     ...common,
-    env: { ...stepEnv(scope, engine), ...claudeProviderEnv(t) },
+    env: { ...stepEnv(scope, engine), ...agentEnv(scope.ctx.vars.agent_env), ...claudeProviderEnv(t) },
     claudeBin: engine.claudeBin,
     model: t.model,
     permissionMode: step.permission_mode ?? d.permission_mode ?? DEFAULT_PERMISSION_MODE,
@@ -108,4 +108,17 @@ export async function runAgentStep(step: ClaudeStep, scope: Scope, engine: Engin
     engine.summary.totalCostUsd += r.costUsd ?? 0;
     target = next;
   }
+}
+
+/**
+ * Extra environment for agent steps from the `agent_env` flow variable: `KEY=value` pairs, one per
+ * line or separated by `;` (e.g. `JAVA_HOME=/path/to/jdk`), so agents can run the project's build.
+ */
+export function agentEnv(spec: string | undefined): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const part of (spec ?? "").split(/[\n;]/)) {
+    const m = /^\s*([A-Za-z_][A-Za-z0-9_]*)=(.*?)\s*$/.exec(part);
+    if (m && !/^(PATH|HOME|FACTORY_.*|ANTHROPIC_.*|OPENAI_.*|GH_TOKEN|GITHUB_TOKEN)$/.test(m[1]!)) env[m[1]!] = m[2]!;
+  }
+  return env;
 }

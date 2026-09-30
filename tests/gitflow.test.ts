@@ -165,3 +165,18 @@ describe("area locks", () => {
     expect(readFileSync(join(dir, "r2", "run.json"), "utf8")).toContain("running");
   });
 });
+
+describe("coding agents can run the build", () => {
+  it("allows the project's build and test commands, never git push", async () => {
+    const flow = loadFlow("issue-gitflow", process.cwd()).flow;
+    expect(flow.defaults.allowed_tools).toEqual(expect.arrayContaining(["Bash(./gradlew *)", "Bash(npm *)", "Bash(pytest*)"]));
+    expect(flow.defaults.allowed_tools!.some((t) => /push/.test(t))).toBe(false);
+    const implement = flow.steps.find((s) => s.id === "implement")!;
+    expect(implement.type === "claude" && implement.prompt).toContain("You may run the build and the tests yourself");
+  });
+
+  it("passes agent_env to the agents, but never PATH, tokens or factory variables", async () => {
+    const { agentEnv } = await import("../src/agents/run.js");
+    expect(agentEnv("JAVA_HOME=/opt/jdk21; GRADLE_OPTS=-Xmx2g\nPATH=/evil\nGH_TOKEN=x\nFACTORY_VAR_X=1\nnot a pair")).toEqual({ JAVA_HOME: "/opt/jdk21", GRADLE_OPTS: "-Xmx2g" });
+  });
+});

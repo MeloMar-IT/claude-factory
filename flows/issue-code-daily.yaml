@@ -16,6 +16,39 @@ defaults:
   model: claude-sonnet-5-5
   timeout_sec: 2400
   max_budget_usd: 6
+  allowed_tools:
+    - Read
+    - Edit
+    - Write
+    - Glob
+    - Grep
+    - Bash(./gradlew *)
+    - Bash(gradle *)
+    - Bash(./mvnw *)
+    - Bash(mvn *)
+    - Bash(npm *)
+    - Bash(npx *)
+    - Bash(yarn *)
+    - Bash(pnpm *)
+    - Bash(pytest*)
+    - Bash(python3 -m pytest*)
+    - Bash(python -m pytest*)
+    - Bash(go test*)
+    - Bash(go build*)
+    - Bash(go vet*)
+    - Bash(cargo *)
+    - Bash(make *)
+    - Bash(git status*)
+    - Bash(git diff*)
+    - Bash(git log*)
+    - Bash(git show*)
+    - Bash(ls*)
+    - Bash(find *)
+    - Bash(grep *)
+    - Bash(cat *)
+    - Bash(head *)
+    - Bash(tail *)
+    - Bash(wc *)
 limits:
   max_cost_usd: 30
 vars:
@@ -26,6 +59,7 @@ vars:
   timezone: Europe/Berlin
   forbidden_paths: ""
   docs_required: ""
+  agent_env: ""
 steps:
   - id: pull_ticket
     type: shell
@@ -74,6 +108,7 @@ steps:
       - Do not add new dependencies. Do not change: {{vars.forbidden_paths}}
       - Do not write documentation yet; that is a separate step.
       - Do not commit.
+      - You may run the build and the tests yourself (e.g. `./gradlew test --tests <Class>`, `npm test`); after you, the flow runs: {{vars.test_cmd}}
 
       Things learned from earlier runs in this repo:
       {{learnings}}
@@ -135,6 +170,7 @@ steps:
     prompt: |-
       The tests fail. Fix the code so they pass. Never delete, disable or weaken tests to make them pass;
       change a test only if the test itself is wrong, and say so.
+      You may run the build and the tests yourself (e.g. `./gradlew test --tests <Class>`, `npm test`); after you, the flow runs: {{vars.test_cmd}}
 
       {{steps.run_tests.output}}
     on_success: run_tests
@@ -190,6 +226,7 @@ steps:
     prompt: |-
       The tests fail. Fix the code so they pass. Never delete, disable or weaken tests to make them pass;
       change a test only if the test itself is wrong, and say so.
+      You may run the build and the tests yourself (e.g. `./gradlew test --tests <Class>`, `npm test`); after you, the flow runs: {{vars.test_cmd}}
 
       {{steps.run_tests_1.output}}
     on_success: run_tests_1
@@ -245,6 +282,7 @@ steps:
     prompt: |-
       The tests fail. Fix the code so they pass. Never delete, disable or weaken tests to make them pass;
       change a test only if the test itself is wrong, and say so.
+      You may run the build and the tests yourself (e.g. `./gradlew test --tests <Class>`, `npm test`); after you, the flow runs: {{vars.test_cmd}}
 
       {{steps.run_tests_2.output}}
     on_success: run_tests_2

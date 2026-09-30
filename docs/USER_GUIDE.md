@@ -365,6 +365,7 @@ watchers:
       test_cmd: ./gradlew test
       docs_required: docs/CHANGELOG.md
       union_merge_files: docs/CHANGELOG.md   # merges keep both sides' entries
+      agent_env: JAVA_HOME=/path/to/jdk      # extra environment for the coding agents
       develop_branch: develop
       risk_threshold: "75"         # plans scoring above this wait for /approve
   - id: webshop-release
@@ -387,6 +388,13 @@ watchers:
 | `precheck_flow` | Run this flow once over all new labelled issues before any is started (`epic-questions` asks every owner decision up front) |
 | `pause_while_pr_open` | Start nothing while a PR from a branch with this prefix is open (for the older two-label pipeline) |
 | `comment_on_failure` | On by default: post the failure reason and output on the issue |
+
+**Coding agents run the build themselves.** In the issue flows the coding agent may run the
+project's build and test commands (`./gradlew`, `mvn`, `npm`, `pytest`, `go test`, `cargo`,
+`make`) and read-only git commands — so it can check its own work and, for example, regenerate
+test fixtures. Pushing is never allowed. If the build needs environment settings (such as
+`JAVA_HOME`), put them in the `agent_env` variable: `KEY=value` pairs separated by `;` or new
+lines. `PATH`, tokens and the factory's own variables can't be set this way.
 
 ### The label pipeline: one label → plan + code → one pull request
 

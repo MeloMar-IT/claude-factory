@@ -200,6 +200,10 @@ In `prompt`, `message` and `vars` values, `{{…}}` placeholders are replaced:
 | `{{steps.ID.ok}}`, `{{steps.ID.exit_code}}` | Whether it succeeded; a shell step's exit code |
 | `{{learnings}}` | Lessons saved by earlier runs in this repository (may be empty) |
 
+A flow variable named **`agent_env`** is special: its `KEY=value` pairs (separated by `;` or new
+lines) are added to the environment of every agent step — e.g. `agent_env: JAVA_HOME=/opt/jdk21`
+so the agent can run `./gradlew`. (`PATH`, tokens and `FACTORY_*` can't be set this way.)
+
 **Shell `run` may only use `{{vars.*}}`, `{{workdir}}` and `{{run.*}}`** — never `{{task}}` or
 `{{steps.*}}` (that text is untrusted and would be a shell-injection risk). In shell steps, use
 these environment variables instead (always quote them: `"$FACTORY_TASK"`):

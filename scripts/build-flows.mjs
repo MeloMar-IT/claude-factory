@@ -284,6 +284,19 @@ write("pr-feedback", {
   });
 }
 
+// Coding agents may edit files and run the project's build and tests (never git push, which the
+// factory blocks for agents anyway). Values such as JAVA_HOME come from the `agent_env` variable.
+const CODING_TOOLS = [
+  "Read", "Edit", "Write", "Glob", "Grep",
+  "Bash(./gradlew *)", "Bash(gradle *)", "Bash(./mvnw *)", "Bash(mvn *)",
+  "Bash(npm *)", "Bash(npx *)", "Bash(yarn *)", "Bash(pnpm *)",
+  "Bash(pytest*)", "Bash(python3 -m pytest*)", "Bash(python -m pytest*)",
+  "Bash(go test*)", "Bash(go build*)", "Bash(go vet*)", "Bash(cargo *)", "Bash(make *)",
+  "Bash(git status*)", "Bash(git diff*)", "Bash(git log*)", "Bash(git show*)",
+  "Bash(ls*)", "Bash(find *)", "Bash(grep *)", "Bash(cat *)", "Bash(head *)", "Bash(tail *)", "Bash(wc *)",
+];
+const RUN_HINT = "You may run the build and the tests yourself (e.g. `./gradlew test --tests <Class>`, `npm test`); after you, the flow runs: {{vars.test_cmd}}";
+
 // ── Label-driven pipeline: issue-plan → issue-code-daily → daily-pr ──
 // Watchers move issues through labels (e.g. Factory_ready → Factory_planned → Factory_code → Factory_done).
 const clone = {
@@ -576,6 +589,7 @@ write("issue-plan", {
       prompt: [
         "The tests fail. Fix the code so they pass. Never delete, disable or weaken tests to make them pass;",
         "change a test only if the test itself is wrong, and say so.",
+        RUN_HINT,
         "",
         `{{steps.${id}.output}}`,
       ].join("\n"),
@@ -665,6 +679,7 @@ write("issue-plan", {
         "- Do not add new dependencies. Do not change: {{vars.forbidden_paths}}",
         "- Do not write documentation yet; that is a separate step.",
         "- Do not commit.",
+        `- ${RUN_HINT}`,
         "",
         "Things learned from earlier runs in this repo:",
         "{{learnings}}",
@@ -786,11 +801,11 @@ write("issue-plan", {
     description: "Code a planned issue on the day's branch: tests, 2 Codex reviews, docs, commit, push, report",
     workspace: "empty",
     // Cap each agent step (Claude Code stops the step when it reaches it) so one step can't run away.
-    defaults: { model: "claude-sonnet-5-5", timeout_sec: 2400, max_budget_usd: 6 },
+    defaults: { model: "claude-sonnet-5-5", timeout_sec: 2400, max_budget_usd: 6, allowed_tools: CODING_TOOLS },
     limits: { max_cost_usd: 30 },
     vars: {
       github_repo: "owner/repo", issue: "", test_cmd: "auto", branch_prefix: "factory/daily-", timezone: "Europe/Berlin",
-      forbidden_paths: "", docs_required: "",
+      forbidden_paths: "", docs_required: "", agent_env: "",
     },
     steps: s,
   });
@@ -939,12 +954,12 @@ write("issue-plan", {
   }, {
     description: "Plan (Opus + Codex check + risk score) and code (Sonnet + 2 Codex reviews) an issue in one run; risky plans wait for a human",
     workspace: "empty",
-    defaults: { model: "claude-sonnet-5-5", timeout_sec: 2400, max_budget_usd: 6 },
+    defaults: { model: "claude-sonnet-5-5", timeout_sec: 2400, max_budget_usd: 6, allowed_tools: CODING_TOOLS },
     limits: { max_cost_usd: 40 },
     vars: {
       github_repo: "owner/repo", issue: "", test_cmd: "auto", branch_prefix: "factory/daily-", timezone: "Europe/Berlin",
       forbidden_paths: "", docs_required: "", risk_threshold: "75", review_plan_label: "Factory_review_plan",
-      auto_split_max_risk: "50", trigger_label: "",
+      auto_split_max_risk: "50", trigger_label: "", agent_env: "",
     },
     steps: deliver,
   });
@@ -1193,12 +1208,12 @@ write("issue-plan", {
   }, {
     description: "Gitflow: plan (size limit, risk gate, auto-split) and code an issue on its own feature branch, merge it into develop; parallel runs on different code areas",
     workspace: "empty",
-    defaults: { model: "claude-sonnet-5-5", timeout_sec: 2400, max_budget_usd: 6 },
+    defaults: { model: "claude-sonnet-5-5", timeout_sec: 2400, max_budget_usd: 6, allowed_tools: CODING_TOOLS },
     limits: { max_cost_usd: 40 },
     vars: {
       github_repo: "owner/repo", issue: "", test_cmd: "auto",
       develop_branch: "develop", main_branch: "main", feature_prefix: "feature/",
-      forbidden_paths: "", docs_required: "", union_merge_files: "",
+      forbidden_paths: "", docs_required: "", union_merge_files: "", agent_env: "",
       risk_threshold: "75", review_plan_label: "Factory_review_plan", auto_split_max_risk: "50", trigger_label: "",
       max_files: "15", max_code_lines: "800",
     },
