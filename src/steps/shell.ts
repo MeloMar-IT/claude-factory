@@ -30,7 +30,8 @@ export async function runShell(o: {
   let args = ["-c", o.command];
   if (o.dockerImage) {
     env.FACTORY_WORKDIR = "/work";
-    const names = Object.keys(env).filter((k) => /^(FACTORY_|NO_COLOR$|CI$)/.test(k) && env[k] !== undefined);
+    env.SCF_WORKDIR = "/work";
+    const names = Object.keys(env).filter((k) => /^(FACTORY_|SCF_|NO_COLOR$|CI$)/.test(k) && env[k] !== undefined);
     ({ cmd, args } = dockerCommand(o.dockerImage, o.cwd, o.command, names));
   }
   const res = await runProcess(cmd, args, {

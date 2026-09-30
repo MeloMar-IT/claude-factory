@@ -113,12 +113,13 @@ export async function runAgentStep(step: ClaudeStep, scope: Scope, engine: Engin
 /**
  * Extra environment for agent steps from the `agent_env` flow variable: `KEY=value` pairs, one per
  * line or separated by `;` (e.g. `JAVA_HOME=/path/to/jdk`), so agents can run the project's build.
+ * Names with the FACTORY_ or SCF_ prefix and a few sensitive ones are ignored.
  */
 export function agentEnv(spec: string | undefined): Record<string, string> {
   const env: Record<string, string> = {};
   for (const part of (spec ?? "").split(/[\n;]/)) {
     const m = /^\s*([A-Za-z_][A-Za-z0-9_]*)=(.*?)\s*$/.exec(part);
-    if (m && !/^(PATH|HOME|FACTORY_.*|ANTHROPIC_.*|OPENAI_.*|GH_TOKEN|GITHUB_TOKEN)$/.test(m[1]!)) env[m[1]!] = m[2]!;
+    if (m && !/^(PATH|HOME|FACTORY_.*|SCF_.*|ANTHROPIC_.*|OPENAI_.*|GH_TOKEN|GITHUB_TOKEN)$/.test(m[1]!)) env[m[1]!] = m[2]!;
   }
   return env;
 }

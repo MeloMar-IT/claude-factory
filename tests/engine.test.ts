@@ -5,7 +5,10 @@ import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ConfigSchema, type Config } from "../src/config.js";
 import { learningsFile, resumeRun, runFlow } from "../src/engine/runner.js";
+import { dockerCommand } from "../src/engine/guards.js";
 import { liveLogFile } from "../src/engine/state.js";
+import { mirrorEnvPrefixes, withScfAliases } from "../src/engine/template.js";
+import { notifyRun } from "../src/notify.js";
 import { parseFlow } from "../src/flow/load.js";
 
 const claudeBin = resolve("tests/fixtures/fake-claude.mjs");
@@ -249,5 +252,70 @@ describe("schema", () => {
     expect(() => parseFlow("name: t\nsteps:\n  - {id: p, type: parallel, steps: [a, nope]}\n  - {id: a, type: shell, run: x}")).toThrow(/unknown step "nope"/);
     expect(() => parseFlow("name: t\nsteps:\n  - {id: a, type: shell, run: x, routes: [{if: '(', goto: a}]}")).toThrow(/invalid regex/);
     expect(existsSync("flows")).toBe(true);
+  });
+});
+
+describe("SCF_ names", () => {
+  it("gives steps every FACTORY_ variable also as SCF_", async () => {
+    const s = await start(`
+name: t
+workspace: inplace
+vars: {x: hello}
+steps:
+  - {id: a, type: shell, run: 'echo first'}
+  - {id: b, type: shell, run: 'printf "%s|%s|%s|%s|%s" "$SCF_TASK" "$SCF_RUN_ID" "$SCF_VAR_X" "$SCF_OUT_A" "$SCF_TOOLS"'}
+  - {id: c, type: shell, run: 'printf "%s|%s|%s|%s|%s" "$FACTORY_TASK" "$FACTORY_RUN_ID" "$FACTORY_VAR_X" "$FACTORY_OUT_A" "$FACTORY_TOOLS"'}
+`);
+    const b = s.history.find((h) => h.id === "b")!.output;
+    expect(b).toBe(s.history.find((h) => h.id === "c")!.output);
+    expect(b).toContain(s.runId);
+    expect(b).toContain("hello");
+    expect(b.startsWith("|")).toBe(false);
+  });
+
+  it("copes with large step outputs under both names", async () => {
+    const steps = Array.from({ length: 20 }, (_, i) => `  - {id: s${i + 1}, type: shell, run: "printf '%020000d' 0"}`).join("\n");
+    const s = await start(`name: t\nworkspace: inplace\nsteps:\n${steps}\n  - {id: last, type: shell, run: 'echo "\${#SCF_OUT_S1} \${#FACTORY_OUT_S20}"'}\n`);
+    expect(s.status).toBe("succeeded");
+    expect(s.history.at(-1)!.output.trim()).toBe("20000 20000");
+  });
+
+  it("withScfAliases adds SCF_ copies without touching the input", () => {
+    const input = { FACTORY_A: "1", SCF_A: "stale", OTHER: "x" };
+    expect(withScfAliases(input)).toEqual({ FACTORY_A: "1", SCF_A: "1", OTHER: "x" });
+    expect(input.SCF_A).toBe("stale");
+  });
+
+  it("mirrorEnvPrefixes lets SCF_ win and fills the gaps", () => {
+    const env: NodeJS.ProcessEnv = { SCF_HOME: "/new", FACTORY_HOME: "/old", FACTORY_NO_OPEN: "1", SCF_CLAUDE_BIN: "/c", PATH: "/bin" };
+    expect(mirrorEnvPrefixes(env)).toBe(env);
+    expect(env.SCF_HOME).toBe("/new");
+    expect(env.FACTORY_HOME).toBe("/new");
+    expect(env.SCF_NO_OPEN).toBe("1");
+    expect(env.FACTORY_CLAUDE_BIN).toBe("/c");
+    expect(env.PATH).toBe("/bin");
+  });
+
+  it("dockerCommand passes SCF_TOOLS itself and the other names through", () => {
+    const { args } = dockerCommand("img", "/w", "c", ["FACTORY_TASK", "SCF_TASK", "FACTORY_TOOLS", "SCF_TOOLS"]);
+    expect(args).toContain("SCF_TOOLS=/factory-tools");
+    expect(args).toContain("FACTORY_TOOLS=/factory-tools");
+    const i = args.indexOf("SCF_TASK");
+    expect(args[i - 1]).toBe("-e");
+    expect(args).not.toContain("SCF_TOOLS");
+    expect(args).not.toContain("FACTORY_TOOLS");
+  });
+
+  it("notify commands get both names", async () => {
+    const s = await start("name: t\nworkspace: inplace\nsteps:\n  - {id: a, type: shell, run: 'true'}\n");
+    const out = join(tmp, "n");
+    const saved = process.env.FACTORY_NO_NOTIFY;
+    delete process.env.FACTORY_NO_NOTIFY;
+    try {
+      await notifyRun(baseConfig({ notify: { macos: false, command: `printf "%s %s" "$SCF_STATUS" "$FACTORY_STATUS" > ${out}` } }), s);
+    } finally {
+      process.env.FACTORY_NO_NOTIFY = saved;
+    }
+    expect(readFileSync(out, "utf8")).toBe("succeeded succeeded");
   });
 });

@@ -1,4 +1,5 @@
 import { execFile, spawn } from "node:child_process";
+import { withScfAliases } from "./engine/template.js";
 import type { Config } from "./config.js";
 import type { RunSummary } from "./engine/state.js";
 
@@ -35,14 +36,14 @@ export async function notifyRun(config: Config, s: RunSummary): Promise<void> {
       new Promise((r) => {
         const child = spawn("/bin/sh", ["-c", n.command!], {
           stdio: "ignore",
-          env: {
+          env: withScfAliases({
             ...process.env,
             FACTORY_EVENT: "run.finished",
             FACTORY_RUN_ID: s.runId,
             FACTORY_FLOW: s.flow,
             FACTORY_STATUS: s.status,
             FACTORY_MESSAGE: msg,
-          },
+          }),
         });
         child.on("close", r);
         child.on("error", r);

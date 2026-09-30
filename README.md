@@ -40,17 +40,21 @@ git clone https://github.com/MeloMar-IT/claude-factory.git
 cd claude-factory
 npm install
 npm run build
-npm link            # or: ln -s "$PWD/dist/cli.js" ~/.local/bin/factory
+npm link            # gives the scf command (factory still works)
+# or: ln -s "$PWD/dist/cli.js" ~/.local/bin/scf
+#     ln -s "$PWD/dist/factory.js" ~/.local/bin/factory   # optional old name
 ```
+
+If you linked the old name before, run `npm rm -g claude-factory` first.
 
 ## Quick start
 
 ```bash
 cd ~/code/my-project
-factory ui                      # web UI at http://localhost:4777
+scf ui                          # web UI at http://localhost:4777
 
 # or from the terminal:
-factory run quick --task "Add a --json flag to the export command" --var test_cmd="npm test"
+scf run quick --task "Add a --json flag to the export command" --var test_cmd="npm test"
 ```
 
 The run happens in a fresh worktree on a `factory/<run-id>` branch — your checkout is not
@@ -64,8 +68,8 @@ running and resuming them, the GitHub watchers, models and routing, safety setti
 evals and the CLI.
 
 To have **any AI assistant write a flow** for you, give it
-**[docs/FLOW_AUTHORING.md](docs/FLOW_AUTHORING.md)** (or the output of `factory flow-guide`) and
-describe the flow you want; check the result with `factory validate`.
+**[docs/FLOW_AUTHORING.md](docs/FLOW_AUTHORING.md)** (or the output of `scf flow-guide`) and
+describe the flow you want; check the result with `scf validate`.
 
 ## Built-in flows
 

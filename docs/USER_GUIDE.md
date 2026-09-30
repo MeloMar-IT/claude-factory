@@ -25,7 +25,7 @@ to work on:
 
 ```bash
 cd ~/code/my-project
-factory ui
+scf ui
 ```
 
 The UI opens at **http://localhost:4777**. It only listens on your own machine. The path in the
@@ -99,7 +99,7 @@ Open a run to follow it live.
 ### Approvals
 
 An **approval** step pauses the run until a person decides. Approve or reject in the UI, with
-`factory approve <run-id>` / `factory reject <run-id>`, or — for GitHub flows — by commenting
+`scf approve <run-id>` / `scf reject <run-id>`, or — for GitHub flows — by commenting
 `/approve` or `/reject` on the issue (only people with write access count).
 
 ![Waiting for approval](images/run-waiting.png)
@@ -144,7 +144,7 @@ checklist and a full example. Give it to any assistant — ChatGPT, Claude, Gemi
 local model — and describe the flow you want:
 
 ```bash
-factory flow-guide > flow-guide.md        # or copy docs/FLOW_AUTHORING.md
+scf flow-guide > flow-guide.md        # or copy docs/FLOW_AUTHORING.md
 ```
 
 1. Paste (or attach) the guide in a new chat, then write what the flow should do, e.g. *"Opus
@@ -152,7 +152,7 @@ factory flow-guide > flow-guide.md        # or copy docs/FLOW_AUTHORING.md
    3 fix rounds, Codex reviews once, then push the branch and open a PR."*
 2. Save the YAML it answers with as `<repo>/.claude-factory/flows/<name>.yaml` (or in
    `~/.claude-factory/flows/`).
-3. Check it: `factory validate <name>` — it names the field and step for anything that is wrong;
+3. Check it: `scf validate <name>` — it names the field and step for anything that is wrong;
    paste that back to the assistant to fix it. Then open it in the editor to see the graph.
 
 **✨ Draft flow with Claude** in the editor uses the same guide, so both ways produce the same
@@ -223,7 +223,7 @@ In **agent prompts** you can use:
 **Shell commands** may only template trusted values (`{{vars.*}}`, `{{workdir}}`, `{{run.*}}`).
 Task text and step outputs could contain anything, so shell steps read them from environment
 variables instead: `$FACTORY_TASK`, `$FACTORY_OUT_<STEP_ID>`, `$FACTORY_VAR_<NAME>`,
-`$FACTORY_RUN_ID`, `$FACTORY_BRANCH`.
+`$FACTORY_RUN_ID`, `$FACTORY_BRANCH` (also as `$SCF_…`).
 
 An agent step can **continue the session** of an earlier agent step ("Continue session of"), so
 it remembers the conversation.
@@ -501,7 +501,7 @@ watcher's card on the **Watchers** page). The usual reasons:
 - **New issues are being checked for questions** (a few minutes, once per batch).
 - **The usage limit or the daily budget is reached.** Runs pause and continue by themselves
   later; the label stays `Factory_working`.
-- **The factory isn't running.** Watchers only run while `factory ui` / `factory serve` runs.
+- **The factory isn't running.** Watchers only run while `scf ui` / `scf serve` runs.
 - **It has an excluded label** such as `geni`.
 
 #### Branches: gitflow (recommended) or one rolling pull request
@@ -554,14 +554,18 @@ daily pull request is open. Use them if you want to see every plan before any co
 
 ### Keep it running
 
-Watchers only run while `factory ui` (or `factory serve`) runs. When a new version of
+Watchers only run while `scf ui` (or `scf serve`) runs. When a new version of
 claude-factory is built (`npm run build`), the running server restarts itself as soon as no run
 is active — no need to stop and start it. To keep the factory running in the background on macOS,
 also after a restart of your Mac:
 
 ```bash
-factory service install     # uninstall | status
+scf service install     # uninstall | status
 ```
+
+If you installed the service before, run `scf service install` once. It replaces the old
+`com.claude-factory.server` agent with `com.spaghetti-code-foundry.server`, and puts the old one
+back if the new one can't start.
 
 ---
 
@@ -600,7 +604,7 @@ outcomes you choose.
 token (or a GitHub App) to make them as a bot instead.
 
 **Disk** — every run keeps its workspace so you can inspect or resume it. Remove old ones here
-or with `factory clean` (branches in your repositories are kept).
+or with `scf clean` (branches in your repositories are kept).
 
 Global settings are stored in `~/.claude-factory/config.yaml`; runs in `~/.claude-factory/runs/`.
 
@@ -650,7 +654,7 @@ cases:
 ```
 
 ```bash
-factory eval evals/my-suite.yaml --models sonnet,codex,ollama:qwen3-coder
+scf eval evals/my-suite.yaml --models sonnet,codex,ollama:qwen3-coder
 ```
 
 The report shows pass rate, average cost, tokens, time and fix loops per variant, and appears on
@@ -660,21 +664,38 @@ the Dashboard.
 
 ## 9. Command line
 
+The command is `scf`. `factory` still works as an alias and prints a short note.
+
 | Command | What it does |
 |---|---|
-| `factory ui [--port 4777] [--no-open]` | Web UI, queue and watchers. Restarts itself when a new build is installed and no run is active (set `FACTORY_NO_SUPERVISE=1` to turn that off) |
-| `factory serve [--port 4777]` | The same without opening a browser |
-| `factory service install \| uninstall \| status` | Run `factory serve` in the background (macOS) |
-| `factory run <flow> --task "…" [--var k=v] [--repo dir]` | Run a flow |
-| `factory resume <run-id> [--from <step>]` | Continue a run |
-| `factory approve <run-id> [--note "…"]` / `factory reject …` | Decide on a waiting run |
-| `factory flows` / `factory blocks` | List flows / library blocks |
-| `factory new <name> [--from <flow>] [--global]` | Create a flow from a template |
-| `factory validate <flow or file>` | Check a flow |
-| `factory flow-guide` | Print the flow-writing guide for AI assistants ([Let any AI write a flow](#let-any-ai-write-a-flow)) |
-| `factory watch [flow] --var github_repo=o/r [--source …] [--once]` | Run one watcher from the terminal |
-| `factory eval <suite.yaml> [--flows a,b] [--models …]` | Run an eval suite |
-| `factory clean [--older-than 7] [--purge] [--dry-run]` | Remove old run workspaces |
+| `scf ui [--port 4777] [--no-open]` | Web UI, queue and watchers. Restarts itself when a new build is installed and no run is active (set `SCF_NO_SUPERVISE=1` to turn that off) |
+| `scf serve [--port 4777]` | The same without opening a browser |
+| `scf service install \| uninstall \| status` | Run `scf serve` in the background (macOS) |
+| `scf run <flow> --task "…" [--var k=v] [--repo dir]` | Run a flow |
+| `scf resume <run-id> [--from <step>]` | Continue a run |
+| `scf approve <run-id> [--note "…"]` / `scf reject …` | Decide on a waiting run |
+| `scf flows` / `scf blocks` | List flows / library blocks |
+| `scf new <name> [--from <flow>] [--global]` | Create a flow from a template |
+| `scf validate <flow or file>` | Check a flow |
+| `scf flow-guide` | Print the flow-writing guide for AI assistants ([Let any AI write a flow](#let-any-ai-write-a-flow)) |
+| `scf watch [flow] --var github_repo=o/r [--source …] [--once]` | Run one watcher from the terminal |
+| `scf eval <suite.yaml> [--flows a,b] [--models …]` | Run an eval suite |
+| `scf clean [--older-than 7] [--purge] [--dry-run]` | Remove old run workspaces |
+
+### Environment variables
+
+Both names work; if both are set, `SCF_…` wins.
+
+| Variable | Old name | What it does |
+|---|---|---|
+| `SCF_HOME` | `FACTORY_HOME` | Data folder (default `~/.claude-factory`) |
+| `SCF_CLAUDE_BIN` | `FACTORY_CLAUDE_BIN` | Claude Code program to run |
+| `SCF_CODEX_BIN` | `FACTORY_CODEX_BIN` | Codex program to run |
+| `SCF_GH_BIN` | `FACTORY_GH_BIN` | `gh` program to run |
+| `SCF_NO_OPEN` | `FACTORY_NO_OPEN` | Set to `1` to not open a browser |
+| `SCF_NO_SUPERVISE` | `FACTORY_NO_SUPERVISE` | Set to `1` to not restart the server on a new build |
+| `SCF_NO_NOTIFY` | `FACTORY_NO_NOTIFY` | Set to `1` to turn notifications off |
+| `SCF_LOCK_DIR` | `FACTORY_LOCK_DIR` | Where lock files are kept |
 
 Flows are looked up in `<repo>/.claude-factory/flows/`, then `~/.claude-factory/flows/`, then the
 built-in ones.
