@@ -77,6 +77,7 @@ describe the flow you want; check the result with `factory validate`.
 | `github-issue` | Issue → plan (or questions) → code → tests → review → push → report on the issue |
 | `github-pr` | Like `github-issue`, then PR → wait for CI and fix it → learn |
 | `github-auto` | Triage first: small fix, full feature, split into sub-issues, or ask |
+| `epic-questions`, `issue-gitflow`, `release-daily` | Gitflow pipeline: questions up front; per issue plan (risk gate, size limit with automatic splitting) and code on a feature branch, merged into `develop` by the factory — in parallel for different code areas; once a day one PR `develop` → `main` |
 | `epic-questions`, `issue-deliver`, `daily-pr` | One-label pipeline: questions up front, plan (with a risk score — a human approves above 75) and code in one run, one rolling PR with a daily report |
 | `issue-plan`, `issue-code-daily` | Older two-label pipeline: approve every plan, pause while the daily PR is open |
 | `pr-feedback` | Address review comments on a factory PR |

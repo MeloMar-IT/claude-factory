@@ -18,15 +18,17 @@ vars:
   issues: ""
   needs_info_label: Factory_needs_info
   forbidden_paths: ""
+  develop_branch: ""
 steps:
   - id: clone
     type: shell
     run: |-
       if [ -d .git ]; then git fetch -q origin; else gh repo clone "$FACTORY_VAR_GITHUB_REPO" . -- -q; fi
       git log --oneline -1
+      if [ -n "$FACTORY_VAR_DEVELOP_BRANCH" ] && git rev-parse -q --verify "origin/$FACTORY_VAR_DEVELOP_BRANCH" >/dev/null; then git checkout -q --detach "origin/$FACTORY_VAR_DEVELOP_BRANCH" && echo "Code: $FACTORY_VAR_DEVELOP_BRANCH" && exit 0; fi
       b=$("$FACTORY_TOOLS/daily-branch" latest 2>/dev/null || echo NONE)
       if [ "$b" != NONE ] && git checkout -q --detach "origin/$b"; then echo "Code: main plus unmerged work on $b"; else echo "Code: main"; fi
-    description: Clone, then check out the newest factory branch that is not in main yet
+    description: Clone, then check out develop (gitflow) or the newest factory branch that is not in main yet
   - id: read_issues
     type: shell
     run: |-

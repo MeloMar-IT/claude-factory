@@ -2,7 +2,8 @@
 // Stand-in for the `claude` CLI: reads the prompt from stdin, emits stream-json.
 // Prompt directives: "WRITE <file> <text>" writes a file; "SAY <text>" sets the result;
 // "ERROR" returns an error result. Args are echoed into the result for assertions.
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 
 let prompt = "";
 for await (const chunk of process.stdin) prompt += chunk;
@@ -47,6 +48,16 @@ else if (prompt.includes("CI failed on this branch")) {
   const ask = (process.env.FAKE_QUESTIONS_FOR ?? "").split(" ");
   canned = [...prompt.matchAll(/ISSUE #(\d+)/g)].map(([, n]) =>
     ask.includes(n) ? `### #${n}\n**Q1. Which package format?**\ndmg or pkg\n**Recommendation:** dmg — no admin prompt` : `### #${n}\nNO_QUESTIONS`).join("\n");
+} else if (prompt.includes("Your plan is over the size limit")) {
+  canned = process.env.FAKE_FORCED_SPLIT ?? "## Split\n### ISSUE 1: Small part one\nDEPENDS_ON: none\nDo one.\n### ISSUE 2: Small part two\nDEPENDS_ON: 1\nDo two.\nSPLIT_RISK: 20\nPLAN_STATUS: TOO_BIG";
+} else if (prompt.includes("Your finished change is being merged into the develop branch")) {
+  // Resolve by keeping both sides: drop the conflict markers from every conflicted file.
+  const files = execFileSync("git", ["diff", "--name-only", "--diff-filter=U"], { encoding: "utf8" }).split("\n").filter(Boolean);
+  for (const f of files) {
+    writeFileSync(f, readFileSync(f, "utf8").split("\n").filter((l) => !/^(<<<<<<<|=======|>>>>>>>)/.test(l)).join("\n"));
+    execFileSync("git", ["add", f]);
+  }
+  canned = files.map((f) => `- ${f}: kept both`).join("\n") || "nothing to resolve";
 } else if (prompt.includes("Check each review point in the code")) {
   if (process.env.FAKE_REVISE_COST) cost = Number(process.env.FAKE_REVISE_COST);
   canned = process.env.FAKE_REVISE ?? "## Goal\nAdd feature.txt (revised)\n## Review notes\n- adopted: add an edge-case test\nPLAN_STATUS: READY";
@@ -75,6 +86,11 @@ else if (prompt.includes("Address the review feedback")) {
   canned = "- added feature.txt";
 }
 
+// Plans asked for their size and code areas get them (FAKE_SIZE, FAKE_AREAS; areas default per issue).
+if (canned && prompt.includes("SIZE: <number of files changed>") && /PLAN_STATUS: READY/.test(canned) && !/^SIZE:/m.test(canned)) {
+  const issue = /# #(\d+):/.exec(prompt)?.[1] ?? "x";
+  canned = canned.replace(/PLAN_STATUS: READY/, `SIZE: ${process.env.FAKE_SIZE ?? "3 files, 120 lines"}\nAREAS: ${process.env.FAKE_AREAS ?? `src/area${issue}`}\nPLAN_STATUS: READY`);
+}
 // Plans asked for a risk score get one (FAKE_RISK, default 20) before the PLAN_STATUS line.
 if (canned && prompt.includes("RISK_SCORE: <0-100>") && /PLAN_STATUS: READY/.test(canned) && !/RISK_SCORE/.test(canned)) {
   canned = canned.replace(/PLAN_STATUS: READY/, `## Risk\nsmall\nRISK_SCORE: ${process.env.FAKE_RISK ?? 20}\nRISK_REASON: ${process.env.FAKE_RISK_REASON ?? "small local change"}\nPLAN_STATUS: READY`);

@@ -19,7 +19,7 @@ ${header.lines.map((l) => `# ${l}`).join("\n")}
 `;
   // Flows that change code: one run per repository at a time. Planning / PR-only flows run in parallel.
   const { description, workspace, ...rest } = flow;
-  const coding = !["issue-plan", "daily-pr", "epic-questions"].includes(name);
+  const coding = !["issue-plan", "daily-pr", "epic-questions", "release-daily", "issue-gitflow"].includes(name);
   const ordered = { name, description, workspace, ...(coding ? { one_per_repo: true } : {}), ...rest };
   writeFileSync(join(root, "flows", `${name}.yaml`), text + stringify(ordered, { lineWidth: 0 }));
   console.log(`wrote flows/${name}.yaml (${flow.steps.length} steps)`);
@@ -294,6 +294,8 @@ const clone = {
 
 // The plan text: the revised plan when it finished as READY, else the first draft.
 const PLAN_OUT = '"${FACTORY_OUT_REVISE_PLAN:-$FACTORY_OUT_PLAN}"';
+// The answer that carries a split: the forced split (size limit), else the revision, else the draft.
+const SPLIT_OUT = '"${FACTORY_OUT_FORCE_SPLIT:-${FACTORY_OUT_REVISE_PLAN:-$FACTORY_OUT_PLAN}}"';
 const PICK_PLAN = [
   'out="$FACTORY_OUT_PLAN"; notes=""',
   'if printf \'%s\\n\' "$FACTORY_OUT_REVISE_PLAN" | grep -q "^PLAN_STATUS: READY"; then out="$FACTORY_OUT_REVISE_PLAN"',
@@ -330,7 +332,21 @@ const SPLIT_FORMAT = [
   "  asks for, or needs decisions only the owner can make. Write it as the line: SPLIT_RISK: <0-100>",
   "  If the owner already agreed to split this issue (in the comments above), also write: SPLIT_APPROVED: yes",
 ];
-const planPhase = (post, { risk = false, split = false } = {}) => [
+// With `sized`, the plan states its size and the code areas it changes: too big → split; the areas
+// become locks so runs on different areas can code at the same time.
+const SIZE_RULES = [
+  "",
+  "Size limit: one issue must stay reviewable — at most {{vars.max_files}} files changed and about",
+  "{{vars.max_code_lines}} lines of new or changed production code (tests and docs don't count). If your plan",
+  "would exceed that, the issue is TOO_BIG: split it instead.",
+];
+const SIZE_LINES = [
+  "For READY, also end the plan with these two lines:",
+  "SIZE: <number of files changed> files, <estimated lines of production code> lines",
+  "AREAS: <comma-separated directories you will change, most specific possible; list single shared files",
+  "  such as Main.kt or a settings screen by their path; leave out the changelog and user guide>",
+];
+const planPhase = (post, { risk = false, split = false, sized = false } = {}) => [
     {
       id: "plan",
       type: "claude",
@@ -359,6 +375,7 @@ const planPhase = (post, { risk = false, split = false } = {}) => [
         "",
         "Then decide:",
         "- NOT_CODE: not a coding task (legal, approval, research, rollout, …). Explain why.",
+        ...(sized ? SIZE_RULES : []),
         "- TOO_BIG: cannot be done well as one focused, reviewable change. Propose a split into smaller",
         "  issues (title + 2-3 lines each) that can each be built and tested on their own, in order.",
         ...(split ? SPLIT_FORMAT : []),
@@ -379,6 +396,7 @@ const planPhase = (post, { risk = false, split = false } = {}) => [
           "For READY, end the plan with a \"## Risk\" section explaining the score, then these two lines:",
           "RISK_SCORE: <0-100>",
           "RISK_REASON: <one line>"] : []),
+        ...(sized ? SIZE_LINES : []),
         "",
         "End with exactly one line: PLAN_STATUS: READY | NEEDS_INFO | NOT_CODE | TOO_BIG",
       ].join("\n"),
@@ -435,6 +453,9 @@ const planPhase = (post, { risk = false, split = false } = {}) => [
         "rejected, with one line why.",
         ...(risk ? ["Keep the \"## Risk\" section and the RISK_SCORE / RISK_REASON lines, updated if the review changed",
           "the picture (never lower the score just because the reviewer scored lower)."] : []),
+        ...(sized ? ["Keep the SIZE and AREAS lines, updated to the final plan. If the final plan is over the size limit",
+          "({{vars.max_files}} files / about {{vars.max_code_lines}} lines of production code), answer TOO_BIG with a split instead."] : []),
+        ...(split && sized ? SPLIT_FORMAT : []),
         "",
         "{{steps.pull_ticket.output}}",
         "",
@@ -824,7 +845,7 @@ write("issue-plan", {
       jump_only: true,
       description: "Low-risk split (or already agreed): create the issues; otherwise ask the owner",
       run: [
-        `out=${PLAN_OUT}`,
+        `out=${SPLIT_OUT}`,
         'printf \'%s\\n\' "$out" | grep -q "^### ISSUE [0-9]" || { echo "SPLIT: none (no parts in the answer)"; exit 0; }',
         'risk=$(printf \'%s\\n\' "$out" | sed -n \'s/^SPLIT_RISK: *\\([0-9][0-9]*\\).*/\\1/p\' | tail -1); risk=${risk:-100}',
         'limit=${FACTORY_VAR_AUTO_SPLIT_MAX_RISK:-50}; agreed=""; forced=""',
@@ -855,7 +876,7 @@ write("issue-plan", {
       type: "shell",
       jump_only: true,
       description: "Create the parts as issues (in order, with Depends on and the build label), then close this issue",
-      run: `printf '%s\\n' ${PLAN_OUT} | "$FACTORY_TOOLS/create-split"`,
+      run: `printf '%s\\n' ${SPLIT_OUT} | "$FACTORY_TOOLS/create-split"`,
       on_success: "end",
     },
   ];
@@ -927,7 +948,331 @@ write("issue-plan", {
     },
     steps: deliver,
   });
+
+  // ── issue-gitflow: feature branch per issue → merged into develop; develop → main once a day ──
+  const testRun = byId("run_tests").run;
+  const sizeGate = {
+    id: "size_gate",
+    type: "shell",
+    description: "Plans over the size limit are split instead of built",
+    run: [
+      PICK_PLAN,
+      'size=$(printf \'%s\\n\' "$out" | sed -n \'s/^SIZE: *//p\' | tail -1)',
+      'files=$(printf \'%s\\n\' "$size" | sed -n \'s/^\\([0-9][0-9]*\\) *files.*/\\1/p\'); lines=$(printf \'%s\\n\' "$size" | sed -n \'s/.*[, ] *\\([0-9][0-9]*\\) *lines.*/\\1/p\')',
+      'echo "planned size: ${files:-?} files, ${lines:-?} lines of production code (limit ${FACTORY_VAR_MAX_FILES} files, ${FACTORY_VAR_MAX_CODE_LINES} lines)"',
+      'if [ -n "$files" ] && [ "$files" -gt "$FACTORY_VAR_MAX_FILES" ] || { [ -n "$lines" ] && [ "$lines" -gt "$FACTORY_VAR_MAX_CODE_LINES" ]; }; then echo "SIZE: over"; else echo "SIZE: ok"; fi',
+    ].join("\n"),
+    routes: [{ if: "^SIZE: over\\s*$", goto: "force_split" }],
+    on_success: "risk_gate",
+  };
+  const forceSplit = {
+    id: "force_split",
+    type: "claude",
+    model: "claude-opus-5-5",
+    effort: "high",
+    resume: "plan",
+    jump_only: true,
+    max_budget_usd: 6,
+    permission_mode: "dontAsk",
+    allowed_tools: ["Read", "Glob", "Grep", "Bash(git log*)", "Bash(git show*)", "Bash(git grep*)", "Bash(ls*)"],
+    prompt: [
+      "Your plan is over the size limit for one issue:",
+      "{{steps.size_gate.output}}",
+      "",
+      "Split this issue into smaller issues instead, each within the limit and buildable and testable on its",
+      "own, in order. Use the plan you made (and the review notes, if any) for the parts.",
+      ...SPLIT_FORMAT.map((l) => l.replace(/^  /, "")),
+      "",
+      "End with exactly one line: PLAN_STATUS: TOO_BIG",
+    ].join("\n"),
+    routes: [{ if: "^PLAN_STATUS: TOO_BIG\\s*$", goto: "split_gate" }],
+    on_success: "risk_gate", // it disagreed and kept the plan: continue with it
+    on_failure: "risk_gate",
+  };
+  const featureBranch = {
+    id: "feature_branch",
+    type: "shell",
+    description: "Clone, make sure develop exists, and start (or continue) this issue's feature branch from develop",
+    run: [
+      'if [ -d .git ]; then git reset -q --hard && git clean -qfd && git fetch -q origin; else gh repo clone "$FACTORY_VAR_GITHUB_REPO" . -- -q; fi',
+      'dev="$FACTORY_VAR_DEVELOP_BRANCH"; main="$FACTORY_VAR_MAIN_BRANCH"',
+      'if ! git ls-remote --exit-code --heads origin "$dev" >/dev/null 2>&1; then',
+      '  git push -q origin "refs/remotes/origin/$main:refs/heads/$dev" 2>/dev/null && echo "created $dev from $main"',
+      'fi',
+      '# (another run may have created it at the same moment — either way it must exist now)',
+      'git fetch -q origin && git rev-parse -q --verify "origin/$dev" >/dev/null || { echo "there is no $dev branch and it could not be created"; exit 1; }',
+      '# Keep develop up to date with main (merged pull requests from elsewhere, hotfixes).',
+      'if [ "$(git rev-list --count "origin/$dev..origin/$main")" -gt 0 ]; then',
+      '  "$FACTORY_TOOLS/area-lock" acquire "$FACTORY_RUN_ID" "{{run.dir}}" @develop --wait-sec 3600 >/dev/null || exit 1',
+      '  git fetch -q origin && git checkout -q -B "$dev" "origin/$dev"',
+      '  if git merge -q --no-edit -m "Merge $main into $dev" "origin/$main" >/dev/null 2>&1 && git push -q origin "$dev"; then echo "brought $dev up to date with $main"',
+      '  else git merge --abort >/dev/null 2>&1; echo "note: could not merge $main into $dev automatically — do it by hand"; fi',
+      '  "$FACTORY_TOOLS/area-lock" release "$FACTORY_RUN_ID" >/dev/null; git fetch -q origin',
+      'fi',
+      '# The changelog only ever gets new entries: keep both sides when branches meet.',
+      'for f in $FACTORY_VAR_UNION_MERGE_FILES; do echo "$f merge=union" >> .git/info/attributes; done',
+      'title=$(gh issue view "$FACTORY_VAR_ISSUE" --repo "$FACTORY_VAR_GITHUB_REPO" --json title -q .title 2>/dev/null)',
+      'slug=$(printf \'%s\' "$title" | tr \'[:upper:]\' \'[:lower:]\' | sed \'s/[^a-z0-9]\\{1,\\}/-/g; s/^-//; s/-$//\' | cut -c1-40 | sed \'s/-$//\')',
+      'b="$FACTORY_VAR_FEATURE_PREFIX$FACTORY_VAR_ISSUE${slug:+-$slug}"',
+      'if git ls-remote --exit-code --heads origin "$b" >/dev/null 2>&1; then',
+      '  git checkout -q -B "$b" "origin/$b" && git merge -q --no-edit "origin/$dev" >/dev/null || { echo "could not update $b with $dev"; exit 1; }',
+      '  echo "BRANCH: $b (continuing, up to date with $dev)"',
+      'else git checkout -q -B "$b" "origin/$dev" || exit 1; echo "BRANCH: $b (new, from $dev)"; fi',
+      '[ "$(git branch --show-current)" = "$b" ] || { echo "not on $b"; exit 1; }',
+      'git log --oneline -1',
+    ].join("\n"),
+  };
+  const claimAreas = {
+    id: "claim_areas",
+    type: "shell",
+    timeout_sec: 14400,
+    description: "Lock the code areas the plan changes; waits while another run works in an overlapping area",
+    run: [
+      'plan="${FACTORY_OUT_REVISE_PLAN:-$FACTORY_OUT_PLAN}"; printf \'%s\\n\' "$FACTORY_OUT_REVISE_PLAN" | grep -q "^AREAS:" || plan="$FACTORY_OUT_PLAN"',
+      'areas=$(printf \'%s\\n\' "$plan" | sed -n \'s/^AREAS: *//p\' | tail -1 | tr -d \'`\')',
+      '[ -n "$areas" ] || areas="*"',
+      '"$FACTORY_TOOLS/area-lock" acquire "$FACTORY_RUN_ID" "{{run.dir}}" $(printf \'%s\' "$areas" | tr \',\' \' \') --wait-sec 14000',
+    ].join("\n"),
+  };
+  const pushFeature = {
+    id: "push_feature",
+    type: "shell",
+    run: [
+      'b=$(git branch --show-current)',
+      'case "$b" in "$FACTORY_VAR_FEATURE_PREFIX"*) ;; *) echo "refusing to push $b: not a feature branch"; exit 1;; esac',
+      'git push -q -u origin HEAD && echo "pushed $b"',
+    ].join("\n"),
+  };
+  const mergeDevelop = {
+    id: "merge_develop",
+    type: "shell",
+    max_visits: 4,
+    timeout_sec: 7200,
+    description: "Merge the feature branch into develop (one merge at a time); conflicts go to an agent",
+    run: [
+      '"$FACTORY_TOOLS/area-lock" acquire "$FACTORY_RUN_ID" "{{run.dir}}" @develop --wait-sec 7000 >/dev/null || { echo "develop stayed locked too long"; exit 1; }',
+      'dev="$FACTORY_VAR_DEVELOP_BRANCH"; f=$(git rev-parse --abbrev-ref HEAD); [ "$f" = "$dev" ] && f=$(cat "{{run.dir}}/feature-branch")',
+      'echo "$f" > "{{run.dir}}/feature-branch"',
+      'git merge --abort >/dev/null 2>&1 || true',
+      'git fetch -q origin "$dev" && git checkout -q -B "$dev" "origin/$dev"',
+      'git rev-parse HEAD > "{{run.dir}}/develop-before"',
+      'title=$(gh issue view "$FACTORY_VAR_ISSUE" --repo "$FACTORY_VAR_GITHUB_REPO" --json title -q .title 2>/dev/null)',
+      'if git merge --no-ff --no-edit -m "Merge #$FACTORY_VAR_ISSUE: $title ($f)" "$f" >/dev/null 2>&1; then echo "MERGED: $f into $dev"; exit 0; fi',
+      'echo "CONFLICTS merging $f into $dev:"; git diff --name-only --diff-filter=U; exit 1',
+    ].join("\n"),
+    on_success: "test_develop",
+    on_failure: "resolve_conflicts",
+  };
+  const resolveConflicts = {
+    id: "resolve_conflicts",
+    type: "claude",
+    jump_only: true,
+    max_visits: 3,
+    resume: "implement",
+    prompt: [
+      "Your finished change is being merged into the develop branch, and other work landed there meanwhile.",
+      "The merge has conflicts (run `git status` and `git diff`):",
+      "",
+      "{{steps.merge_develop.output}}",
+      "",
+      "Resolve every conflict so that BOTH changes keep working: keep the other work and fit yours in.",
+      "Remove all conflict markers, then `git add` the resolved files. Do not commit and do not run",
+      "git merge, rebase or reset. Finish with one line per file saying how you resolved it.",
+    ].join("\n"),
+    allowed_tools: ["Read", "Edit", "Write", "Glob", "Grep", "Bash(git status*)", "Bash(git diff*)", "Bash(git add*)", "Bash(git log*)", "Bash(git show*)"],
+    on_success: "finish_merge",
+  };
+  const finishMerge = {
+    id: "finish_merge",
+    type: "shell",
+    jump_only: true,
+    run: [
+      'left=$(git diff --name-only --diff-filter=U); [ -z "$left" ] || { echo "still unresolved:"; echo "$left"; exit 1; }',
+      'markers=""; for f in $(git diff --cached --name-only); do [ -f "$f" ] && grep -qE "^(<<<<<<< |>>>>>>> )" "$f" && markers="$markers $f"; done',
+      '[ -z "$markers" ] || { echo "conflict markers left in:$markers"; exit 1; }',
+      'git commit -q --no-edit && echo "merge committed after resolving conflicts"',
+    ].join("\n"),
+    on_success: "test_develop",
+    on_failure: "resolve_conflicts",
+  };
+  const testDevelop = {
+    id: "test_develop",
+    type: "shell",
+    timeout_sec: 3600,
+    description: "The merged develop must pass the tests before it is pushed",
+    run: testRun,
+    on_success: "push_develop",
+    on_failure: "fix_develop",
+  };
+  const fixDevelop = {
+    id: "fix_develop",
+    type: "claude",
+    jump_only: true,
+    max_visits: 2,
+    resume: "implement",
+    prompt: [
+      "Your change is merged into develop (not pushed yet), and the tests now fail. Fix that — in your code or",
+      "where it meets the work that landed on develop meanwhile. Never weaken or delete tests. Do not commit.",
+      "",
+      "{{steps.test_develop.output}}",
+    ].join("\n"),
+    on_success: "commit_develop_fix",
+  };
+  const commitDevelopFix = {
+    id: "commit_develop_fix",
+    type: "shell",
+    jump_only: true,
+    run: 'git add -A && git commit -q -m "Fix #$FACTORY_VAR_ISSUE after merging into develop" && git log --oneline -1',
+    on_success: "test_develop",
+  };
+  const pushDevelop = {
+    id: "push_develop",
+    type: "shell",
+    description: "Push develop; if it moved meanwhile, merge again",
+    run: [
+      'dev="$FACTORY_VAR_DEVELOP_BRANCH"',
+      'if git push -q origin "$dev"; then echo "PUSHED: $dev $(git rev-parse --short HEAD)"; "$FACTORY_TOOLS/area-lock" release "$FACTORY_RUN_ID" >/dev/null; exit 0; fi',
+      'echo "develop moved meanwhile — merging again"; exit 1',
+    ].join("\n"),
+    on_failure: "merge_develop",
+  };
+  const gitflowReport = structuredClone(report);
+  gitflowReport.run = gitflowReport.run
+    .replace("branch=$(git branch --show-current); sha=$(git rev-parse HEAD)", 'branch=$(cat "{{run.dir}}/feature-branch"); sha=$(git rev-parse HEAD)')
+    .replace("implemented this on branch \\`$branch\\` (commit", "implemented this on \\`$branch\\` and merged it into \\`$FACTORY_VAR_DEVELOP_BRANCH\\` (commit")
+    .replace("_It is in the factory pull request: $FACTORY_OUT_OPEN_PR — merge it whenever you like._", "_It goes to \\`$FACTORY_VAR_MAIN_BRANCH\\` with the daily release pull request._")
+    .replace("git show --stat --format= HEAD | tail -40", 'git diff --stat "$(cat "{{run.dir}}/develop-before")" HEAD | tail -40');
+  const gitflowSteps = [
+    byId("pull_ticket"),
+    featureBranch,
+    byId("baseline_tests"),
+    ...planPhase("size_gate", { risk: true, split: true, sized: true }),
+    ...splitSteps,
+    sizeGate,
+    forceSplit,
+    riskGate,
+    approvePlan,
+    claimAreas,
+    implement,
+    ...s.slice(s.findIndex((x) => x.id === "guard"), s.findIndex((x) => x.id === "commit")).map((x) => structuredClone(x)),
+    byId("commit"),
+    pushFeature,
+    mergeDevelop,
+    resolveConflicts,
+    finishMerge,
+    testDevelop,
+    fixDevelop,
+    commitDevelopFix,
+    pushDevelop,
+    gitflowReport,
+    byId("baseline_failed"),
+  ];
+  // push_develop is followed by the report; the plan steps by risk_gate etc. (their jumps are explicit)
+  gitflowSteps.find((x) => x.id === "risk_gate").on_success = "claim_areas";
+  gitflowSteps.find((x) => x.id === "approve_plan").on_success = "claim_areas";
+  for (const id of ["plan", "revise_plan"]) gitflowSteps.find((x) => x.id === id).max_budget_usd = 8;
+  for (const x of gitflowSteps) if (["merge_develop", "resolve_conflicts", "finish_merge", "test_develop", "fix_develop", "commit_develop_fix"].includes(x.id)) x.jump_only = true;
+  gitflowSteps.find((x) => x.id === "push_feature").on_success = "merge_develop";
+  write("issue-gitflow", {
+    title: "Plan and code an issue on a feature branch, merged into develop (gitflow)",
+    lines: [
+      "factory run issue-gitflow --var github_repo=owner/repo --var issue=42 --var test_cmd=\"./gradlew test\"",
+      "",
+      "pull ticket → feature/<issue>-<title> from develop (develop is created from main if missing) → baseline tests",
+      "  → Opus plans (with size + code areas) → Codex checks (+ risk) → Opus revises",
+      "      too big (limit or planner) → split: low split risk creates the issues itself, else /approve",
+      "  → risk > 75 or Factory_review_plan → wait for /approve",
+      "  → lock the plan's code areas (runs on other areas code at the same time)",
+      "  → Sonnet codes → tests ⟲ fix → 2 × Codex review → docs → commit → push the feature branch",
+      "  → merge into develop (one at a time; changelog merges keep both sides; conflicts → agent resolves)",
+      "  → tests on the merged develop ⟲ fix → push develop → report on the issue",
+      "develop goes to main once a day: see release-daily.",
+    ],
+  }, {
+    description: "Gitflow: plan (size limit, risk gate, auto-split) and code an issue on its own feature branch, merge it into develop; parallel runs on different code areas",
+    workspace: "empty",
+    defaults: { model: "claude-sonnet-5-5", timeout_sec: 2400, max_budget_usd: 6 },
+    limits: { max_cost_usd: 40 },
+    vars: {
+      github_repo: "owner/repo", issue: "", test_cmd: "auto",
+      develop_branch: "develop", main_branch: "main", feature_prefix: "feature/",
+      forbidden_paths: "", docs_required: "", union_merge_files: "",
+      risk_threshold: "75", review_plan_label: "Factory_review_plan", auto_split_max_risk: "50", trigger_label: "",
+      max_files: "15", max_code_lines: "800",
+    },
+    steps: gitflowSteps,
+  });
 }
+
+// ── release-daily: develop → main once a day (gitflow) ──
+write("release-daily", {
+  title: "Daily release pull request develop → main (gitflow)",
+  lines: [
+    "factory run release-daily --var github_repo=owner/repo --var test_cmd=\"./gradlew test\"",
+    "(a schedule watcher runs this once a day, e.g. 17:00 Europe/Berlin)",
+    "",
+    "clone → develop ahead of main? ─┬─ no → end",
+    "                                └─ full tests + build on develop → open / update the PR develop → main",
+    "                                   (lists and closes the merged issues; draft while red) → comment the checks",
+  ],
+}, {
+  description: "Once a day: full tests and build on develop, then one pull request develop → main that closes the merged issues",
+  workspace: "empty",
+  defaults: { timeout_sec: 3600 },
+  vars: { github_repo: "owner/repo", test_cmd: "auto", build_cmd: "", develop_branch: "develop", main_branch: "main" },
+  steps: [
+    clone,
+    {
+      id: "changes",
+      type: "shell",
+      description: "What develop has that main doesn't",
+      run: [
+        'dev="$FACTORY_VAR_DEVELOP_BRANCH"; main="$FACTORY_VAR_MAIN_BRANCH"',
+        'git rev-parse -q --verify "origin/$dev" >/dev/null || { echo "NONE: there is no $dev branch yet"; exit 0; }',
+        'n=$(git rev-list --count "origin/$main..origin/$dev"); [ "$n" -gt 0 ] || { echo "NONE: $dev has nothing new"; exit 0; }',
+        'git checkout -q -B "$dev" "origin/$dev"',
+        'echo "$n commits on $dev that are not on $main:"; git log --format="%s" "origin/$main..origin/$dev" | grep -E "^(Merge #|Resolve #)" | sort -u',
+      ].join("\n"),
+      routes: [{ if: "^NONE:", goto: "end" }],
+    },
+    {
+      id: "verify",
+      type: "shell",
+      description: "Full tests and build on develop",
+      run: [
+        'cmd="$FACTORY_VAR_TEST_CMD"; if [ -z "$cmd" ] || [ "$cmd" = auto ]; then cmd=$("$FACTORY_TOOLS/detect-commands" test); fi',
+        'marker="{{run.dir}}/tests.marker"; touch "$marker"; ok=yes',
+        'sh -c "$cmd" > "{{run.dir}}/tests.log" 2>&1 || ok=no',
+        'if [ -n "$FACTORY_VAR_BUILD_CMD" ]; then sh -c "$FACTORY_VAR_BUILD_CMD" > "{{run.dir}}/build.log" 2>&1 || ok=no; fi',
+        '{ echo "### Checks on $FACTORY_VAR_DEVELOP_BRANCH"; echo \'```\'; echo "\\$ $cmd"; "$FACTORY_TOOLS/test-summary" "$marker"',
+        '  [ -n "$FACTORY_VAR_BUILD_CMD" ] && echo "\\$ $FACTORY_VAR_BUILD_CMD → $(grep -q "BUILD SUCCESSFUL" "{{run.dir}}/build.log" 2>/dev/null && echo ok || tail -1 "{{run.dir}}/build.log")"',
+        '  echo \'```\'; [ "$ok" = yes ] || echo "⚠ **Checks failed** — marked as draft until they pass. See the run log for details."; } > "{{run.dir}}/checks.md"',
+        'cat "{{run.dir}}/checks.md"; echo "CHECKS: $ok"',
+      ].join("\n"),
+    },
+    {
+      id: "release_pr",
+      type: "shell",
+      description: "Open or update the pull request develop → main, comment the checks, draft while red",
+      run: [
+        'dev="$FACTORY_VAR_DEVELOP_BRANCH"; main="$FACTORY_VAR_MAIN_BRANCH"; day=$(date +%Y-%m-%d)',
+        'nums=$(git log --format="%s" "origin/$main..origin/$dev" | sed -nE "s/^(Merge|Resolve) #([0-9]+).*/\\2/p" | sort -un)',
+        '{ echo "Everything merged into \\`$dev\\` since the last release. Merge this to bring it to \\`$main\\`."; echo; echo "### Issues"',
+        '  for n in $nums; do echo "- #$n $(git log --format=%s "origin/$main..origin/$dev" | grep -m1 -E "^(Merge|Resolve) #$n:" | sed "s/^[^:]*: *//")"; done',
+        '  echo; for n in $nums; do echo "Closes #$n"; done; echo; echo "<!-- claude-factory run=$FACTORY_RUN_ID release -->"; } > "{{run.dir}}/pr.md"',
+        'title="Release $day: $(for n in $nums; do printf \'#%s \' "$n"; done | sed \'s/ $//; s/ /, /g\')"',
+        'pr=$(gh pr list --repo "$FACTORY_VAR_GITHUB_REPO" --head "$dev" --base "$main" --state open --json number,headRefName,state \\',
+        '  | node -e \'let d="";process.stdin.on("data",(c)=>(d+=c)).on("end",()=>{const p=JSON.parse(d||"[]").find((x)=>x.headRefName===process.argv[1]&&x.state==="OPEN");process.stdout.write(p?String(p.number):"")})\' "$dev")',
+        'if [ -n "$pr" ]; then gh pr edit "$pr" --repo "$FACTORY_VAR_GITHUB_REPO" --title "$title" --body-file - < "{{run.dir}}/pr.md" >/dev/null',
+        'else pr=$(gh pr create --repo "$FACTORY_VAR_GITHUB_REPO" --base "$main" --head "$dev" --title "$title" --body-file - < "{{run.dir}}/pr.md" | tail -1); pr=${pr##*/}; fi',
+        '{ echo "🤖 **claude-factory daily release check** — $(date \'+%Y-%m-%d %H:%M\')"; echo; cat "{{run.dir}}/checks.md"; echo; echo "<!-- claude-factory run=$FACTORY_RUN_ID daily -->"; } \\',
+        '  | gh pr comment "$pr" --repo "$FACTORY_VAR_GITHUB_REPO" --body-file - >/dev/null',
+        'if printf \'%s\\n\' "$FACTORY_OUT_VERIFY" | grep -q "^CHECKS: no"; then gh pr ready "$pr" --repo "$FACTORY_VAR_GITHUB_REPO" --undo >/dev/null 2>&1 || true; echo "checks failed — PR #$pr is a draft"',
+        'else gh pr ready "$pr" --repo "$FACTORY_VAR_GITHUB_REPO" >/dev/null 2>&1 || true; echo "checks passed — PR #$pr ($title) is ready to merge"; fi',
+      ].join("\n"),
+    },
+  ],
+});
 
 // ── epic-questions: ask all owner decisions for a batch of issues up front ──
 write("epic-questions", {
@@ -944,12 +1289,13 @@ write("epic-questions", {
   workspace: "empty",
   defaults: { timeout_sec: 2400 },
   limits: { max_cost_usd: 10 },
-  vars: { github_repo: "owner/repo", issues: "", needs_info_label: "Factory_needs_info", forbidden_paths: "" },
+  vars: { github_repo: "owner/repo", issues: "", needs_info_label: "Factory_needs_info", forbidden_paths: "", develop_branch: "" },
   steps: [
     {
       ...clone,
-      description: "Clone, then check out the newest factory branch that is not in main yet",
-      run: clone.run + '\nb=$("$FACTORY_TOOLS/daily-branch" latest 2>/dev/null || echo NONE)\n' +
+      description: "Clone, then check out develop (gitflow) or the newest factory branch that is not in main yet",
+      run: clone.run + '\nif [ -n "$FACTORY_VAR_DEVELOP_BRANCH" ] && git rev-parse -q --verify "origin/$FACTORY_VAR_DEVELOP_BRANCH" >/dev/null; then git checkout -q --detach "origin/$FACTORY_VAR_DEVELOP_BRANCH" && echo "Code: $FACTORY_VAR_DEVELOP_BRANCH" && exit 0; fi' +
+        '\nb=$("$FACTORY_TOOLS/daily-branch" latest 2>/dev/null || echo NONE)\n' +
         'if [ "$b" != NONE ] && git checkout -q --detach "origin/$b"; then echo "Code: main plus unmerged work on $b"; else echo "Code: main"; fi',
     },
     {

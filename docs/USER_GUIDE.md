@@ -352,26 +352,28 @@ watcher). This is the watcher for the [one-label pipeline](#the-label-pipeline-o
 watchers:
   - id: webshop
     source: issues
-    flow: issue-deliver            # plan + risk gate + code in one run
+    flow: issue-gitflow            # feature branch per issue → merged into develop
     precheck_flow: epic-questions  # ask all open questions for new issues first
     github_repo: acme/webshop
     label: Factory_go
     exclude_labels: [wontfix]
     status_labels: {working: Factory_working, done: Factory_done, needs_info: Factory_needs_info, waiting: Factory_waiting, failed: Factory_ERROR}
     remove_on_done: [Factory_go]
-    one_at_a_time: true            # one issue at a time; they share the factory branch
+    max_per_tick: 2                # issues on different code areas are coded in parallel
     dependency_done_labels: [Factory_done]
     vars:
       test_cmd: ./gradlew test
       docs_required: docs/CHANGELOG.md
+      union_merge_files: docs/CHANGELOG.md   # merges keep both sides' entries
+      develop_branch: develop
       risk_threshold: "75"         # plans scoring above this wait for /approve
-  - id: webshop-report
+  - id: webshop-release
     source: schedule
-    flow: daily-pr                 # daily tests + build, commented on the factory PR
+    flow: release-daily            # daily tests + build on develop, PR develop → main
     github_repo: acme/webshop
     at: "17:00"
     timezone: Europe/Berlin
-    task: Daily report on the factory pull request
+    task: Daily release pull request develop → main
 ```
 
 | Option | What it does |
@@ -403,10 +405,10 @@ flowchart LR
     A -->|/approve| C
     A -->|/reject + what to change| W
     W -->|risk ≤ 75| C["Sonnet codes, tests,<br/>2 Codex reviews, docs"]
-    C -->|pushed| D["Factory_done<br/>in the factory pull request"]
+    C -->|"merged into develop<br/>(or the rolling PR)"| D["Factory_done"]
     C -->|3 failed fix rounds or an error| E["Factory_ERROR<br/>reason on the issue"]
     E -->|you remove the label| W
-    D --> M(["you merge the PR<br/>whenever you like → issues close"])
+    D --> M(["daily release PR develop → main:<br/>you merge it → issues close"])
 ```
 
 #### The only label you set
@@ -457,7 +459,7 @@ The threshold is the `auto_split_max_risk` variable (default 50).
 | `Factory_needs_info` | Questions for you — asked up front for the whole batch, or by the planner | Reply on the issue — or just **`/defaults`** to accept the recommendations. It continues by itself. |
 | `Factory_working` | Planning and coding are running (or paused for the usage limit) | Wait; follow it on the Runs page |
 | `Factory_waiting` | A risky plan waits for your decision | `/approve` or `/reject` + feedback on the issue |
-| `Factory_done` | Implemented, tested, reviewed and in the factory pull request | Nothing — merge the pull request when you like |
+| `Factory_done` | Implemented, tested, reviewed and merged into `develop` (gitflow) or in the rolling pull request | Nothing — merge the daily release pull request (or the rolling one) when you like |
 | `Factory_ERROR` | It failed; the reason and the failing output are commented on the issue | Fix the cause if needed, then remove the label to retry |
 
 Issues with an excluded label (e.g. `geni`) are never picked up, whatever other labels they have.
@@ -472,7 +474,7 @@ Issues with an excluded label (e.g. `geni`) are never picked up, whatever other 
 | Approve / reject a risky plan | `/approve` (+ notes), or `/reject` + what to change |
 | Retry after an error | Remove `Factory_ERROR` |
 | Stop the factory from touching an issue | Remove `Factory_go`, or add an excluded label |
-| Get the work into `main` | Merge the factory pull request — any time |
+| Get the work into `main` | Merge the daily release pull request `develop` → `main` (gitflow), or the rolling factory pull request |
 
 #### Why is nothing happening?
 
@@ -494,7 +496,39 @@ watcher's card on the **Watchers** page). The usual reasons:
 - **The factory isn't running.** Watchers only run while `factory ui` / `factory serve` runs.
 - **It has an excluded label** such as `geni`.
 
-#### Branches and the factory pull request
+#### Branches: gitflow (recommended) or one rolling pull request
+
+The pipeline can deliver in two ways; the watcher's flow decides which.
+
+**Gitflow — flow `issue-gitflow`, with `release-daily` once a day**
+
+```mermaid
+flowchart LR
+    M[main] -->|"created from main (once)"| D[develop]
+    D --> F1["feature/86-…"] -->|"tests + reviews pass →<br/>factory merges"| D
+    D --> F2["feature/88-…"] -->|merged| D
+    D -->|"17:00: release PR, you merge"| M
+```
+
+- Every issue gets its own branch, `feature/<issue>-<title>`, from `develop`. When its tests and
+  both Codex reviews pass, the **factory merges it into `develop` itself**, runs the tests on the
+  merged `develop`, and pushes. If `develop` moved meanwhile, it merges again; conflicts are
+  resolved by an agent (keeping both changes), then tested again. The changelog never conflicts:
+  both sides' entries are kept (`union_merge_files`).
+- **Several issues are coded at the same time** when they change different parts of the code:
+  each plan names its code areas (`AREAS:`), and a run waits only while another run holds an
+  overlapping area. Issues in a **Depends on** chain are still built one after the other.
+- Every day at **17:00** (`release-daily`) the factory runs the full tests and build on `develop`
+  and opens (or updates) **one pull request `develop` → `main`** that lists and closes the day's
+  issues — a draft while the checks fail. **You merge it once a day.**
+- `develop` is created from `main` the first time, and kept up to date with `main` (for example
+  after a hotfix) before new work starts. `develop` must not be in *Protected branches*
+  (Settings), since the factory pushes to it; `main` stays protected.
+- **Size limit:** a plan over 15 files or about 800 lines of production code (tests and docs
+  don't count) is split into smaller issues instead — automatically when the split risk is low
+  (`max_files`, `max_code_lines`).
+
+**One rolling pull request — flow `issue-deliver`, with `daily-pr`**
 
 - All work goes to one branch, `factory/daily-YYYY-MM-DD` (named after the day it started); every
   issue is one commit `Resolve #N: title`. Nothing is ever pushed to `main`.

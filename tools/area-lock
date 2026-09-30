@@ -1,0 +1,130 @@
+#!/usr/bin/env node
+// Locks parts of a repository for one run, so runs that change different areas can code in
+// parallel and runs that would touch the same area wait for each other.
+//
+//   area-lock acquire <run-id> <run-dir> <area>... [--wait-sec 7200]
+//       waits until no other running run holds an overlapping area, then holds them.
+//       Prints "LOCKED: …" (exit 0) or "TIMEOUT: …" (exit 1).
+//   area-lock release <run-id>        drops everything the run holds
+//   area-lock list                    shows the current locks
+//
+// Areas are paths ("platform/src/main/java/…/update", "desktop-compose/…/Main.kt"); two areas
+// overlap when one is a prefix of the other. "*" overlaps every path. Areas starting with "@"
+// (e.g. "@develop") are names that only overlap themselves.
+// A lock whose run is no longer running (its run.json says so, or is gone) is ignored and removed.
+// Env: FACTORY_VAR_GITHUB_REPO (locks are per repository), FACTORY_LOCK_DIR (default
+// $FACTORY_HOME/locks or ~/.claude-factory/locks).
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+
+const repo = (process.env.FACTORY_VAR_GITHUB_REPO || "local").replace(/[^\w.-]+/g, "_");
+const root = process.env.FACTORY_LOCK_DIR || join(process.env.FACTORY_HOME || join(homedir(), ".claude-factory"), "locks");
+const dir = join(root, repo);
+mkdirSync(dir, { recursive: true });
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function fail(msg) {
+  console.error(`area-lock: ${msg}`);
+  process.exit(2);
+}
+
+const norm = (a) => a.trim().replace(/^\.\//, "").replace(/\/+$/, "");
+export function overlaps(a, b) {
+  if (a.startsWith("@") || b.startsWith("@")) return a === b;
+  if (a === "*" || b === "*") return true;
+  return a === b || a.startsWith(b + "/") || b.startsWith(a + "/");
+}
+
+function alive(lock) {
+  const f = join(lock.runDir, "run.json");
+  if (!existsSync(f)) return false;
+  try {
+    return JSON.parse(readFileSync(f, "utf8")).status === "running";
+  } catch {
+    return true; // being written right now
+  }
+}
+
+function locks() {
+  const out = [];
+  for (const f of readdirSync(dir)) {
+    if (!f.endsWith(".json")) continue;
+    try {
+      const l = JSON.parse(readFileSync(join(dir, f), "utf8"));
+      if (alive(l)) out.push({ ...l, file: f });
+      else rmSync(join(dir, f), { force: true });
+    } catch {
+      // half-written; the mutex protects writers, so skip it this round
+    }
+  }
+  return out;
+}
+
+/** A tiny cross-process mutex (mkdir is atomic); broken if its holder died more than a minute ago. */
+async function withMutex(fn) {
+  const m = join(dir, ".mutex");
+  for (let i = 0; ; i++) {
+    try {
+      mkdirSync(m);
+      break;
+    } catch {
+      try {
+        if (Date.now() - statSync(m).mtimeMs > 60_000) rmSync(m, { recursive: true, force: true });
+      } catch {}
+      if (i > 600) fail("could not get the lock mutex");
+      await sleep(100);
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    rmSync(m, { recursive: true, force: true });
+  }
+}
+
+const [cmd, ...rest] = process.argv.slice(2);
+if (cmd === "acquire") {
+  const wi = rest.indexOf("--wait-sec");
+  const waitSec = wi >= 0 ? Number(rest[wi + 1]) : 7200;
+  const args = wi >= 0 ? rest.filter((_, i) => i !== wi && i !== wi + 1) : rest;
+  const [runId, runDir, ...raw] = args;
+  if (!runId || !runDir) fail("usage: area-lock acquire <run-id> <run-dir> <area>...");
+  const areas = [...new Set((raw.length ? raw : ["*"]).flatMap((a) => a.split(",")).map(norm).filter(Boolean))];
+  const deadline = Date.now() + waitSec * 1000;
+  let told = "";
+  for (;;) {
+    const blocker = await withMutex(() => {
+      const others = locks().filter((l) => l.runId !== runId);
+      const hit = others.find((l) => l.areas.some((x) => areas.some((a) => overlaps(a, x))));
+      if (hit) return hit;
+      const name = `${runId.replace(/[^\w.-]/g, "_")}__${Date.now()}.json`;
+      writeFileSync(join(dir, name), JSON.stringify({ runId, runDir, areas, at: new Date().toISOString() }));
+      return undefined;
+    });
+    if (!blocker) {
+      console.log(`LOCKED: ${areas.join(", ")}`);
+      process.exit(0);
+    }
+    const msg = `waiting for run ${blocker.runId} (${blocker.areas.join(", ")})`;
+    if (msg !== told) console.log(msg);
+    told = msg;
+    if (Date.now() > deadline) {
+      console.log(`TIMEOUT: ${msg}`);
+      process.exit(1);
+    }
+    await sleep(Number(process.env.AREA_LOCK_POLL_MS || 15_000));
+  }
+} else if (cmd === "release") {
+  const [runId] = rest;
+  if (!runId) fail("usage: area-lock release <run-id>");
+  const prefix = `${runId.replace(/[^\w.-]/g, "_")}__`;
+  await withMutex(() => {
+    for (const f of readdirSync(dir)) if (f.startsWith(prefix)) rmSync(join(dir, f), { force: true });
+  });
+  console.log("released");
+} else if (cmd === "list") {
+  for (const l of locks()) console.log(`${l.runId}  ${l.areas.join(", ")}  since ${l.at}`);
+} else {
+  fail("usage: area-lock acquire <run-id> <run-dir> <area>... [--wait-sec N] | release <run-id> | list");
+}

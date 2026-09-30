@@ -396,7 +396,8 @@ export class Watcher {
           await setLabels(this.repo, n, labelFor(run, this.L), this.allStatus);
           this.act(`#${n} label → ${labelFor(run, this.L)}`);
         }
-      } else if (run && (status === this.L.waiting || status === this.L.needsInfo) && !["waiting", "stopped", "running"].includes(run.status)) {
+      } else if (run && (((status === this.L.waiting || status === this.L.needsInfo) && !["waiting", "stopped", "running"].includes(run.status)) ||
+        (status === this.L.failed && run.status === "succeeded"))) {
         // Reconcile: the run went on (e.g. approved in the UI, or the server restarted meanwhile)
         // but the label still says it waits for someone.
         const label = labelFor(run, this.L);
