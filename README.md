@@ -1,6 +1,6 @@
 # Spaghetti Code Foundry
 
-Formerly **claude-factory**. The command is now `scf` (`factory` still works); the data folders (`~/.claude-factory`, `<repo>/.claude-factory`), the labels (`claude-factory`, `factory:*`), `factory/…` branches and this repository keep the old name.
+Formerly **claude-factory**. The command is now `scf` (`factory` still works), the repository is [MeloMar-IT/spaghetti-code-foundry](https://github.com/MeloMar-IT/spaghetti-code-foundry) and the data folder is `~/.spaghetti-code-foundry`. The `<repo>/.claude-factory` folder, the labels (`claude-factory`, `factory:*`) and `factory/…` branches keep the old name.
 
 An AI coding factory that runs on your own machine. You describe work as **flows** — YAML
 pipelines of agent steps (Claude Code or OpenAI's Codex CLI), shell steps, approvals and
@@ -38,8 +38,8 @@ a label, a red CI build, or a schedule.
 ## Install
 
 ```bash
-git clone https://github.com/MeloMar-IT/claude-factory.git
-cd claude-factory
+git clone https://github.com/MeloMar-IT/spaghetti-code-foundry.git
+cd spaghetti-code-foundry
 npm install
 npm run build
 npm link            # gives the scf command (factory still works)
@@ -48,6 +48,17 @@ npm link            # gives the scf command (factory still works)
 ```
 
 If you linked the old name before, run `npm rm -g claude-factory` first.
+
+**Already have a clone?** The repository was renamed from `MeloMar-IT/claude-factory`. GitHub
+redirects the old address, but point your clone at the new one:
+
+```bash
+git remote set-url origin https://github.com/MeloMar-IT/spaghetti-code-foundry.git
+# SSH: git remote set-url origin git@github.com:MeloMar-IT/spaghetti-code-foundry.git
+git remote -v    # check
+```
+
+The folder of your clone can keep its name.
 
 ## Quick start
 

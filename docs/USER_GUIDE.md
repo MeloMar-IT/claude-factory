@@ -4,7 +4,7 @@ Spaghetti Code Foundry runs **flows**: pipelines of steps that code, test, revie
 changes with AI coding agents on your own machine. This guide walks through the web UI, writing
 your own flows, automating work from GitHub, choosing models, and keeping it all safe.
 
-Formerly **claude-factory**. The command is now `scf` (`factory` still works); the data folders (`~/.claude-factory`, `<repo>/.claude-factory`), the labels (`claude-factory`, `factory:*`), `factory/…` branches and the repository keep the old name.
+Formerly **claude-factory**. The command is now `scf` (`factory` still works), the repository is `MeloMar-IT/spaghetti-code-foundry` and the data folder is `~/.spaghetti-code-foundry` (see [section 11](#11-upgrading-from-claude-factory)). The `<repo>/.claude-factory` folder, the labels (`claude-factory`, `factory:*`) and `factory/…` branches keep the old name.
 
 - [1. Start](#1-start)
 - [2. Run a flow](#2-run-a-flow)
@@ -785,3 +785,8 @@ the folder, set `SCF_HOME` to the folder you want, or delete the note file to co
 
 **The command.** If `factory` still points at the old install, run
 `npm unlink -g claude-factory && npm link` in the repository.
+
+**The repository.** It is now `MeloMar-IT/spaghetti-code-foundry`. GitHub redirects the old
+address. In an existing clone, run
+`git remote set-url origin https://github.com/MeloMar-IT/spaghetti-code-foundry.git`.
+The folder of your clone can keep its name.
