@@ -316,6 +316,32 @@ describe("deliver pipeline", () => {
 });
 
 describe("restart on a new build", () => {
+  it("stops starting new work while a new version waits for active runs", async () => {
+    const { restartOnNewBuild } = await import("../src/supervise.js");
+    const dir = mkdtempSync(join(tmpdir(), "factory-dist-"));
+    writeFileSync(join(dir, "a.js"), "");
+    let busy = true;
+    let drained = 0;
+    const logs: string[] = [];
+    const exit = process.exit;
+    let exited: number | undefined;
+    process.exit = ((c?: number) => { exited = c; }) as typeof process.exit;
+    const stop = restartOnNewBuild({ distDir: dir, idle: () => !busy, drain: () => drained++, beforeExit: () => {}, log: (m) => logs.push(m), everyMs: 30 });
+    try {
+      utimesSync(join(dir, "a.js"), new Date(), new Date(Date.now() + 5000));
+      await new Promise((r) => setTimeout(r, 200));
+      expect(drained).toBe(1); // once, not every check
+      expect(exited).toBeUndefined();
+      busy = false;
+      await new Promise((r) => setTimeout(r, 120));
+      expect(exited).toBe(RESTART_CODE);
+      expect(logs[0]).toContain("no new runs start");
+    } finally {
+      stop();
+      process.exit = exit;
+    }
+  });
+
   it("notices a newer build", () => {
     const dir = mkdtempSync(join(tmpdir(), "factory-dist-"));
     writeFileSync(join(dir, "a.js"), "");
