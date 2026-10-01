@@ -32,7 +32,7 @@ export class WatcherManager {
         scheduler: this.o.scheduler,
         runsDir: this.o.runsDir,
         repo: this.o.repo,
-        dailyBudget: () => this.o.config().daily_budget_usd,
+        dailyBudget: () => (this.o.config().cost_limits ? this.o.config().daily_budget_usd : undefined),
         log: this.o.log,
       });
       this.running.set(id, { watcher, key: JSON.stringify(cfg) });

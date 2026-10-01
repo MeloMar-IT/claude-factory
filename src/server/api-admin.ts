@@ -17,7 +17,8 @@ export const adminRoutes: Route = async (ctx, req, res, seg, method) => {
       runsDir: opts.runsDir,
       configPath: CONFIG_PATH(),
       spentToday: spentToday(opts.runsDir),
-      dailyBudget: config.daily_budget_usd,
+      dailyBudget: config.cost_limits ? config.daily_budget_usd : undefined,
+      costLimits: config.cost_limits,
     }), true;
   }
 

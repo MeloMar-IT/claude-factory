@@ -56,7 +56,8 @@ async function runOn(t: Target, step: ClaudeStep, scope: Scope, engine: Engine, 
     return { ok: r.ok, output: r.output, error: r.error, sessionId: r.sessionId, costUsd, agent: t.label, tokens: { input: r.inputTokens, output: r.outputTokens } };
   }
 
-  const caps = t.free ? [] : [step.max_budget_usd ?? d.max_budget_usd, engine.remainingBudget()].filter((n): n is number => n !== undefined);
+  // No --max-budget-usd at all when cost limits are off (fixed-price subscriptions); costs are still recorded.
+  const caps = t.free || !engine.config.cost_limits ? [] : [step.max_budget_usd ?? d.max_budget_usd, engine.remainingBudget()].filter((n): n is number => n !== undefined);
   const r = await runClaude({
     ...common,
     env: { ...stepEnv(scope, engine), ...agentEnv(scope.ctx.vars.agent_env), ...claudeProviderEnv(t) },
