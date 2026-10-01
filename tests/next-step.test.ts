@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { WatcherSchema } from "../src/config.js";
 import type { RunSummary } from "../src/engine/state.js";
-import { countQuestions, nextStep, releaseAtFor, runNextStep, trackingWatcher, type NextKind, type NextStep } from "../src/next-step.js";
+import { COMMENT_KINDS, commentText, countQuestions, nextStep, nextStepEnv, releaseAtFor, runNextStep, trackingWatcher, type NextKind, type NextStep } from "../src/next-step.js";
 
 const run = (over: Partial<RunSummary> = {}) =>
   ({
@@ -12,6 +12,52 @@ const run = (over: Partial<RunSummary> = {}) =>
 
 const watched = { watched: true, failedLabel: "factory:failed" };
 const ISSUE = "https://github.com/acme/app/issues/7";
+
+describe("comment sentences", () => {
+  const base = { repo: "acme/app", issue: 7, title: "T", runId: "r1" };
+  const data = { watched: true, issueUrl: ISSUE, failedLabel: "factory:failed" };
+
+  it("has exactly the five FACTORY_NEXT_ variables, equal to the record's text", () => {
+    const env = nextStepEnv();
+    expect(Object.keys(env).sort()).toEqual(
+      ["FACTORY_NEXT_APPROVAL", "FACTORY_NEXT_APPROVE_PLAN", "FACTORY_NEXT_APPROVE_SPLIT", "FACTORY_NEXT_PLANNER_QUESTIONS", "FACTORY_NEXT_QUESTIONS"],
+    );
+    for (const k of COMMENT_KINDS) {
+      const v = env[`FACTORY_NEXT_${k.toUpperCase()}`]!;
+      expect(v).toBe(nextStep(k, base, data).text);
+      expect(v).toMatch(/^[^\n]*\.$/);
+      expect(v).not.toMatch(/[\\`$"_*]/);
+    }
+  });
+
+  it("names the replies", () => {
+    expect(commentText("questions")).toContain("/defaults");
+    for (const k of ["approve_plan", "approve_split", "approval"] as const) {
+      expect(commentText(k)).toContain("/approve");
+      expect(commentText(k)).toContain("/reject");
+    }
+    expect(commentText("approval")).not.toContain("run page");
+  });
+
+  it("matches the real run record for a waiting plan, a split and questions", () => {
+    const waiting = (step: string) => run({ status: "waiting", state: { next: step, steps: {}, visits: {} }, waiting: { stepId: step, message: "m" } } as Partial<RunSummary>);
+    expect(runNextStep(waiting("approve_plan"), { watched: true }).text).toBe(commentText("approve_plan"));
+    expect(runNextStep(waiting("approve_split"), { watched: true }).text).toBe(commentText("approve_split"));
+    for (const step of ["send_back", "ask_for_info"]) {
+      const r = run({ status: "stopped", reason: `stopped at step "${step}" — needs attention` });
+      expect(runNextStep(r, { watched: true }).text).toBe(commentText("planner_questions"));
+    }
+  });
+
+  it("differs from the record only by the count and the message", () => {
+    for (const k of ["questions", "planner_questions"] as const) {
+      expect(nextStep(k, base, { ...data, questions: 3 }).text).toBe(commentText(k).replace("the questions", "3 questions"));
+    }
+    expect(nextStep("approval", base, { ...data, message: "Push the changes for acme/app#7?" }).text).toBe(
+      commentText("approval").replace("It waits for your approval", "It waits for your approval: Push the changes for acme/app#7"),
+    );
+  });
+});
 
 describe("next-step records, one per kind", () => {
   const base = { repo: "acme/app", issue: 7, title: "T", runId: "r1" };

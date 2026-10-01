@@ -10,7 +10,7 @@ import { dockerCommand } from "../src/engine/guards.js";
 import { liveLogFile, saveRun } from "../src/engine/state.js";
 import { mirrorEnvPrefixes, withScfAliases } from "../src/engine/template.js";
 import { notifyRun } from "../src/notify.js";
-import { runNextStep } from "../src/next-step.js";
+import { COMMENT_KINDS, commentText, runNextStep } from "../src/next-step.js";
 import { parseFlow } from "../src/flow/load.js";
 
 const claudeBin = resolve("tests/fixtures/fake-claude.mjs");
@@ -31,6 +31,41 @@ const start = (yaml: string, opts: { vars?: Record<string, string>; config?: Con
   runFlow(parseFlow(yaml), { task: opts.task ?? "t", repo, runsDir, claudeBin, vars: opts.vars, config: opts.config ?? baseConfig() });
 const resume = (runId: string, extra: Partial<Parameters<typeof resumeRun>[0]> = {}) =>
   resumeRun({ runId, runsDir, claudeBin, config: baseConfig(), ...extra });
+
+describe("next-step sentences in the step environment", () => {
+  const names = COMMENT_KINDS.map((k) => k.toUpperCase());
+  const print = (prefix: string) => names.map((n) => `echo "$${prefix}_NEXT_${n}"`).join("; ");
+
+  it("gives shell steps FACTORY_NEXT_… and SCF_NEXT_… with the module's sentences", async () => {
+    const s = await start(`
+name: t
+workspace: inplace
+steps:
+  - {id: f, type: shell, run: '${print("FACTORY")}'}
+  - {id: s, type: shell, run: '${print("SCF")}'}
+`);
+    expect(s.status).toBe("succeeded");
+    const want = COMMENT_KINDS.map(commentText);
+    expect(s.history[0]!.output.trim().split("\n")).toEqual(want);
+    expect(s.history[1]!.output.trim().split("\n")).toEqual(want);
+  });
+
+  it("resumes a run whose stored flow has the old hard-coded text", async () => {
+    const s = await start(`
+name: t
+workspace: inplace
+steps:
+  - {id: ask, type: shell, run: 'echo "Reply **/approve** to continue or **/reject** to stop (optionally followed by a note)."'}
+  - {id: gate, type: approval, message: "Go?"}
+  - {id: after, type: shell, run: 'echo "$FACTORY_NEXT_APPROVAL"'}
+`);
+    expect(s.status).toBe("waiting");
+    const r = await resume(s.runId, { decision: { approved: true, by: "marcel" } });
+    expect(r.status).toBe("succeeded");
+    expect(r.history.find((h) => h.id === "ask")!.output).toContain("Reply **/approve** to continue");
+    expect(r.history.find((h) => h.id === "after")!.output.trim()).toBe(commentText("approval"));
+  });
+});
 
 describe("approvals", () => {
   const FLOW = `

@@ -5,10 +5,10 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { ConfigSchema, WatcherSchema } from "../src/config.js";
 import { runFlow } from "../src/engine/runner.js";
 import { loadFlow } from "../src/flow/load.js";
-import { nextStep } from "../src/next-step.js";
+import { commentText, nextStep } from "../src/next-step.js";
 import { Scheduler } from "../src/queue/scheduler.js";
 import { minutesNow, Watcher } from "../src/queue/watcher.js";
-import { claudeBin, fakeGithub } from "./helpers/fake-github.js";
+import { claudeBin, closing, fakeGithub } from "./helpers/fake-github.js";
 
 // The label-driven pipeline: issue-plan → issue-code-daily → daily-pr, as configured for a real repo.
 const REPO = "acme/app";
@@ -135,6 +135,8 @@ describe("label-driven issue pipeline", () => {
     await settle();
     expect(runOf("issue-plan", "1")?.status).toBe("stopped");
     expect(gh.ghLog()).toContain("thinks this issue is not a coding task");
+    const sent = gh.comments().find((c) => c.body.includes("thinks this issue is not a coding task"))!;
+    expect(closing(sent.body)).toEqual([`_${commentText("planner_questions")}_`, expect.stringMatching(/^<!-- claude-factory run=\S+ [\w-]+ -->$|^<!-- claude-factory run=\S+ -->$/)]);
     expect(gh.ghLog()).toMatch(/issue edit 1 .*--add-label Factory_needs_info/);
   });
 

@@ -6,12 +6,14 @@
 //   ### #76
 //   NO_QUESTIONS
 // Env: FACTORY_VAR_GITHUB_REPO, FACTORY_VAR_ISSUES (the issues that were checked),
-//      FACTORY_VAR_NEEDS_INFO_LABEL (label for issues with questions), FACTORY_RUN_ID.
+//      FACTORY_VAR_NEEDS_INFO_LABEL (label for issues with questions), FACTORY_RUN_ID,
+//      FACTORY_NEXT_QUESTIONS (the closing sentence of the comment).
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
 const repo = process.env.FACTORY_VAR_GITHUB_REPO;
 if (!repo || !/^[\w.-]+\/[\w.-]+$/.test(repo)) fail("set var github_repo to owner/repo");
+const next = process.env.FACTORY_NEXT_QUESTIONS;
 const label = process.env.FACTORY_VAR_NEEDS_INFO_LABEL || "factory:needs-info";
 const checked = new Set((process.env.FACTORY_VAR_ISSUES ?? "").split(/[\s,]+/).filter((x) => /^\d+$/.test(x)));
 const gh = (args, input) => execFileSync(process.env.FACTORY_GH_BIN || "gh", args, { encoding: "utf8", input, stdio: [input ? "pipe" : "ignore", "pipe", "pipe"] });
@@ -46,8 +48,7 @@ for (const [n, lines] of sections) {
     "",
     body,
     "",
-    "_Reply with your answers — or just **/defaults** to go with the recommendations — and it continues._",
-    "",
+    ...(next ? [`_${next}_`, ""] : []),
     `<!-- claude-factory run=${process.env.FACTORY_RUN_ID ?? ""} questions -->`,
   ].join("\n");
   gh(["issue", "comment", n, "--repo", repo, "--body-file", "-"], comment);

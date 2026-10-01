@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
+import { nextStepEnv } from "../next-step.js";
 import { loadConfig, loadRepoVars, type Config } from "../config.js";
 import { FACTORY_HOME } from "../flow/load.js";
 import { claimRunStart } from "../home.js";
@@ -162,6 +163,7 @@ async function drive(
       FACTORY_LEARNINGS_FILE: lf,
       FACTORY_TOOLS: TOOLS_DIR,
       FACTORY_BASE_SHA: summary.baseSha ?? "",
+      ...nextStepEnv(),
       ...protectedBranchEnv(config.protected_branches, config.secret_scan),
       ...(await identityEnv(config)),
     };
