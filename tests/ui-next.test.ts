@@ -18,6 +18,15 @@ const dep = () => nextStep("dependency", { repo: "o/r", issue: 7, title: "Seven"
 const q = () => nextStep("questions", { repo: "o/r", issue: 5, title: "Five" }, { watched: true, questions: 2 });
 const watcher = (id: string, records: NextStep[], enabled = true) => ({ id, enabled, status: { id, lastActions: [], holds: records.map((next) => ({ reason: next.text, next })) } });
 
+describe("lastOkText", () => {
+  it("says when the last successful check was, or that there is none", async () => {
+    const { lastOkText } = (await import("../ui/admin.js" as string)) as any;
+    expect(lastOkText({ lastOk: new Date().toISOString() })).toMatch(/^ · last successful check /);
+    expect(lastOkText({})).toBe(" · no successful check yet");
+    expect(lastOkText(undefined)).toBe("");
+  });
+});
+
 describe("ui/next.js helpers", () => {
   it("sorts You first and keeps the input", () => {
     const input = [found(), you(), wrong(), you()];

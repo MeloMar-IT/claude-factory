@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import type { Config } from "../config.js";
 import type { ApprovalDecision } from "../engine/execute.js";
-import { newRunId, resumeRun, runFlow } from "../engine/runner.js";
+import { cancelWaitingRun, newRunId, resumeRun, runFlow } from "../engine/runner.js";
 import { listRunIds, loadRun, readLiveLog, type RunSummary } from "../engine/state.js";
 import type { Flow } from "../flow/schema.js";
 
@@ -105,13 +105,23 @@ export class Scheduler {
   cancel(runId: string): boolean {
     const i = this.pending.findIndex((p) => p.runId === runId);
     if (i >= 0) {
-      this.pending.splice(i, 1);
+      const [job] = this.pending.splice(i, 1);
       this.persist();
+      if (job?.job.kind === "resume") this.cancelWaiting(runId); // a queued approval: the run no longer waits
       return true;
     }
     const a = this.active.get(runId);
-    if (!a) return false;
+    if (!a) return this.cancelWaiting(runId);
     a.controller.abort();
+    return true;
+  }
+
+  /** Cancel a run that waits for approval (no process runs for it). */
+  private cancelWaiting(runId: string): boolean {
+    const summary = cancelWaitingRun(this.o.runsDir, runId, this.o.config());
+    if (!summary) return false;
+    // Viewers that watched the run while it was active are kept in `recent`; later ones are pending listeners.
+    for (const fn of [...(this.recent.get(runId)?.listeners ?? []), ...(this.pendingListeners.get(runId) ?? [])]) fn({ type: "update", summary });
     return true;
   }
 

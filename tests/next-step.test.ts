@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { WatcherSchema } from "../src/config.js";
 import type { RunSummary } from "../src/engine/state.js";
-import { COMMENT_KINDS, commentText, countQuestions, nextStep, nextStepEnv, releaseAtFor, runNextStep, trackingWatcher, type NextKind, type NextStep } from "../src/next-step.js";
+import { COMMENT_KINDS, commentText, countQuestions, nextStep, nextStepEnv, releaseAtFor, runClosedIssue, runNextStep, trackingWatcher, type NextKind, type NextStep } from "../src/next-step.js";
 
 const run = (over: Partial<RunSummary> = {}) =>
   ({
@@ -59,6 +59,26 @@ describe("comment sentences", () => {
   });
 });
 
+describe("runClosedIssue", () => {
+  const step = (id: string, ok = true, output = "") => ({ id, ok, output }) as never;
+  const flowDef = (cmd: string) => ({ steps: [{ id: "report", type: "shell", run: cmd }] }) as never;
+  it("is true when the run closed the issue itself", () => {
+    expect(runClosedIssue(run({ history: [step("report", true, "x\nclosed #12")] }))).toBe(true);
+    expect(runClosedIssue(run({ history: [step("build/merge")] }))).toBe(true);
+    expect(runClosedIssue(run({ history: [step("create_split")] }))).toBe(true);
+    expect(runClosedIssue(run({ state: { next: "create_split", steps: {}, visits: {} } }))).toBe(true);
+    expect(runClosedIssue(run({ flowDef: flowDef("gh issue close 12"), state: { next: "report", steps: {}, visits: {} } }))).toBe(true);
+  });
+  it("is false otherwise", () => {
+    expect(runClosedIssue(run({ history: [step("report", true, "commented")] }))).toBe(false);
+    expect(runClosedIssue(run({ history: [step("report", false, "closed #12")] }))).toBe(false);
+    expect(runClosedIssue(run({ flowDef: flowDef("gh issue comment 12"), state: { next: "report", steps: {}, visits: {} } }))).toBe(false);
+    expect(runClosedIssue(run({ history: [step("plan")] }))).toBe(false);
+    expect(runClosedIssue(undefined)).toBe(false);
+    expect(runClosedIssue(run())).toBe(false);
+  });
+});
+
 describe("next-step records, one per kind", () => {
   const base = { repo: "acme/app", issue: 7, title: "T", runId: "r1" };
   const data = { watched: true, issueUrl: ISSUE, failedLabel: "factory:failed" };
@@ -77,6 +97,8 @@ describe("next-step records, one per kind", () => {
     ["failed", data, "Something is wrong", "Remove the `factory:failed` label to start over, or resume the run on its page to continue at the failed step", ISSUE],
     ["restart", {}, "Foundry", "Nothing — it continues by itself", "#/watchers"],
     ["watcher_error", { reason: "gh failed" }, "Something is wrong", "Check the watcher on the Watchers page", "#/watchers"],
+    ["closed_elsewhere", {}, "You", "Cancel the run if the work is no longer wanted", "#/runs/r1"],
+    ["watcher_stale", { lastCheck: "2026-10-01T11:20:00Z", timeZone: "UTC" }, "Something is wrong", "Press Check now on the Watchers page", "#/watchers"],
     ["running", data, "Foundry", "Nothing — it continues by itself", ISSUE],
     ["queued", {}, "Foundry", "Nothing — it continues by itself", "#/runs/r1"],
     ["checking", data, "Foundry", "Nothing — it continues by itself", ISSUE],
@@ -98,7 +120,14 @@ describe("next-step records, one per kind", () => {
   });
 
   it("has a kind in the table for every kind", () => {
-    expect(new Set(cases.map((c) => c[0])).size).toBe(23);
+    expect(new Set(cases.map((c) => c[0])).size).toBe(25);
+  });
+
+  it("says why a closed issue and a silent watcher need attention", () => {
+    expect(nextStep("closed_elsewhere", base, { ...data }).text).toBe("#7 was closed on GitHub but its run is still working — cancel the run if the work is no longer wanted.");
+    expect(nextStep("closed_elsewhere", base, { ...data, runWaits: true }).why).toBe("#7 was closed on GitHub but its run still waits for approval");
+    expect(nextStep("watcher_stale", base, { lastCheck: "2026-10-01T11:20:00Z", timeZone: "UTC" }).text)
+      .toBe("The watcher for acme/app has not checked since 11:20 — press Check now on the Watchers page.");
   });
 
   it("is one sentence for every kind, even with hard input", () => {

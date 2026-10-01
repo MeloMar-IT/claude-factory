@@ -117,6 +117,9 @@ async function editWatcher(existing, flows) {
   });
 }
 
+/** " · last successful check 5m ago", or a short text when there is none yet. */
+export const lastOkText = (st) => (!st ? "" : st.lastOk ? ` · last successful check ${timeAgo(st.lastOk)}` : " · no successful check yet");
+
 export async function renderWatchers(main) {
   const [watchers, flows] = await Promise.all([api.watchers(), api.flows()]);
   const reload = () => renderWatchers(main);
@@ -146,7 +149,7 @@ export async function renderWatchers(main) {
           w.source === "schedule" ? (w.at ? `checks every ${w.every}` : `max 1 run per ${w.every}`) : `every ${w.every} · max ${w.max_per_tick} per check`,
           w.exclude_labels?.length ? ` · skips ${w.exclude_labels.join(", ")}` : "",
           w.pause_while_pr_open ? ` · pauses while a ${w.pause_while_pr_open}* PR is open` : "",
-          st?.lastTick ? ` · last check ${timeAgo(st.lastTick)}` : "",
+          w.enabled ? lastOkText(st) : "",
           st?.nextTick ? ` · next ${new Date(st.nextTick).toLocaleTimeString()}` : ""),
         w.enabled && watcherNext(w).length ? h("div", {}, h("div", { class: "muted", style: { fontSize: "12.5px", marginTop: "6px" } }, "What happens next:"), nextList(watcherNext(w))) : null,
         st?.lastError ? h("details", {}, h("summary", {}, "Error details"), h("pre", { class: "mono" }, st.lastError)) : null,

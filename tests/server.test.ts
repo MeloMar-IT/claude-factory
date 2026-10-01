@@ -248,6 +248,20 @@ steps:
     }
   });
 
+  it("a silent watcher shows a stale record, and only the error when it has one", async () => {
+    const { watcherProblem } = await import("../src/server/next.js");
+    const w = { source: "issues", flow: "f", label: "l", every: "5m", max_per_tick: 1, enabled: true, vars: {}, id: "a", github_repo: "acme/app" } as never;
+    const now = Date.parse("2026-10-01T12:00:00Z");
+    const at = (ms: number) => new Date(now - ms).toISOString();
+    const every = 5 * 60_000;
+    expect(watcherProblem(w, { id: "a", lastActions: [], lastTick: at(3 * every) }, now)).toBeUndefined();
+    expect(watcherProblem(w, { id: "a", lastActions: [], lastTick: at(3 * every + 1) }, now)).toMatchObject({ kind: "watcher_stale", where: { url: "#/watchers" } });
+    expect(watcherProblem(w, { id: "a", lastActions: [], startedAt: at(4 * every) }, now)?.kind).toBe("watcher_stale");
+    expect(watcherProblem(w, { id: "a", lastActions: [], lastTick: at(9 * every), lastError: "x" }, now)?.kind).toBe("watcher_error");
+    expect(watcherProblem({ ...(w as object), enabled: false } as never, { id: "a", lastActions: [], lastTick: at(9 * every) }, now)).toBeUndefined();
+    expect(watcherProblem({ ...(w as object), every: "soon" } as never, { id: "a", lastActions: [] }, now)?.why).toMatch(/invalid interval/);
+  });
+
   it("the UI shows the record and has no reason wording of its own", async () => {
     const text = async (p: string) => {
       const r = await fetch(base + p);

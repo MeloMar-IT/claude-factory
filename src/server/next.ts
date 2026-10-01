@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { stepLogFile } from "../engine/execute.js";
 import type { RunSummary } from "../engine/state.js";
 import { nextStep, releaseAtFor, runNextStep, trackingWatcher, type NextStep } from "../next-step.js";
-import { labelNames, type WatcherStatus } from "../queue/watcher.js";
+import { labelNames, parseInterval, type WatcherStatus } from "../queue/watcher.js";
 import type { WatcherConfig } from "../config.js";
 import { supersededRuns } from "../stats.js";
 import { send } from "./http.js";
@@ -23,6 +23,11 @@ export function areaWait(run: RunSummary): { runId: string; areas: string } | un
   } catch {
     return undefined;
   }
+}
+
+/** The watcher's "closed on GitHub, run still busy" record for a run. */
+function closedHold(tracked: { status: WatcherStatus }[], runId: string): NextStep | undefined {
+  return tracked.flatMap((t) => t.status.holds ?? []).find((h) => h.next.kind === "closed_elsewhere" && h.next.runId === runId)?.next;
 }
 
 /**
@@ -57,6 +62,11 @@ export function nextFor(ctx: ApiContext, runs?: RunSummary[]): (run: RunSummary)
       title,
       areaWait: areaWait(run),
     });
+    // A closed issue whose run is still busy: the watcher's record says so.
+    if (queued || run.status === "running" || run.status === "waiting") {
+      const closed = closedHold(tracked, run.runId);
+      if (closed) return closed;
+    }
     // The watcher's hold for the same run and reason knows more (pull request, question count).
     const hold = tracked.flatMap((t) => t.status.holds ?? []).find((h) => h.next.runId === run.runId && h.next.kind === rec.kind);
     return hold?.next ?? rec;
@@ -74,21 +84,38 @@ function jobNext(p: PendingJob): NextStep {
 
 const watcherError = (repo: string, reason: string): NextStep => nextStep("watcher_error", { repo }, { reason });
 
+/** A watcher's own record: its error, or (enabled, no error) no finished check for more than 3× its interval. */
+export function watcherProblem(w: WatcherConfig, status: WatcherStatus | undefined, now = Date.now()): NextStep | undefined {
+  if (status?.lastError) return watcherError(w.github_repo, status.lastError);
+  if (!w.enabled || !status) return undefined;
+  let every: number;
+  try {
+    every = parseInterval(w.every);
+  } catch (e) {
+    return watcherError(w.github_repo, (e as Error).message);
+  }
+  const last = status.lastTick ?? status.startedAt;
+  if (last && now - Date.parse(last) > 3 * every) return nextStep("watcher_stale", { repo: w.github_repo }, { lastCheck: last });
+  return undefined;
+}
+
 /** GET /api/queue: the queue, each pending job with its record as `next`. */
 export function queueWithNext(ctx: ApiContext): Omit<Queue, "pending"> & { pending: (PendingJob & { next: NextStep })[] } {
   const q = ctx.scheduler.queue();
   const next = nextFor(ctx);
+  const tracked = ctx.watchers.tracked();
   return { ...q, pending: q.pending.map((p) => {
     const run = ctx.scheduler.get(p.runId);
-    return { ...p, next: run ? next(run) : jobNext(p) };
+    return { ...p, next: run ? next(run) : closedHold(tracked, p.runId) ?? jobNext(p) };
   }) };
 }
 
 /** GET /api/watchers: a watcher with an error carries its record as `status.next`. */
 export function watchersWithNext(ctx: ApiContext): (WatcherConfig & { status?: WatcherStatus & { next?: NextStep } })[] {
-  return ctx.watchers.statuses().map((w) => (w.status?.lastError
-    ? { ...w, status: { ...w.status, next: watcherError(w.github_repo, w.status.lastError) } }
-    : w));
+  return ctx.watchers.statuses().map((w) => {
+    const next = w.status ? watcherProblem(w, w.status) : undefined;
+    return next && w.status ? { ...w, status: { ...w.status, next } } : w;
+  });
 }
 
 /** Records for the server, the watchers, every tracked issue and every run. */
@@ -103,7 +130,9 @@ export function allNext(ctx: ApiContext): { server: NextStep[]; watchers: NextSt
 
   const watchers: NextStep[] = [];
   for (const t of tracked) {
-    if (t.status.lastError) watchers.push(watcherError(t.watcher.github_repo, t.status.lastError));
+    const problem = watcherProblem(t.watcher, t.status);
+    // Drained watchers are stopped on purpose while the server waits to restart.
+    if (problem && !(problem.kind === "watcher_stale" && ctx.restart)) watchers.push(problem);
     for (const h of t.status.holds ?? []) if (!h.issue) watchers.push(h.next);
   }
 
@@ -135,7 +164,7 @@ export function allNext(ctx: ApiContext): { server: NextStep[]; watchers: NextSt
   const runs = list.map(next);
   for (const p of q.pending) {
     if (byRun.has(p.runId) || p.kind !== "run") continue;
-    runs.push(jobNext(p));
+    runs.push(closedHold(tracked, p.runId) ?? jobNext(p));
   }
 
   return { server, watchers, issues: [...picked.values()].map((p) => p.rec), runs };

@@ -146,7 +146,7 @@ function actions(s) {
       if (from && confirm(`Re-run this run from "${from}"? Earlier step outputs are kept.`)) act(() => api.resumeRun(s.runId, from), `Re-running from ${from}`);
     } }, h("option", { value: "" }, "Retry from step…"), s.flowDef.steps.map((st) => h("option", { value: st.id }, st.id))));
   }
-  if (s.status === "running") {
+  if (["running", "waiting"].includes(s.status)) {
     b.push(h("button", { class: "danger", onClick: () => confirm("Cancel this run? You can resume it later.") && act(() => api.cancelRun(s.runId)) }, "■ Cancel"));
   }
   return b;

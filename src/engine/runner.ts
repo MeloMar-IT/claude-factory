@@ -223,6 +223,20 @@ async function drive(
   return finish(summary, opts, config, result);
 }
 
+/** Cancel a run that waits for approval (no process runs for it). Returns the saved run; undefined when it is not waiting. */
+export function cancelWaitingRun(runsDir: string, runId: string, config: Config = loadConfig()): RunSummary | undefined {
+  const s = loadRun(runsDir, runId);
+  if (!s || s.status !== "waiting") return undefined;
+  s.status = "cancelled";
+  s.reason = "cancelled by user";
+  s.waiting = undefined;
+  s.finishedAt = new Date().toISOString();
+  saveRun(s);
+  appendLiveLog(s.runDir, "■ cancelled while waiting for approval");
+  void notifyRun(config, s).catch(() => {});
+  return s;
+}
+
 async function finish(summary: RunSummary, opts: CommonOptions, config: Config, r: LoopResult): Promise<RunSummary> {
   summary.status = r.outcome;
   summary.reason = r.reason;

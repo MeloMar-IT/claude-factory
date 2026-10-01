@@ -5,7 +5,7 @@ import type { RunSummary } from "./engine/state.js";
 export type NextKind =
   | "questions" | "planner_questions" | "approve_plan" | "approve_split" | "approval"
   | "dependency" | "one_at_a_time" | "area_lock" | "usage_limit" | "daily_budget" | "release"
-  | "failed" | "restart" | "watcher_error"
+  | "failed" | "restart" | "watcher_error" | "watcher_stale" | "closed_elsewhere"
   | "running" | "queued" | "checking" | "starting" | "interrupted" | "cancelled" | "stopped" | "done"
   | "superseded";
 
@@ -70,6 +70,10 @@ export interface NextData {
   superseded?: boolean;
   /** The run the record is about (when `base` has none). */
   runId?: string;
+  /** `closed_elsewhere`: the run waits for approval (it is not working). */
+  runWaits?: boolean;
+  /** `watcher_stale`: ISO time of the last finished check. */
+  lastCheck?: string;
 }
 
 export interface NextBase {
@@ -109,6 +113,13 @@ function limitRetry(d: NextData, retryMs: number): string {
   const now = (d.now ?? new Date()).getTime();
   if (!d.finishedAt || at <= now) return "the next check";
   return new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone: d.timeZone }).format(new Date(at));
+}
+
+/** HH:MM of an ISO time. */
+function hhmm(iso: string | undefined, d: NextData): string {
+  const t = new Date(iso ?? "");
+  if (!iso || isNaN(t.getTime())) return "an unknown time";
+  return new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone: d.timeZone }).format(t);
 }
 
 export const LIMIT_RETRY_MS = 30 * 60_000;
@@ -290,6 +301,22 @@ export function nextStep(kind: NextKind, base: NextBase = {}, d: NextData = {}):
       w = WATCHERS;
       break;
     }
+    case "watcher_stale": {
+      who = "Something is wrong";
+      why = `The watcher for ${base.repo || "this repository"} has not checked since ${hhmm(d.lastCheck, d)}`;
+      action = "Press Check now on the Watchers page";
+      say = "press Check now on the Watchers page";
+      w = WATCHERS;
+      break;
+    }
+    case "closed_elsewhere": {
+      who = "You";
+      why = `${ref} was closed on GitHub but its run ${d.runWaits ? "still waits for approval" : "is still working"}`;
+      action = "Cancel the run if the work is no longer wanted";
+      say = "cancel the run if the work is no longer wanted";
+      w = runWhere ?? WATCHERS;
+      break;
+    }
     case "running":
       why = "It is being worked on"; say = "nothing to do, it continues by itself";
       break;
@@ -434,4 +461,23 @@ export function releaseAtFor(watchers: WatcherConfig[], run: RunSummary, runs: R
     if (!released) return w.at;
   }
   return undefined;
+}
+
+/** Does a step id (with optional sub-flow prefix) end in one of `ids`? */
+const stepIs = (id: string | null | undefined, ids: string[]) => !!id && ids.includes(id.split("/").at(-1)!);
+
+/**
+ * The run closed its issue itself (gitflow report, split, merge): a finished `report`, `merge` or
+ * `create_split` step, or one of them as the step that runs next.
+ */
+export function runClosedIssue(run: RunSummary | undefined): boolean {
+  if (!run) return false;
+  if ((run.history ?? []).some((x) => x.ok && (stepIs(x.id, ["merge", "create_split"]) || (stepIs(x.id, ["report"]) && /closed #\d+/.test(x.output ?? ""))))) return true;
+  const next = run.state?.next;
+  if (stepIs(next, ["merge", "create_split"])) return true;
+  if (stepIs(next, ["report"])) {
+    const step = (run.flowDef?.steps ?? []).find((x) => x.id === next) as { run?: string } | undefined;
+    return /gh issue close/.test(step?.run ?? "");
+  }
+  return false;
 }
