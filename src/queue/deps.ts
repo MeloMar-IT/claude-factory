@@ -32,12 +32,22 @@ export function dependencies(body: string, self: number, all: DepIssue[]): numbe
   const found = new Set<number>();
   for (const m of text.matchAll(/(?<![\w/])#(\d+)\b/g)) found.add(Number(m[1]));
   const titles = all.map((i) => ({ n: i.number, t: norm(i.title) })).filter((i) => i.t.length >= 3);
+  const selfTitle = ` ${norm(all.find((i) => i.number === self)?.title ?? "")} `;
   for (const raw of text.split(/[;\n]/)) {
     const item = norm(raw.replace(/^\s*[-*+]\s*(\[[ x]\]\s*)?/i, "").replace(/#\d+/g, ""));
     if (item.length < 3 || /^(none|n a|nothing|no)$/.test(item)) continue;
-    for (const { n, t } of titles) {
-      if (item === t || item.startsWith(t + " ") || t.startsWith(item + " ")) found.add(n);
+    // Best: the title starts with the text (or the other way round). Else: the text appears in a
+    // title as whole words — e.g. "Story 7 — Daily check" in "Website Story 7 — Daily check …".
+    let hits = titles.filter(({ t }) => item === t || item.startsWith(t + " ") || t.startsWith(item + " "));
+    if (!hits.length && item.split(" ").length >= 2) hits = titles.filter(({ t }) => ` ${t} `.includes(` ${item} `));
+    // Last resort: the same numbered story in this issue's own epic — "Story 6 — …(reworded)" from
+    // "Website Story 5" means "Website Story 6".
+    const key = /^([a-z]+ \d+[a-z]?)\b/.exec(item)?.[1];
+    if (!hits.length && key && selfTitle.includes(` ${key.split(" ")[0]} `)) {
+      const family = selfTitle.slice(0, selfTitle.indexOf(` ${key.split(" ")[0]} `)).trim();
+      hits = titles.filter(({ t }) => t.startsWith(`${family ? `${family} ` : ""}${key} `));
     }
+    for (const { n } of hits) found.add(n);
   }
   found.delete(self);
   return [...found].sort((a, b) => a - b);

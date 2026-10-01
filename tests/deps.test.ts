@@ -26,6 +26,23 @@ describe("issue dependencies", () => {
     expect(dependencies("### Depends on\n#12", 12, all)).toEqual([]); // not itself
   });
 
+  it("finds a dependency named by a shortened title inside a longer one", () => {
+    const web = [
+      ...all,
+      { number: 91, title: "Website Story 1 — Website source lives in this repo", state: "OPEN" },
+      { number: 97, title: "Website Story 7 — Daily check for new GitHub releases", state: "OPEN" },
+      { number: 99, title: "Website Story 9 — Deployment script to the web server", state: "OPEN" },
+    ];
+    expect(dependencies("### Depends on\nStory 7 — Daily check for new GitHub releases; Story 9 — Deployment script.", 100, web)).toEqual([97, 99]);
+    // A title that starts with the text still wins (no extra matches): "Story 7 — Install the update" is #7 here.
+    expect(dependencies("### Depends on\nStory 7 — Install the update", 5, web)).toEqual([7]);
+    expect(dependencies("### Depends on\nStory 1 — Website source lives in this repo.", 93, web)).toEqual([91]);
+    // Reworded title: the same story number in the issue's own epic.
+    const web2 = [...web, { number: 95, title: "Website Story 5 — Public changelog page", state: "OPEN" },
+      { number: 96, title: "Website Story 6 — Automatically generate the changelog from releases", state: "OPEN" }];
+    expect(dependencies("### Depends on\nStory 6 — Automatically generate the changelog from new releases.", 95, web2)).toEqual([96]);
+  });
+
   it("counts closed issues and done labels as done; ignores unknown issues", () => {
     expect(openDependencies([1, 6, 7, 99], all, ["Factory_done"])).toEqual([7]);
     expect(openDependencies([6], all, [])).toEqual([6]);
