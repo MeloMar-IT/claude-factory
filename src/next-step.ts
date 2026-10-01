@@ -1,6 +1,7 @@
 import type { WatcherConfig } from "./config.js";
 import { explainError } from "./errors.js";
 import type { RunSummary } from "./engine/state.js";
+import { classifyFailure, type FailureCause } from "./failure.js";
 import { statusHelp, statusName } from "./words.js";
 
 /** Why something waits (or what it does now). One kind per waiting reason. */
@@ -38,6 +39,8 @@ export interface NextStep {
   text: string;
   /** Dependency: what it waits for. */
   blockers?: BlockerInfo[];
+  /** Why a failed or interrupted run did not finish. */
+  cause?: FailureCause;
 }
 
 export interface BlockerInfo {
@@ -82,6 +85,11 @@ export interface NextData {
   canResume?: boolean;
   /** `watcher_stale`: ISO time of the last finished check. */
   lastCheck?: string;
+  /** `failed`: why the run did not finish; the factory wording is used for "factory". */
+  cause?: FailureCause;
+  /** `failed`: what went wrong, and the suggested fix. */
+  what?: string;
+  fix?: string;
 }
 
 export interface NextBase {
@@ -284,19 +292,29 @@ export function nextStep(kind: NextKind, base: NextBase = {}, d: NextData = {}):
     case "failed": {
       who = "Something is wrong";
       const e = explainError(d.reason);
-      why = `${e.what}: ${e.why}`;
-      const startOver = e.startOver || d.canResume === false;
+      const factory = d.cause === "factory";
+      const startOver = (!factory && e.startOver) || d.canResume === false;
+      if (factory) {
+        const what = clean(d.what) || clean(d.reason);
+        why = `The Foundry failed, not the code${what ? `: ${what}` : ""}`;
+      } else {
+        why = `${e.what}: ${e.why}`;
+        // A blocked command is only a hint for a code failure.
+        const hint = [clean(d.what), clean(d.fix)].filter(Boolean).join(", ");
+        if (hint) why += ` (${hint})`;
+      }
       let retry: string;
       if (d.watched) {
         const lbl = d.failedLabel ?? "factory:failed";
         retry = startOver
           ? `then remove the \`${lbl}\` label to start over`
-          : `then remove the \`${lbl}\` label to start over, or resume the run on its page to continue at the failed step`;
+          : `then remove the \`${lbl}\` label to start over, or resume the run on its page${factory ? "" : " to continue at the failed step"}`;
       } else {
         retry = startOver ? "then start a new run" : "then resume the run on its page";
         w = runWhere ?? where;
       }
-      say = `${lowerFirst(e.todo)}, ${retry}`;
+      const todo = factory ? clean(d.fix) : lowerFirst(e.todo);
+      say = todo ? `${todo}, ${retry}` : retry.replace(/^then /, "");
       action = upperFirst(say);
       break;
     }
@@ -372,12 +390,13 @@ export function nextStep(kind: NextKind, base: NextBase = {}, d: NextData = {}):
       break;
   }
 
-  const facts = { releaseAt: kind === "release" && !d.pr ? d.releaseAt : undefined, blockers: (d.blockers ?? []).map((b) => b.issue) };
+  const facts = { releaseAt: kind === "release" && !d.pr ? d.releaseAt : undefined, blockers: (d.blockers ?? []).map((b) => b.issue), factory: kind === "failed" && d.cause === "factory" };
   return {
     kind, status: statusName(kind, facts), help: statusHelp(kind, facts), who, why, action, where: w, until,
     repo: base.repo ?? "", user: "", issue, title: base.title ?? "", runId: base.runId,
     text: sentence(why.replace(/[.!?]+$/, ""), say.replace(/[.!?]+$/, "")),
     ...(kind === "dependency" ? { blockers: d.blockers ?? [] } : {}),
+    ...(d.cause ? { cause: d.cause } : {}),
   };
 }
 
@@ -441,9 +460,11 @@ export function runNextStep(run: RunSummary, o: RunNextOptions = {}): NextStep {
       if (step?.startsWith("wait_")) return make("release");
       return make("stopped");
     }
-    default:
-      if (/interrupted/.test(reason)) return make("interrupted");
-      return make("failed", { canResume: o.canResume ?? (run.state ? run.state.next != null : undefined) });
+    default: {
+      const f = classifyFailure(run);
+      if (/interrupted/.test(reason)) return make("interrupted", { cause: f.cause });
+      return make("failed", { ...f, canResume: o.canResume ?? (run.state ? run.state.next != null : undefined) });
+    }
   }
 }
 

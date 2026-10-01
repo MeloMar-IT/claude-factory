@@ -376,8 +376,60 @@ describe("runNextStep", () => {
     expect(a.action.startsWith("Nothing")).toBe(true);
     expect(runNextStep(run(), { superseded: true }).kind).toBe("done");
   });
+  const resumable = { state: { next: "p", steps: {}, visits: {} } };
+  it("says the Foundry failed, not the code, and suggests the fix", () => {
+    const n = runNextStep(run({ ...resumable, status: "failed", reason: "internal error: boom" }));
+    expect(n).toMatchObject({ cause: "factory", who: "Something is wrong", where: { url: "#/runs/r1" } });
+    expect(n.text).toBe("The Foundry failed, not the code: internal error: boom — restart or update the Foundry, then resume the run on its page.");
+    expect(n.help).not.toContain("A step failed");
+
+    const marker = runNextStep(run({ ...resumable, status: "failed", reason: 'step "p" failed: exit code 1', history: [{ id: "p", type: "shell", ok: false, output: "planning failed: no PLAN_STATUS line\n" }] as RunSummary["history"] }));
+    expect(marker.text).toBe("The Foundry failed, not the code: the plan had no PLAN_STATUS line — resume the run to try the step again, then resume the run on its page.");
+
+    const push = runNextStep(run({ ...resumable, status: "failed", reason: 'step "p" failed: exit code 1', history: [{ id: "p", type: "shell", ok: false, output: "refusing to push main: not a feature branch" }] as RunSummary["history"] }), watched);
+    expect(push.text).toMatch(/— change Protected branches in Settings or the flow's branch, then remove the `factory:failed` label to start over, or resume the run on its page\.$/);
+    expect(push.action).toMatch(/^C[^.]+[^.]$/);
+    expect(push.where.url).toBe(ISSUE);
+
+    // No step to resume at: only starting over is offered.
+    const fresh = runNextStep(run({ status: "failed", reason: "internal error: boom" }));
+    expect(fresh.text).toBe("The Foundry failed, not the code: internal error: boom — restart or update the Foundry, then start a new run.");
+  });
+
+  it("keeps the code failure text, and puts a blocked command in a hint", () => {
+    const reason = 'step "x" failed: exit code 1';
+    const n = runNextStep(run({ ...resumable, status: "failed", reason }));
+    const old = nextStep("failed", { repo: "acme/app", issue: 7, title: "do it", runId: "r1" }, { reason, runId: "r1", issueUrl: undefined, canResume: true });
+    expect([n.text, n.help, n.cause]).toEqual([old.text, old.help, "code"]);
+    expect(runNextStep(run({ status: "failed", reason: "run budget of $2 reached" })).cause).toBe("limit");
+
+    const h = [{ id: "c", type: "claude", ok: true, output: "", denied: ["Bash: mkdir x"] }, { id: "t", type: "shell", ok: false, output: "FAIL" }] as unknown as RunSummary["history"];
+    const hinted = runNextStep(run({ ...resumable, status: "failed", reason: 'step "t" failed: exit code 1', history: h }));
+    expect(hinted.why).toBe(`${n.why.replace("The step x", "The step t")} (a command was blocked: Bash: mkdir, allow it in the flow if it was needed)`);
+    expect(hinted.action).toBe(n.action);
+  });
+
+  it("gives an interrupted run the factory cause but keeps its wording", () => {
+    for (const o of [{}, watched]) {
+      const n = runNextStep(run({ status: "failed", reason: "interrupted — resume it to continue" }), o);
+      expect(n).toMatchObject({ kind: "interrupted", cause: "factory" });
+      expect(n.why).toBe("The run was interrupted");
+    }
+  });
+
+  it("is one sentence for a factory failure", () => {
+    for (const d of [{ cause: "factory" as const, what: "a. b", fix: "c. d" }, { cause: "factory" as const }, { what: "a command", fix: "fix it. now" }]) {
+      for (const w of [{}, watched]) {
+        const n = nextStep("failed", { repo: "acme/app", issue: 7 }, { ...w, ...d, reason: "x. y" });
+        expect(n.text).toMatch(/^[^\n]+\.$/);
+        expect(n.text.slice(0, -1)).not.toMatch(/[.!?]\s/);
+      }
+    }
+  });
+
   it("does not throw on a bare run", () => {
     const bare = { runId: "x", status: "stopped", reason: "boom" } as unknown as RunSummary;
+    expect(() => runNextStep({ runId: "x", status: "failed", reason: 'step "a" failed' } as unknown as RunSummary)).not.toThrow();
     expect(() => runNextStep(bare)).not.toThrow();
     expect(() => releaseAtFor([], { ...bare, status: "succeeded" } as RunSummary)).not.toThrow();
   });

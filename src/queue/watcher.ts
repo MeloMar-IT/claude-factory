@@ -31,17 +31,21 @@ export function labelNames(cfg: WatcherConfig): LabelNames {
   };
 }
 
-/** The failure comment on an issue: what happened, why, what to do, then the raw text under Details. */
-export function failureComment(s: RunSummary, action: string): string {
+/**
+ * The failure comment on an issue: what happened, why, what to do, then the raw text under Details.
+ * `factoryWhat` (the record's "The Foundry failed, not the code: …") is set when the Foundry itself failed:
+ * the first line says so and it replaces the What and Why lines.
+ */
+export function failureComment(s: RunSummary, action: string, factoryWhat?: string): string {
   const e = explainError(s.reason);
   const failed = [...s.history].reverse().find((h) => !h.ok);
   const tail = (failed?.output || failed?.error || "").trim().slice(-3000);
   const raw = [e.detail, tail].filter(Boolean).join("\n\n");
   return [
-    "🤖 **Spaghetti Code Foundry** could not finish this issue.",
+    factoryWhat ? "🤖 **Spaghetti Code Foundry** itself failed on this issue, not the code." : "🤖 **Spaghetti Code Foundry** could not finish this issue.",
     "",
-    `- **What happened:** ${e.what}.`,
-    `- **Why:** ${e.why.charAt(0).toUpperCase()}${e.why.slice(1)}.`,
+    `- **What happened:** ${factoryWhat ?? e.what}.`,
+    ...(factoryWhat ? [] : [`- **Why:** ${e.why.charAt(0).toUpperCase()}${e.why.slice(1)}.`]),
     `- **What you can do:** ${action}.`,
     failed ? `\nLast failing step: \`${failed.id}\`${failed.visit > 1 ? ` (attempt ${failed.visit})` : ""}` : "",
     raw ? `\n<details><summary>Details</summary>\n\n\`\`\`\n${raw.replace(/`{3,}/g, (m) => "ˋ".repeat(m.length))}\n\`\`\`\n</details>` : "",
@@ -384,8 +388,8 @@ export class Watcher {
 
   /** Tell the issue why the run failed, with the tail of the failing step's output. */
   private async commentFailure(issue: number, s: RunSummary) {
-    const action = this.held("failed", { number: issue, title: "" }, { failedLabel: this.L.failed, reason: s.reason, runId: s.runId }).next.action;
-    const body = failureComment(s, action);
+    const next = this.failedHold({ number: issue, title: "" }, s, s.reason).next;
+    const body = failureComment(s, next.action, next.cause === "factory" ? next.why : undefined);
     await gh(["issue", "comment", String(issue), "--repo", this.repo, "--body", body]);
   }
 
@@ -422,6 +426,15 @@ export class Watcher {
   private held(kind: NextKind, issue?: { number: number; title: string }, data: NextData = {}): Hold {
     const issueUrl = issue ? `https://github.com/${this.repo}/issues/${issue.number}` : undefined;
     return toHold(nextStep(kind, { repo: this.repo, issue: issue?.number, title: issue?.title }, { watched: true, issueUrl, ...data }));
+  }
+
+  /** A hold for an issue with the failed label: the run's own record when it failed, else a plain one (a cancelled run also gets the label). */
+  private failedHold(issue: { number: number; title: string }, run?: RunSummary, reason?: string): Hold {
+    if (run?.status === "failed") {
+      const next = runNextStep(run, { watched: true, failedLabel: this.L.failed, title: issue.title });
+      if (next.kind === "failed") return toHold(next);
+    }
+    return this.held("failed", issue, { failedLabel: this.L.failed, runId: run?.runId, reason });
   }
 
   /** A hold for an issue whose run exists. */
@@ -586,7 +599,7 @@ export class Watcher {
           holds.push(this.heldRun(issue, run));
         }
       } else if (status === this.L.failed) {
-        holds.push(this.held("failed", issue, { failedLabel: this.L.failed, runId: run?.runId, reason: run?.status === "failed" ? run.reason : undefined }));
+        holds.push(this.failedHold(issue, run, run?.status === "failed" ? run.reason : undefined));
       }
     }
     if (toCheck.length) await this.precheck(toCheck, holds, budgetLeft);

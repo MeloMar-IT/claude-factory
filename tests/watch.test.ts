@@ -412,6 +412,71 @@ describe("watcher", () => {
     expect(body.startsWith("🤖 **Spaghetti Code Foundry** could not finish this issue.\n")).toBe(true);
   });
 
+  describe("failure comment", () => {
+    const FACTORY_LINE = "🤖 **Spaghetti Code Foundry** itself failed on this issue, not the code.";
+    const bodyOf = (issue: number) => gh.comments().find((c) => c.issue === issue)!.body;
+    const todoLine = (body: string) => body.split("\n").find((l) => l.startsWith("- **What you can do:** "))!;
+    const headOf = (body: string) => body.slice(0, body.indexOf("<details>"));
+    const localFlow = (yaml: string) => {
+      const file = join(gh.tmp, "local.yaml");
+      writeFileSync(file, yaml.replace("name: local", `name: ${file}`)); // a run is matched to its watcher by flow name
+      return file;
+    };
+
+    it("says the Foundry failed when a marker could not be read, and the hold has the same sentence", async () => {
+      process.env.FAKE_PLAN = "not sure";
+      issues([4]);
+      const w = watcher();
+      await w.tick();
+      await settle();
+      const body = bodyOf(4);
+      expect(body.split("\n")[0]).toBe(FACTORY_LINE);
+      expect(body.split("\n").at(-1)).toBe(`<!-- claude-factory run=${runFor("4").runId} -->`);
+      expect(headOf(body)).not.toContain("- **Why:**");
+      issues([4, "factory:failed"]);
+      await w.tick();
+      expect(w.status.holds).toMatchObject([{ issue: 4, next: { kind: "failed", who: "Something is wrong", cause: "factory" } }]);
+      expect(todoLine(body)).toBe(`- **What you can do:** ${w.status.holds![0]!.next.action}.`);
+      expectHoldsFromRecords(w);
+    });
+
+    it("keeps the old first line for a code failure", async () => {
+      const w = watcher({ flow: localFlow("name: local\nworkspace: inplace\nsteps:\n  - {id: a, type: shell, run: 'echo boom; exit 1'}\n") });
+      issues([5]);
+      await w.tick();
+      await settle();
+      expect(bodyOf(5).split("\n")[0]).toBe("🤖 **Spaghetti Code Foundry** could not finish this issue.");
+    });
+
+    it("names the custom failed label", async () => {
+      process.env.FAKE_PLAN = "not sure";
+      issues([4]);
+      const w = watcher({ status_labels: { failed: "Factory_ERROR" } });
+      await w.tick();
+      await settle();
+      expect(todoLine(bodyOf(4))).toContain("`Factory_ERROR`");
+    });
+
+    it("shows only the tool and program of a blocked command", async () => {
+      const prompt = 'DENY Bash curl -H "Authorization: token SENTINEL123" https://example.test/x\n      ERROR';
+      const w = watcher({ flow: localFlow(`name: local\nworkspace: inplace\nsteps:\n  - id: a\n    type: claude\n    prompt: |\n      ${prompt}\n`) });
+      issues([6]);
+      await w.tick();
+      await settle();
+      const body = bodyOf(6);
+      expect(body.split("\n")[0]).toBe(FACTORY_LINE);
+      // The raw text under Details is the unchanged output tail; the plain lines above it carry only the tool and program.
+      const head = headOf(body);
+      expect(head).toContain("Bash: curl");
+      expect(head).not.toMatch(/SENTINEL123|example\.test/);
+      issues([6, "factory:failed"]);
+      await w.tick();
+      const next = w.status.holds![0]!.next;
+      for (const t of [next.text, next.why, next.action]) expect(t).not.toMatch(/SENTINEL123|example\.test/);
+      expect(next.why).toContain("Bash: curl");
+    });
+  });
+
   it("describes a blocker that has a run in another flow", async () => {
     process.env.FAKE_GH_ISSUES = JSON.stringify([
       // The fake gh ignores --label, so #4 (another watcher's issue) is excluded by label here.
