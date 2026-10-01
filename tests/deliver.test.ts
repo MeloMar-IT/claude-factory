@@ -277,7 +277,12 @@ describe("deliver pipeline", () => {
     expect(runOf("issue-deliver", "5")?.status).toBe("succeeded");
     expect(runOf("issue-deliver", "6")).toBeUndefined();
     expect(w.status.lastError).toBeUndefined();
-    expect(w.status.holds).toEqual([{ issue: 6, title: "issue 6", reason: "needs your answer — reply on the issue (or /defaults) and it continues" }]);
+    expect(w.status.holds).toMatchObject([{
+      issue: 6, title: "issue 6",
+      next: { kind: "questions", who: "You", action: "Answer the questions" },
+      url: "https://github.com/acme/app/issues/6",
+    }]);
+    expect(w.status.holds![0]!.reason).toContain("/defaults");
 
     // A bot comment with only the new marker is not an answer.
     process.env.FAKE_GH_COMMENTS = JSON.stringify({ comments: [

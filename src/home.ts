@@ -500,6 +500,8 @@ export function watchDataHome(o: {
   idle: () => boolean;
   beforeExit: () => void;
   log: (m: string) => void;
+  /** Called once, when the restart has to wait for active runs. */
+  busy?: () => void;
   everyMs?: number;
   reason?: () => string | undefined;
   exit?: (code: number) => void;
@@ -516,7 +518,10 @@ export function watchDataHome(o: {
       return;
     }
     if (!o.idle()) {
-      if (told !== "busy") o.log(`${reason} — restarting as soon as no run is active`);
+      if (told !== "busy") {
+        o.log(`${reason} — restarting as soon as no run is active`);
+        o.busy?.();
+      }
       told = "busy";
       return;
     }

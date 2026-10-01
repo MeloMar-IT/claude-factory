@@ -11,6 +11,7 @@ import { adminRoutes } from "./api-admin.js";
 import { flowRoutes } from "./api-flows.js";
 import { runRoutes } from "./api-runs.js";
 import { HttpError, send, serveStatic } from "./http.js";
+import { areaWait, nextRoutes, type RestartState } from "./next.js";
 
 const UI_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../../ui");
 const YAML_BROWSER_DIR = join(dirname(createRequire(import.meta.url).resolve("yaml/package.json")), "browser");
@@ -31,12 +32,14 @@ export interface ApiContext {
   watchers: WatcherManager;
   config: () => Config;
   reloadConfig: () => void;
+  /** Set while the server waits to restart (new version, moved data folder). */
+  restart?: RestartState;
 }
 
 /** A route handler: returns true when it handled the request. */
 export type Route = (ctx: ApiContext, req: IncomingMessage, res: ServerResponse, seg: string[], method: string) => Promise<boolean>;
 
-const ROUTES: Route[] = [adminRoutes, flowRoutes, runRoutes];
+const ROUTES: Route[] = [adminRoutes, flowRoutes, runRoutes, nextRoutes];
 
 export async function startServer(opts: ServerOptions): Promise<{ url: string; close: () => void; ctx: ApiContext }> {
   const log = opts.log ?? (() => {});
@@ -47,7 +50,7 @@ export async function startServer(opts: ServerOptions): Promise<{ url: string; c
     config: () => config,
     queueFile: join(process.env.FACTORY_HOME ?? FACTORY_HOME, "queue.json"),
   });
-  const watchers = new WatcherManager({ scheduler, runsDir: opts.runsDir, repo: opts.repo, config: () => config, log });
+  const watchers = new WatcherManager({ scheduler, runsDir: opts.runsDir, repo: opts.repo, config: () => config, areaWait, log });
   const ctx: ApiContext = { opts, scheduler, watchers, config: () => config, reloadConfig: () => (config = loadConfig()) };
   const allowedHosts = new Set([`127.0.0.1:${opts.port}`, `localhost:${opts.port}`]);
 

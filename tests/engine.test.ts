@@ -10,6 +10,7 @@ import { dockerCommand } from "../src/engine/guards.js";
 import { liveLogFile, saveRun } from "../src/engine/state.js";
 import { mirrorEnvPrefixes, withScfAliases } from "../src/engine/template.js";
 import { notifyRun } from "../src/notify.js";
+import { runNextStep } from "../src/next-step.js";
 import { parseFlow } from "../src/flow/load.js";
 
 const claudeBin = resolve("tests/fixtures/fake-claude.mjs");
@@ -337,6 +338,35 @@ steps:
       process.env.FACTORY_NO_NOTIFY = saved;
     }
     expect(readFileSync(out, "utf8")).toBe("succeeded succeeded");
+  });
+
+  it("FACTORY_MESSAGE says who has to do what", async () => {
+    const s = await start("name: t\nworkspace: inplace\nsteps:\n  - {id: a, type: shell, run: 'true'}\n");
+    const out = join(tmp, "msg");
+    const messageFor = async (run: typeof s) => {
+      const saved = process.env.FACTORY_NO_NOTIFY;
+      delete process.env.FACTORY_NO_NOTIFY;
+      try {
+        await notifyRun(baseConfig({ notify: { macos: false, command: `printf "%s" "$FACTORY_MESSAGE" > ${out}` } }), run);
+      } finally {
+        process.env.FACTORY_NO_NOTIFY = saved;
+      }
+      return readFileSync(out, "utf8");
+    };
+    const waiting = { ...s, status: "waiting", waiting: { stepId: "gate", message: "Deploy now?", since: "x" } } as typeof s;
+    const w = await messageFor(waiting);
+    expect(w).toContain("approve or reject it on the run page");
+    expect(w.endsWith(runNextStep(waiting).text)).toBe(true);
+    const failed = { ...s, status: "failed", reason: 'step "a" failed: boom' } as typeof s;
+    const f = await messageFor(failed);
+    expect(f).toContain("resume the run on its page");
+    expect(f.endsWith(runNextStep(failed).text)).toBe(true);
+
+    // A long task and a long reason are shortened; the action stays whole.
+    const long = { ...s, task: "t".repeat(400), status: "failed", reason: `step "a" failed: ${"boom ".repeat(100)}` } as typeof s;
+    const l = await messageFor(long);
+    expect(l.length).toBeLessThanOrEqual(300);
+    expect(l.endsWith("resume the run on its page.")).toBe(true);
   });
 
   it("notifications are titled Foundry · flow status", async () => {

@@ -343,7 +343,7 @@ in GitHub:
 | `factory:needs-info` | The Foundry asked a question on the issue — reply and it continues |
 | `factory:waiting-approval` | Waiting for `/approve` or `/reject` on the issue |
 | `factory:done` | Finished |
-| `factory:failed` | Failed; the reason is commented on the issue. Remove the label to retry |
+| `factory:failed` | Failed; the reason is commented on the issue. Remove the label to start over, or resume the run on its page to continue at the failed step |
 
 Each watcher's card on the **Watchers** page lists the labelled issues it is *not* working on
 right now and why ("waits for #73", "needs your answer", …); the Dashboard shows the same list.
@@ -471,7 +471,7 @@ The threshold is the `auto_split_max_risk` variable (default 50).
 | `Factory_working` | Planning and coding are running (or paused for the usage limit) | Wait; follow it on the Runs page |
 | `Factory_waiting` | A risky plan waits for your decision | `/approve` or `/reject` + feedback on the issue |
 | `Factory_done` | Implemented, tested, reviewed and merged into `develop` (gitflow) or in the rolling pull request | Nothing — merge the daily release pull request (or the rolling one) when you like |
-| `Factory_ERROR` | It failed; the reason and the failing output are commented on the issue | Fix the cause if needed, then remove the label to retry |
+| `Factory_ERROR` | It failed; the reason and the failing output are commented on the issue | Fix the cause if needed, then remove the label to start over, or resume the run on its page to continue at the failed step |
 
 Issues with an excluded label (e.g. `geni`) are never picked up, whatever other labels they have.
 
@@ -483,7 +483,7 @@ Issues with an excluded label (e.g. `geni`) are never picked up, whatever other 
 | Answer the questions | Reply on the issue, or `/defaults` |
 | Check a plan before it is coded | Add `Factory_review_plan` before (or together with) `Factory_go` |
 | Approve / reject a risky plan | `/approve` (+ notes), or `/reject` + what to change |
-| Retry after an error | Remove `Factory_ERROR` |
+| Retry after an error | Remove `Factory_ERROR` to start over, or resume the run on its page to continue at the failed step |
 | Stop the Foundry from touching an issue | Remove `Factory_go`, or add an excluded label |
 | Get the work into `main` | Merge the daily release pull request `develop` → `main` (gitflow), or the rolling Foundry pull request |
 
@@ -491,7 +491,12 @@ Issues with an excluded label (e.g. `geni`) are never picked up, whatever other 
 
 Look at the **Dashboard**: the **Waiting** card lists every labelled issue that isn't being
 worked on right now, with the reason and a link to what it waits for (the same list is on each
-watcher's card on the **Watchers** page). The usual reasons:
+watcher's card on the **Watchers** page). Every line is one sentence that says who has to act
+and what to do ("… — reply /approve to start coding …", "… — nothing to do, it starts
+tomorrow"), and has an "open ↗" link. Runs that started and then paused are listed too: a usage
+limit, the daily budget, a code area that another run uses, or an interruption. The same
+sentences are in the failure comment on the issue and in notifications, and the server gives
+them for every run and issue at `GET /api/next` (and as `next` on each run). The usual reasons:
 
 - **It needs you:** a question (`Factory_needs_info`), a risky plan (`Factory_waiting`) or an
   error (`Factory_ERROR`).
@@ -603,7 +608,10 @@ it; paused runs continue the next day. Flows can also cap one run (`limits.max_c
   `require_approval=yes` for `github-pr`).
 
 **Notifications** — macOS notifications, a Slack webhook, or your own command, for the run
-outcomes you choose.
+outcomes you choose. The message says who has to do what, for example "acme/app#7 — It failed:
+… — remove the `factory:failed` label to start over, or resume the run on its page to continue at
+the failed step." It is at most 300 characters; a long title or reason is shortened, the action
+never.
 
 **Bot identity** — by default commits and comments are made as you. Set a bot name/email and a
 token (or a GitHub App) to make them as a bot instead.
@@ -642,8 +650,8 @@ themselves still pause runs; they continue by themselves when the limit resets.
 ![Dashboard](images/dashboard.png)
 
 Spend today and over 30 days, success rate, runs that need a human, the **Waiting** card (every
-labelled issue that isn't being worked on, with the reason — "needs your answer", "waits for
-#73", "waiting for /approve" — and a link), cost per day, results per flow and per repository,
+labelled issue that isn't being worked on, with the reason and what to do — "answer 3
+questions", "#74 waits for #73, which is being worked on", "reply /approve or /reject" — and a link), cost per day, results per flow and per repository,
 the steps where runs fail most, and eval results.
 
 ### Evals

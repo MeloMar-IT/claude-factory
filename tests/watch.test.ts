@@ -1,4 +1,6 @@
 import { execFileSync } from "node:child_process";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { parseFlow } from "../src/flow/load.js";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ConfigSchema, WatcherSchema } from "../src/config.js";
@@ -189,6 +191,131 @@ describe("watcher", () => {
     expect(runFor("8").history.at(-1)!.id).toBe("push_result");
   });
 
+  const rewind = (issue: string, over: Record<string, unknown>) => {
+    const s = loadRun(join(gh.tmp, "runs"), runFor(issue).runId)!;
+    Object.assign(s, over);
+    saveRun(s);
+  };
+  const expectHoldsFromRecords = (w: Watcher) => {
+    for (const h of w.status.holds!) {
+      expect(h.reason).toBe(h.next.text);
+      expect(h.url).toBe(h.next.where.url);
+    }
+  };
+
+  it("shows a hold for a run paused by the usage limit", async () => {
+    issues([8]);
+    const w = watcher();
+    await w.tick();
+    await settle();
+    rewind("8", { status: "stopped", reason: "usage limit reached: hit your limit · resets 3:50pm (Europe/Amsterdam) — continues automatically", finishedAt: new Date().toISOString() });
+    issues([8, "factory:working"]);
+    await w.tick();
+    await settle();
+    expect(w.status.holds).toMatchObject([{ issue: 8, next: { kind: "usage_limit", who: "A time limit", until: "3:50pm (Europe/Amsterdam)" } }]);
+    expectHoldsFromRecords(w);
+  });
+
+  it("shows a hold for a run paused by the daily budget", async () => {
+    issues([8]);
+    const w = watcher();
+    await w.tick();
+    await settle();
+    rewind("8", { status: "stopped", reason: "daily budget of $5 reached — resume tomorrow" });
+    issues([8, "factory:working"]);
+    const capped = new Watcher(w.cfg, { scheduler, runsDir: join(gh.tmp, "runs"), repo: gh.tmp, dailyBudget: () => 0, log: () => {} });
+    await capped.tick();
+    expect(capped.status.holds).toMatchObject([{ issue: 8, next: { kind: "daily_budget", until: "tomorrow" } }]);
+    expect(capped.status.holds![0]!.reason).not.toContain("$");
+  });
+
+  it("a failed issue names both ways to retry", async () => {
+    issues([8]);
+    const w = watcher();
+    await w.tick();
+    await settle();
+    rewind("8", { status: "failed", reason: 'step "x" failed: boom' });
+    issues([8, "factory:failed"]);
+    await w.tick();
+    expect(w.status.holds).toMatchObject([{ issue: 8, next: { kind: "failed", who: "Something is wrong" } }]);
+    expect(w.status.holds![0]!.reason).toContain("remove the `factory:failed` label to start over, or resume the run on its page");
+    expectHoldsFromRecords(w);
+  });
+
+  it("describes a blocker that has a run in another flow", async () => {
+    process.env.FAKE_GH_ISSUES = JSON.stringify([
+      // The fake gh ignores --label, so #4 (another watcher's issue) is excluded by label here.
+      { number: 4, title: "four", state: "OPEN", labels: [{ name: "other-flow" }] },
+      { number: 5, title: "five", state: "OPEN", labels: [{ name: "claude-factory" }], body: "### Depends on\n#4\n" },
+    ]);
+    const sub = watcher({ wait_for_dependencies: true, exclude_labels: ["other-flow"] });
+    // #4's only run belongs to another flow and waits at approve_plan.
+    const id = scheduler.submit({ kind: "run", flow: parseFlow("name: x\nworkspace: inplace\nsteps:\n  - {id: a, type: shell, run: 'true'}\n"), task: "", repo: gh.tmp, vars: { github_repo: "acme/app", issue: "4" } });
+    await scheduler.wait(id);
+    await settle(); // the run must be finished and saved before its file is rewritten
+    expect(runFor("4").status).toBe("succeeded");
+    rewind("4", { flow: "issue-plan", status: "waiting", waiting: { stepId: "approve_plan", message: "m", since: "x" } });
+    await sub.tick();
+    expect(sub.status.holds![0]!.reason).toContain("waits for #4, which waits for your decision on its risky plan");
+    expectHoldsFromRecords(sub);
+  });
+
+  it("follows a chain of blockers that have no run, whatever their number", async () => {
+    process.env.FAKE_GH_ISSUES = JSON.stringify([
+      { number: 5, title: "five", state: "OPEN", labels: [{ name: "claude-factory" }], body: "### Depends on\n#6\n" },
+      { number: 6, title: "six", state: "OPEN", labels: [{ name: "other-flow" }], body: "### Depends on\n#7\n" },
+      { number: 7, title: "seven", state: "OPEN", labels: [{ name: "other-flow" }], body: "" },
+    ]);
+    const w = watcher({ wait_for_dependencies: true, exclude_labels: ["other-flow"] });
+    await w.tick();
+    expect(w.status.holds).toMatchObject([{ issue: 5, next: { kind: "dependency", until: "after #6" } }]);
+    expect(w.status.holds![0]!.reason).toContain("waits for #6, which waits for #7, which is to be done");
+  });
+
+  it("shows a hold for a run that waits for a code area", async () => {
+    const dir = join(gh.tmp, ".claude-factory", "flows");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "slow.yaml"), "name: slow\nworkspace: inplace\nsteps:\n  - {id: first, type: shell, run: 'true'}\n  - {id: claim_areas, type: shell, run: 'sleep 1'}\n");
+    issues([8]);
+    const w = new Watcher(WatcherSchema.parse({ id: "w", github_repo: "acme/app", flow: "slow" }), {
+      scheduler, runsDir: join(gh.tmp, "runs"), repo: gh.tmp, log: () => {},
+      areaWait: () => ({ runId: "r0", areas: "src" }),
+    });
+    await w.tick();
+    await new Promise((r) => setTimeout(r, 300));
+    issues([8, "factory:working"]);
+    await w.tick();
+    expect(w.status.holds).toMatchObject([{ issue: 8, url: "#/runs/r0", next: { kind: "area_lock", who: "Another story" } }]);
+    expectHoldsFromRecords(w);
+    await settle();
+  });
+
+  it("tracks every issue with its run", async () => {
+    issues([3, "factory:done"], [5]);
+    const w = watcher();
+    await w.tick();
+    await settle();
+    expect(w.tracked).toMatchObject([{ issue: 3, done: true }, { issue: 5, runId: runFor("5").runId }]);
+  });
+
+  it("the manager keeps what it tracked after stopAll, until sync", async () => {
+    const { WatcherManager } = await import("../src/queue/watchers.js");
+    issues([3, "factory:done"], [5]);
+    const cfg = ConfigSchema.parse({ protected_branches: [], watchers: [{ id: "w", github_repo: "acme/app", every: "1h", vars: { test_cmd: "true" } }] });
+    const m = new WatcherManager({ scheduler, runsDir: join(gh.tmp, "runs"), repo: gh.tmp, config: () => cfg, log: () => {} });
+    m.sync();
+    await m.runNow("w"); // returns at once when the tick started by sync() is still running
+    for (let i = 0; i < 100 && !m.tracked()[0]!.status.lastTick; i++) await new Promise((r) => setTimeout(r, 100));
+    await settle();
+    expect(m.tracked()[0]!.issues.map((i) => i.issue)).toEqual([3, 5]);
+    m.stopAll();
+    expect(m.statuses()[0]!.status).toBeUndefined();
+    expect(m.tracked()[0]!.issues.map((i) => i.issue)).toEqual([3, 5]);
+    expect(m.tracked()[0]!.status.holds).toBeDefined();
+    m.sync();
+    m.stopAll();
+  });
+
   it("runs pr-feedback once for new review comments on factory PRs", async () => {
     execFileSync("git", ["-C", gh.remote, "branch", "factory/pr-17", "main"]);
     process.env.FAKE_GH_PRS = JSON.stringify([{ number: 17, headRefName: "factory/x" }, { number: 18, headRefName: "feature/human" }]);
@@ -310,6 +437,26 @@ describe("scheduler", () => {
       expect(done).toHaveLength(5);
       const a = done.find((r) => r.runId === code1)!, b = done.find((r) => r.runId === code2)!;
       expect(new Date(b.startedAt).getTime()).toBeGreaterThanOrEqual(new Date(a.finishedAt!).getTime());
+    } finally {
+      gh.restore();
+    }
+  });
+
+  it("a queued job waits for an earlier queued job that holds its lock", async () => {
+    const gh = fakeGithub();
+    try {
+      const config = ConfigSchema.parse({ protected_branches: [], concurrency: 1 });
+      const s = new Scheduler({ runsDir: join(gh.tmp, "runs"), config: () => config });
+      const flow = parseFlow("name: t\nworkspace: empty\nsteps:\n  - {id: a, type: shell, run: sleep 1}");
+      const job = { kind: "run" as const, flow, task: "build it\nmore", repo: gh.tmp, vars: {} };
+      const a = s.submit(job, { lockKey: "a" });
+      const p1 = s.submit(job, { lockKey: "k" });
+      const p2 = s.submit(job, { lockKey: "k" });
+      const { pending } = s.queue();
+      expect(pending.find((p) => p.runId === p1)).toMatchObject({ waitingFor: undefined, task: "build it\nmore", repo: gh.tmp });
+      expect(pending.find((p) => p.runId === p2)!.waitingFor).toBe(p1);
+      expect(a).toBeTruthy();
+      await s.idle();
     } finally {
       gh.restore();
     }
