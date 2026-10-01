@@ -202,10 +202,12 @@ describe("watchDataHome", () => {
     process.env.FACTORY_SUPERVISED = "1";
     const exits: number[] = [];
     const logs: string[] = [];
-    const stop = watchDataHome({ idle: () => false, beforeExit: () => {}, log: (m) => logs.push(m), everyMs: 20, reason: () => "moved", exit: (c) => exits.push(c) });
+    let busy = 0;
+    const stop = watchDataHome({ idle: () => false, beforeExit: () => {}, log: (m) => logs.push(m), busy: () => busy++, everyMs: 20, reason: () => "moved", exit: (c) => exits.push(c) });
     await wait(120);
     stop();
     expect(logs).toHaveLength(1);
+    expect(busy).toBe(1);
     expect(exits).toEqual([]);
   });
 

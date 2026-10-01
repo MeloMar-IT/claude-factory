@@ -117,9 +117,16 @@ export class Scheduler {
 
   queue() {
     return {
-      pending: this.pending.map(({ runId, lockKey, repoLock, source, enqueuedAt, job }) => {
-        const blocker = [...this.active.values()].find((a) => (repoLock && a.queued.repoLock === repoLock) || (lockKey && a.queued.lockKey === lockKey));
-        return { runId, lockKey, repoLock, source, enqueuedAt, kind: job.kind, waitingFor: blocker?.queued.runId };
+      pending: this.pending.map(({ runId, lockKey, repoLock, source, enqueuedAt, job }, i) => {
+        const same = (q: QueuedJob) => (repoLock && q.repoLock === repoLock) || (lockKey && q.lockKey === lockKey);
+        // The lock owner: an active job, else an earlier job in the queue that holds the same lock.
+        const blocker = [...this.active.values()].find((a) => same(a.queued))?.queued ?? this.pending.slice(0, i).find(same);
+        const vars = job.kind === "run" ? job.vars : undefined;
+        return {
+          runId, lockKey, repoLock, source, enqueuedAt, kind: job.kind, waitingFor: blocker?.runId,
+          githubRepo: vars?.github_repo, issue: vars?.issue,
+          repo: job.kind === "run" ? job.repo : undefined, task: job.kind === "run" ? job.task : undefined,
+        };
       }),
       active: [...this.active.values()].map((a) => ({ runId: a.queued.runId, lockKey: a.queued.lockKey, repoLock: a.queued.repoLock, source: a.queued.source })),
       concurrency: this.o.config().concurrency,

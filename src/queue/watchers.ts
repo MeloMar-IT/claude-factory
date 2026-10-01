@@ -1,4 +1,5 @@
 import type { Config, WatcherConfig } from "../config.js";
+import type { RunSummary } from "../engine/state.js";
 import type { Scheduler } from "./scheduler.js";
 import { Watcher, type WatcherStatus } from "./watcher.js";
 
@@ -7,16 +8,27 @@ export interface WatcherManagerOptions {
   runsDir: string;
   repo: string;
   config: () => Config;
+  areaWait?: (run: RunSummary) => { runId: string; areas: string } | undefined;
   log: (msg: string) => void;
+}
+
+/** What a watcher tracks right now, for the next-step records. */
+export interface TrackedWatcher {
+  watcher: WatcherConfig;
+  status: WatcherStatus;
+  issues: Watcher["tracked"];
 }
 
 /** Keeps running watchers in line with config.watchers (start, stop, restart on change). */
 export class WatcherManager {
   private running = new Map<string, { watcher: Watcher; key: string }>();
+  /** Watchers stopped by stopAll() (a drain); read live so a tick still in flight shows up. */
+  private drained: Watcher[] = [];
 
   constructor(private o: WatcherManagerOptions) {}
 
   sync() {
+    this.drained = [];
     const wanted = new Map(this.o.config().watchers.filter((w) => w.enabled).map((w) => [w.id, w]));
     for (const [id, r] of this.running) {
       const cfg = wanted.get(id);
@@ -33,6 +45,7 @@ export class WatcherManager {
         runsDir: this.o.runsDir,
         repo: this.o.repo,
         dailyBudget: () => (this.o.config().cost_limits ? this.o.config().daily_budget_usd : undefined),
+        areaWait: this.o.areaWait,
         log: this.o.log,
       });
       this.running.set(id, { watcher, key: JSON.stringify(cfg) });
@@ -45,6 +58,12 @@ export class WatcherManager {
     return this.o.config().watchers.map((cfg) => ({ ...cfg, status: this.running.get(cfg.id)?.watcher.status }));
   }
 
+  /** Every watcher that runs, or (after stopAll) the ones that were stopped; status and issues are read live. */
+  tracked(): TrackedWatcher[] {
+    const list = this.running.size ? [...this.running.values()].map((r) => r.watcher) : this.drained;
+    return list.map((w) => ({ watcher: w.cfg, status: w.status, issues: w.tracked }));
+  }
+
   async runNow(id: string) {
     const r = this.running.get(id);
     if (!r) throw new Error(`watcher "${id}" is not running`);
@@ -53,6 +72,7 @@ export class WatcherManager {
   }
 
   stopAll() {
+    this.drained = [...this.running.values()].map((r) => r.watcher);
     for (const r of this.running.values()) r.watcher.stop();
     this.running.clear();
   }

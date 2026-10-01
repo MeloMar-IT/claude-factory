@@ -109,8 +109,13 @@ export function recordStep(step: Step, scope: Scope, engine: Engine, res: StepRe
   return rec;
 }
 
+/** Log file of the step that runs after `historyLength` finished steps. */
+export function stepLogFile(logsDir: string, historyLength: number, id: string): string {
+  return join(logsDir, `${String(historyLength + 1).padStart(3, "0")}-${id.replace(/\//g, "__")}.log`);
+}
+
 export function newLogFile(engine: Engine, id: string): string {
-  return join(engine.logsDir, `${String(engine.summary.history.length + 1).padStart(3, "0")}-${id.replace(/\//g, "__")}.log`);
+  return stepLogFile(engine.logsDir, engine.summary.history.length, id);
 }
 
 /** Execute a claude, shell, parallel or flow step (approvals are handled by the loop). */

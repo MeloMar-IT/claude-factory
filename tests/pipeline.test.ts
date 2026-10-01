@@ -5,6 +5,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { ConfigSchema, WatcherSchema } from "../src/config.js";
 import { runFlow } from "../src/engine/runner.js";
 import { loadFlow } from "../src/flow/load.js";
+import { nextStep } from "../src/next-step.js";
 import { Scheduler } from "../src/queue/scheduler.js";
 import { minutesNow, Watcher } from "../src/queue/watcher.js";
 import { claudeBin, fakeGithub } from "./helpers/fake-github.js";
@@ -117,7 +118,8 @@ describe("label-driven issue pipeline", () => {
     await settle();
     expect(runOf("issue-plan", "5")).toBeUndefined();
     expect(w.status.lastActions.join("\n")).toContain("#5 waits for #4");
-    expect(w.status.holds).toEqual([{ issue: 5, title: "Story 5 — Verify", reason: "waits for #4 to be done (Depends on)" }]);
+    expect(w.status.holds).toMatchObject([{ issue: 5, title: "Story 5 — Verify", next: { kind: "dependency", who: "Another story", until: "after #4" } }]);
+    expect(w.status.holds![0]!.reason).toContain("waits for #4");
     expect(runOf("issue-plan", "6")?.status).toBe("succeeded"); // #3 is not a known issue: not blocking
     // Story 4 is coded (Factory_done, not merged yet): now Story 5 can be planned.
     process.env.FAKE_GH_ISSUES = process.env.FAKE_GH_ISSUES.replace('"Factory_code"', '"Factory_done"');
@@ -178,6 +180,8 @@ describe("label-driven issue pipeline", () => {
     expect(log).toContain("🤖 **Spaghetti Code Foundry** could not finish this issue");
     expect(log).not.toContain("**claude-factory** could not finish");
     expect(log).toMatch(new RegExp(`could not finish this issue[\\s\\S]*<!-- claude-factory run=${run.runId} -->`));
+    expect(log).toContain("to start over, or resume the run");
+    expect(log).toContain(nextStep("failed", {}, { watched: true, failedLabel: "Factory_ERROR", reason: run.reason }).text);
     expect(log).toContain("Last failing step: `run_tests` (attempt 4)");
     expect(log).toContain("result: FAILED");
     expect(gh.remoteGit("branch", "--list", "factory/*").trim()).toBe(""); // nothing was pushed
@@ -223,7 +227,8 @@ describe("label-driven issue pipeline", () => {
     await settle();
     expect(runOf("issue-code-daily", "7")).toBeUndefined();
     expect(w.status.lastActions[0]).toContain("not starting new work while PR #99");
-    expect(w.status.holds).toMatchObject([{ issue: 7, reason: "waits until daily pull request #99 is merged" }]);
+    expect(w.status.holds).toMatchObject([{ issue: 7, next: { kind: "release", action: "Merge the daily pull request #99" } }]);
+    expect(w.status.holds).toHaveLength(1);
 
     // … and after the merge, work continues on a fresh branch for today.
     mergePr(`factory/daily-${today}`);

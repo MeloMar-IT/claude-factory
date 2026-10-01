@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -7,12 +7,13 @@ const port = 20000 + Math.floor(Math.random() * 20000);
 const base = `http://127.0.0.1:${port}`;
 let tmp: string;
 let close: () => void;
+let ctx: import("../src/server/server.js").ApiContext;
 
 beforeAll(async () => {
   tmp = mkdtempSync(join(tmpdir(), "factory-srv-"));
   process.env.FACTORY_HOME = join(tmp, "home"); // read at import time, so import afterwards
   const { startServer } = await import("../src/server/server.js");
-  ({ close } = await startServer({
+  ({ close, ctx } = await startServer({
     repo: join(tmp),
     runsDir: join(tmp, "runs"),
     port,
@@ -146,6 +147,122 @@ steps:
     const stats = (await (await json("GET", "/api/stats")).json()) as { totals: { runs: number }; byFlow: { flow: string }[] };
     expect(stats.totals.runs).toBeGreaterThanOrEqual(2);
     expect(stats.byFlow.map((f) => f.flow)).toContain("gated");
+  });
+
+  it("gives every run its next step, the same on the list and the run endpoint", async () => {
+    const flow = `name: gated2
+workspace: inplace
+steps:
+  - {id: gate, type: approval, message: "ok?"}
+`;
+    const { runId } = (await (await json("POST", "/api/runs", { yaml: flow, task: "t" })).json()) as { runId: string };
+    await waitFor(runId, "waiting");
+    type Next = { kind: string; who: string; text: string; where: { url: string } };
+    const one = (await (await json("GET", `/api/runs/${runId}`)).json()) as { next: Next };
+    const list = (await (await json("GET", "/api/runs")).json()) as { runId: string; next: Next }[];
+    const item = list.find((r) => r.runId === runId)!;
+    expect(one.next).toMatchObject({ kind: "approval", who: "You", where: { url: `#/runs/${runId}` } });
+    expect(item.next.text).toBe(one.next.text);
+    const all = (await (await json("GET", "/api/next")).json()) as { runs: (Next & { runId: string })[]; server: unknown[] };
+    expect(all.runs.find((r) => r.runId === runId)!.text).toBe(one.next.text);
+    expect(all.server).toEqual([]);
+    expect(list.every((r) => r.next)).toBe(true);
+  });
+
+  it("follows a queued run on the event stream and lists it before it has a run file", async () => {
+    const slow = `name: slow
+workspace: inplace
+steps:
+  - {id: wait, type: shell, run: "sleep 1"}
+`;
+    const vars = { github_repo: "acme/app", issue: "42" };
+    const a = (await (await json("POST", "/api/runs", { yaml: slow, task: "a", vars })).json()) as { runId: string };
+    const b = (await (await json("POST", "/api/runs", { yaml: slow, task: "b", vars })).json()) as { runId: string };
+    const all = (await (await json("GET", "/api/next")).json()) as { runs: { runId: string; kind: string; where: { url: string } }[] };
+    expect(all.runs.find((r) => r.runId === b.runId)).toMatchObject({ kind: "one_at_a_time", where: { url: `#/runs/${a.runId}` } });
+
+    const res = await fetch(`${base}/api/runs/${b.runId}/events`);
+    const reader = res.body!.getReader();
+    let text = "";
+    while (!text.includes('"status":"succeeded"')) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      text += new TextDecoder().decode(value);
+    }
+    await reader.cancel();
+    const kinds = [...text.matchAll(/"next":\{"kind":"(\w+)"/g)].map((m) => m[1]);
+    expect(kinds).toContain("running");
+    expect(kinds.at(-1)).toBe("done");
+  });
+
+  it("sends a new record on the event stream when a run starts waiting for a code area", async () => {
+    const flow = `name: areas
+workspace: inplace
+steps:
+  - {id: first, type: shell, run: "true"}
+  - {id: claim_areas, type: shell, run: "echo 'waiting for run r9 (src)'; sleep 5"}
+`;
+    const { runId } = (await (await json("POST", "/api/runs", { yaml: flow, task: "t" })).json()) as { runId: string };
+    const res = await fetch(`${base}/api/runs/${runId}/events`);
+    const reader = res.body!.getReader();
+    let text = "";
+    const stop = Date.now() + 15_000;
+    while (!text.includes('"kind":"area_lock"') && Date.now() < stop) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      text += new TextDecoder().decode(value);
+    }
+    await reader.cancel();
+    await json("POST", `/api/runs/${runId}/cancel`);
+    expect(text).toContain('"kind":"area_lock"');
+  });
+
+  it("reports a server that waits to restart", async () => {
+    ctx.restart = { why: "new_version", since: new Date().toISOString() };
+    try {
+      const all = (await (await json("GET", "/api/next")).json()) as { server: { kind: string; who: string }[] };
+      expect(all.server).toMatchObject([{ kind: "restart", who: "Foundry" }]);
+    } finally {
+      ctx.restart = undefined;
+    }
+  });
+
+  it("builds records from the watchers", async () => {
+    const { allNext, areaWait } = await import("../src/server/next.js");
+    const { ConfigSchema } = await import("../src/config.js");
+    const { nextStep } = await import("../src/next-step.js");
+    const cfg = ConfigSchema.parse({ watchers: [{ id: "a", github_repo: "acme/app" }, { id: "b", github_repo: "acme/app", label: "other" }] });
+    const hold = { reason: "x", next: nextStep("questions", { repo: "acme/app", issue: 3, title: "three" }, { watched: true, questions: 2 }), issue: 3 };
+    const prHold = { reason: "y", next: nextStep("release", { repo: "acme/app" }, { pr: { number: 9, url: "u" } }) };
+    const tracked = [
+      { watcher: cfg.watchers[0]!, status: { id: "a", lastActions: [], lastError: "gh down", holds: [hold, prHold] }, issues: [{ issue: 3, title: "three" }, { issue: 4, title: "four", done: true }] },
+      { watcher: cfg.watchers[1]!, status: { id: "b", lastActions: [] }, issues: [{ issue: 4, title: "four" }] },
+    ];
+    const stub = {
+      config: () => cfg,
+      scheduler: { list: () => [], queue: () => ({ pending: [], active: [] }) },
+      watchers: { tracked: () => tracked },
+    } as unknown as import("../src/server/server.js").ApiContext;
+    const out = allNext(stub);
+    expect(out.watchers.map((n) => n.kind).sort()).toEqual(["release", "watcher_error"]);
+    expect(out.watchers.find((n) => n.kind === "watcher_error")!.where.url).toBe("#/watchers");
+    expect(out.issues).toHaveLength(2); // #4 is tracked by two watchers: one record, the one that is not done
+    expect(out.issues.find((n) => n.issue === 3)!.text).toBe(hold.next.text);
+    expect(out.issues.find((n) => n.issue === 4)!.kind).toBe("starting");
+
+    stub.restart = { why: "data_folder", since: "x" };
+    expect(allNext(stub).issues.find((n) => n.issue === 4)!.kind).toBe("restart");
+
+    const dir = join(tmp, "arearun");
+    mkdirSync(join(dir, "logs"), { recursive: true });
+    const run = { status: "running", state: { next: "claim_areas" }, history: [], runDir: dir } as never;
+    const log = join(dir, "logs", "001-claim_areas.log");
+    writeFileSync(log, "waiting for run r1 (src)\n");
+    expect(areaWait(run)).toEqual({ runId: "r1", areas: "src" });
+    writeFileSync(log, "waiting for run r1 (src)\nLOCKED: src\n");
+    expect(areaWait(run)).toBeUndefined();
+    rmSync(log);
+    expect(areaWait(run)).toBeUndefined();
   });
 
   it("reads and validates config", async () => {

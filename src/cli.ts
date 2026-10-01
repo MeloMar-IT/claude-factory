@@ -280,11 +280,17 @@ async function main(argv: string[]): Promise<number> {
       restartOnNewBuild({
         distDir: dirname(fileURLToPath(import.meta.url)),
         idle,
-        drain: () => ctx.watchers.stopAll(), // watchers start again with the new version
+        drain: () => {
+          ctx.restart = { why: "new_version", since: new Date().toISOString() };
+          ctx.watchers.stopAll(); // watchers start again with the new version
+        },
         beforeExit,
         log,
       });
-      watchDataHome({ idle, beforeExit, log });
+      watchDataHome({ idle, beforeExit, log, busy: () => {
+        ctx.restart ??= { why: "data_folder", since: new Date().toISOString() };
+        ctx.watchers.stopAll(); // drain, as for a new version: start nothing new while the restart waits
+      } });
       return new Promise<number>(() => {}); // run until killed
     }
 

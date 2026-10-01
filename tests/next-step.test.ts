@@ -1,0 +1,265 @@
+import { describe, expect, it } from "vitest";
+import { WatcherSchema } from "../src/config.js";
+import type { RunSummary } from "../src/engine/state.js";
+import { countQuestions, nextStep, releaseAtFor, runNextStep, trackingWatcher, type NextKind, type NextStep } from "../src/next-step.js";
+
+const run = (over: Partial<RunSummary> = {}) =>
+  ({
+    runId: "r1", flow: "github-issue", task: "do it", status: "succeeded", startedAt: "2026-10-01T08:00:00Z", finishedAt: "2026-10-01T08:10:00Z",
+    vars: { github_repo: "acme/app", issue: "7" }, history: [], totalCostUsd: 0, state: { next: null, steps: {}, visits: {} },
+    runDir: "/tmp/none", ...over,
+  }) as unknown as RunSummary;
+
+const watched = { watched: true, failedLabel: "factory:failed" };
+const ISSUE = "https://github.com/acme/app/issues/7";
+
+describe("next-step records, one per kind", () => {
+  const base = { repo: "acme/app", issue: 7, title: "T", runId: "r1" };
+  const data = { watched: true, issueUrl: ISSUE, failedLabel: "factory:failed" };
+  const cases: [NextKind, Parameters<typeof nextStep>[2], string, string, string][] = [
+    ["questions", { ...data, questions: 3 }, "You", "Answer 3 questions", ISSUE],
+    ["planner_questions", data, "You", "Answer the questions", ISSUE],
+    ["approve_plan", data, "You", "Reply /approve or /reject", ISSUE],
+    ["approve_split", data, "You", "Reply /approve or /reject", ISSUE],
+    ["approval", { message: "Deploy now" }, "You", "Approve or reject it on the run page", "#/runs/r1"],
+    ["dependency", { ...data, blockers: [{ issue: 3 }] }, "Another story", "Nothing — it continues by itself", ISSUE],
+    ["one_at_a_time", { ...data, blockingRun: "r0" }, "Another story", "Nothing — it continues by itself", "#/runs/r0"],
+    ["area_lock", { areaWait: { runId: "r0", areas: "src" } }, "Another story", "Nothing — it continues by itself", "#/runs/r0"],
+    ["usage_limit", data, "A time limit", "Nothing — it continues by itself", ISSUE],
+    ["daily_budget", data, "A time limit", "Nothing — it continues by itself", ISSUE],
+    ["release", { ...data, pr: { number: 99, url: "https://github.com/acme/app/pull/99" } }, "You", "Merge the daily pull request #99", "https://github.com/acme/app/pull/99"],
+    ["failed", data, "Something is wrong", "Remove the `factory:failed` label to start over, or resume the run on its page to continue at the failed step", ISSUE],
+    ["restart", {}, "Foundry", "Nothing — it continues by itself", "#/watchers"],
+    ["watcher_error", { reason: "gh failed" }, "Something is wrong", "Check the watcher on the Watchers page", "#/watchers"],
+    ["running", data, "Foundry", "Nothing — it continues by itself", ISSUE],
+    ["queued", {}, "Foundry", "Nothing — it continues by itself", "#/runs/r1"],
+    ["checking", data, "Foundry", "Nothing — it continues by itself", ISSUE],
+    ["starting", data, "Foundry", "Nothing — it continues by itself", ISSUE],
+    ["interrupted", data, "Foundry", "Nothing — it continues by itself", ISSUE],
+    ["cancelled", data, "Foundry", "Nothing — it continues by itself", ISSUE],
+    ["stopped", {}, "You", "Look at the run and resume it", "#/runs/r1"],
+    ["superseded", {}, "Foundry", "Nothing — a newer run took over", "#/runs/r1"],
+    ["done", data, "Foundry", "Nothing — it is done", ISSUE],
+  ];
+  it.each(cases)("%s", (kind, d, who, action, url) => {
+    const n = nextStep(kind, base, d);
+    expect(n.kind).toBe(kind);
+    expect(n.who).toBe(who);
+    expect(n.action).toBe(action);
+    expect(n.where.url).toBe(url);
+    expect(n.user).toBe("");
+    expect(n).toMatchObject({ repo: "acme/app", issue: 7, title: "T", runId: "r1" });
+  });
+
+  it("has a kind in the table for every kind", () => {
+    expect(new Set(cases.map((c) => c[0])).size).toBe(23);
+  });
+
+  it("is one sentence for every kind, even with hard input", () => {
+    for (const [kind, d] of cases) {
+      const hard = { ...d, message: "Deploy now. Really?\nYes", reason: kind === "watcher_error" ? "a. b" : "step x failed: boom. More text" };
+      const n = nextStep(kind, base, hard);
+      expect(n.text, kind).toMatch(/^[^\n]+\.$/);
+      expect(n.text.slice(0, -1), kind).not.toMatch(/[.!?]\s/);
+    }
+  });
+
+  it("cuts failure reasons to the first sentence and drops amounts", () => {
+    expect(nextStep("failed", base, { reason: "step x failed: boom. More text" }).why).toBe("It failed: step x failed: boom");
+    const n = runNextStep(run({ status: "failed", reason: "run budget of $2 reached" }));
+    expect(n.why).toBe("It failed: run budget reached");
+    expect(n.text).not.toContain("$");
+  });
+
+  it("gives hints about what each reply does", () => {
+    expect(nextStep("questions", base, data).text).toContain("/defaults");
+    const plan = nextStep("approve_plan", base, data).text;
+    expect(plan).toContain("optionally with notes");
+    expect(plan).toContain("plans again");
+    expect(nextStep("approve_split", base, data).text).toContain("creates these issues and closes this one");
+  });
+
+  it("counts questions", () => {
+    expect(nextStep("questions", base, { questions: 1 }).action).toBe("Answer 1 question");
+    expect(nextStep("questions", base, {}).action).toBe("Answer the questions");
+    expect(countQuestions("Hi\n**Q1. A?**\n- x\n**Q2. B?**\n**Q3. C?**")).toBe(3);
+    expect(countQuestions(undefined)).toBe(0);
+  });
+
+  it("failed: unwatched runs resume on the run page", () => {
+    const n = nextStep("failed", base, { reason: "x" });
+    expect(n.action).toBe("Resume the run on its page");
+    expect(n.where.url).toBe("#/runs/r1");
+    expect(nextStep("failed", base, data).text).toContain("to start over, or resume the run");
+  });
+});
+
+describe("dependency chain", () => {
+  const base = { repo: "acme/app", issue: 89 };
+  const dep = (blockers: { issue: number; next?: NextStep }[]) => nextStep("dependency", base, { watched: true, blockers });
+  it("describes what the blocker does", () => {
+    const running = nextStep("running", { issue: 88 });
+    expect(dep([{ issue: 88, next: running }]).text).toMatch(/^#89 waits for #88, which is being worked on — /);
+    expect(dep([{ issue: 88, next: running }]).until).toBe("after #88");
+  });
+  it("follows the chain", () => {
+    const inner = nextStep("running", { issue: 87 });
+    const mid = dep([{ issue: 87, next: inner }]);
+    const n = nextStep("dependency", { issue: 89 }, { blockers: [{ issue: 88, next: { ...mid, issue: 88 } }] });
+    expect(n.why).toBe("#89 waits for #88, which waits for #87, which is being worked on");
+  });
+  it("says to be done for a blocker without a record, and skips done ones", () => {
+    expect(dep([{ issue: 88 }]).why).toBe("#89 waits for #88, which is to be done");
+    expect(dep([{ issue: 88, next: nextStep("done", { issue: 88 }) }]).why).toBe("#89 waits for #88");
+  });
+  it("uses the bracket form for two blockers", () => {
+    expect(dep([{ issue: 87 }, { issue: 88 }]).why).toBe("#89 waits for #87, #88 (to be done first)");
+  });
+  it("keeps each blocker's own state and lists all of them in until", () => {
+    const n = dep([{ issue: 87, next: nextStep("running", { issue: 87 }) }, { issue: 88, next: nextStep("failed", { issue: 88 }, { reason: "x" }) }]);
+    expect(n.why).toBe("#89 waits for #87, which is being worked on and #88, which failed");
+    expect(n.until).toBe("after #87, #88");
+  });
+  it("a local run keeps its repository", () => {
+    expect(runNextStep(run({ vars: {}, repo: "/work/app" })).repo).toBe("/work/app");
+  });
+  it("shows a decision of a blocker", () => {
+    const b = runNextStep(run({ status: "waiting", waiting: { stepId: "approve_plan", message: "m", since: "x" } }), { title: "x" });
+    expect(dep([{ issue: 4, next: b }]).why).toContain("which waits for your decision on its risky plan");
+  });
+});
+
+describe("until", () => {
+  const limited = (reason: string, now = "2026-10-01T08:20:00Z") =>
+    runNextStep(run({ status: "stopped", reason }), { ...watched, now: new Date(now), timeZone: "UTC" });
+  it("usage limit: the reset time from the message", () => {
+    const n = limited("usage limit reached: You've hit your limit · resets 3:50pm (Europe/Amsterdam) — continues automatically after the limit resets (or resume it)");
+    expect(n.kind).toBe("usage_limit");
+    expect(n.until).toBe("3:50pm (Europe/Amsterdam)");
+  });
+  it("usage limit: 30 minutes after it stopped, or the next check when due", () => {
+    expect(limited("usage limit reached: busy").until).toBe("08:40");
+    expect(limited("usage limit reached: busy", "2026-10-01T09:00:00Z").until).toBe("the next check");
+  });
+  it("daily budget: tomorrow, no amount", () => {
+    const n = limited("daily budget of $5 reached — resume tomorrow");
+    expect(n.kind).toBe("daily_budget");
+    expect(n.until).toBe("tomorrow");
+    expect(n.text).not.toContain("$");
+  });
+  it("finished work waits for the release", () => {
+    const n = runNextStep(run(), { ...watched, releaseAt: "17:00" });
+    expect(n).toMatchObject({ kind: "release", who: "Foundry", until: "17:00 release", action: "Nothing — it ships with the 17:00 release" });
+    expect(n.text).toMatch(/^[^\n]+\.$/);
+    expect(runNextStep(run(), watched).kind).toBe("done");
+    expect(runNextStep(run(), watched).until).toBeUndefined();
+  });
+});
+
+describe("runNextStep", () => {
+  it("classifies real reason strings", () => {
+    const k = (over: Partial<RunSummary>) => runNextStep(run(over), watched).kind;
+    expect(k({ status: "stopped", reason: 'stopped at step "wait_for_merge" — needs attention' })).toBe("release");
+    expect(k({ status: "stopped", reason: 'stopped at step "build/wait_for_merge" — needs attention' })).toBe("release");
+    expect(k({ status: "stopped", reason: 'stopped at step "send_back" — needs attention' })).toBe("planner_questions");
+    expect(k({ status: "stopped", reason: 'stopped at step "ask_for_info" — needs attention' })).toBe("planner_questions");
+    expect(k({ status: "stopped", reason: 'stopped at step "approve" — needs attention' })).toBe("stopped");
+    expect(k({ status: "failed", reason: "interrupted — resume it to continue" })).toBe("interrupted");
+    expect(k({ status: "failed", reason: "run budget of $2 reached" })).toBe("failed");
+    expect(k({ status: "failed", reason: 'step "x" failed: exit code 1' })).toBe("failed");
+    expect(k({ status: "cancelled" })).toBe("cancelled");
+    expect(k({ status: "running" })).toBe("running");
+  });
+  it("tells approval steps apart", () => {
+    const k = (stepId: string) => runNextStep(run({ status: "waiting", waiting: { stepId, message: "ok", since: "x" } }), watched).kind;
+    expect(k("approve_plan")).toBe("approve_plan");
+    expect(k("approve_split")).toBe("approve_split");
+    expect(k("gate")).toBe("approval");
+  });
+  it("links the run page for runs that are not watched", () => {
+    const n = runNextStep(run({ status: "waiting", waiting: { stepId: "gate", message: "ok", since: "x" } }));
+    expect(n.where.url).toBe("#/runs/r1");
+    expect(n.text).toContain("approve or reject it on the run page");
+  });
+  it("uses the issue link for watched runs", () => {
+    expect(runNextStep(run({ status: "failed", reason: "x" }), watched).where.url).toBe(ISSUE);
+  });
+  it("a queued resume names the blocker, or just waits", () => {
+    const a = runNextStep(run({ status: "stopped" }), { queued: { waitingFor: "r0" } });
+    expect(a.kind).toBe("one_at_a_time");
+    expect(a.where.url).toBe("#/runs/r0");
+    expect(runNextStep(run({ status: "stopped" }), { queued: {} }).kind).toBe("queued");
+  });
+  it("a superseded stopped run needs nobody; a succeeded one stays done", () => {
+    const a = runNextStep(run({ status: "stopped", reason: "stopped at step \"approve\"" }), { superseded: true });
+    expect(a.kind).toBe("superseded");
+    expect(a.who).toBe("Foundry");
+    expect(a.action.startsWith("Nothing")).toBe(true);
+    expect(runNextStep(run(), { superseded: true }).kind).toBe("done");
+  });
+  it("does not throw on a bare run", () => {
+    const bare = { runId: "x", status: "stopped", reason: "boom" } as unknown as RunSummary;
+    expect(() => runNextStep(bare)).not.toThrow();
+    expect(() => releaseAtFor([], { ...bare, status: "succeeded" } as RunSummary)).not.toThrow();
+  });
+});
+
+describe("releaseAtFor and trackingWatcher", () => {
+  const w = (over: Record<string, unknown>) => WatcherSchema.parse({ id: "x", github_repo: "acme/app", task: "t", ...over });
+  const steps = (...ids: string[]) => ids.map((id) => ({ id, ok: true })) as unknown as RunSummary["history"];
+  const releaseDaily = w({ id: "rel", source: "schedule", flow: "release-daily", at: "17:00" });
+  const dailyPr = w({ id: "pr", source: "schedule", flow: "daily-pr", at: "16:30" });
+
+  it("pairs push_develop with release-daily", () => {
+    expect(releaseAtFor([releaseDaily], run({ history: steps("push_develop") }))).toBe("17:00");
+  });
+  it("pairs daily_branch + push with daily-pr", () => {
+    expect(releaseAtFor([dailyPr], run({ history: steps("daily_branch", "push") }))).toBe("16:30");
+  });
+  it("does not guess from a plain push or the wrong pair", () => {
+    expect(releaseAtFor([releaseDaily, dailyPr], run({ history: steps("push") }))).toBeUndefined();
+    expect(releaseAtFor([dailyPr], run({ history: steps("push_develop") }))).toBeUndefined();
+  });
+  it("a later failed release still waits; a succeeded one does not", () => {
+    const r = run({ history: steps("push_develop") });
+    const rel = (status: string) => run({ runId: "rel1", flow: "release-daily", status: status as RunSummary["status"], startedAt: "2026-10-01T17:00:00Z" });
+    expect(releaseAtFor([releaseDaily], r, [rel("failed")])).toBe("17:00");
+    const after = releaseAtFor([releaseDaily], r, [rel("succeeded")]);
+    expect(after).toBeUndefined();
+    expect(runNextStep(r, { ...watched, releaseAt: after }).kind).toBe("done");
+  });
+  it("ignores disabled watchers and watchers without a time", () => {
+    const r = run({ history: steps("push_develop") });
+    expect(releaseAtFor([{ ...releaseDaily, enabled: false }], r)).toBeUndefined();
+    expect(releaseAtFor([w({ source: "schedule", flow: "release-daily" })], r)).toBeUndefined();
+  });
+  it("a release that began before the work finished did not cover it", () => {
+    const r = run({ history: steps("push_develop"), startedAt: "2026-10-01T16:00:00Z", finishedAt: "2026-10-01T17:30:00Z" });
+    const rel = run({ runId: "rel1", flow: "release-daily", startedAt: "2026-10-01T17:00:00Z" });
+    expect(releaseAtFor([releaseDaily], r, [rel])).toBe("17:00");
+  });
+  it("trackingWatcher skips disabled watchers and other trigger labels", () => {
+    const a = w({ id: "a", flow: "github-issue", label: "one", enabled: false });
+    const b = w({ id: "b", flow: "github-issue", label: "two" });
+    const c = w({ id: "c", flow: "github-issue", label: "one" });
+    const r = run({ vars: { github_repo: "acme/app", issue: "7", trigger_label: "one" } });
+    expect(trackingWatcher([a, b, c], r)?.id).toBe("c");
+  });
+  it("unwatched plan and split approvals point to the run page, not to comments", () => {
+    for (const k of ["approve_plan", "approve_split"] as const) {
+      const n = nextStep(k, { runId: "r1" }, {});
+      expect(n.action).toBe("Approve or reject it on the run page");
+      expect(n.text).not.toContain("/approve");
+      expect(n.where.url).toBe("#/runs/r1");
+    }
+  });
+  it("trackingWatcher matches source, repo and flow", () => {
+    const issues = w({ id: "i", flow: "github-issue" });
+    const r = run();
+    expect(trackingWatcher([issues], r)?.id).toBe("i");
+    expect(trackingWatcher([w({ id: "o", github_repo: "x/y" })], r)).toBeUndefined();
+    expect(trackingWatcher([w({ id: "o", flow: "issue-plan" })], r)).toBeUndefined();
+    expect(trackingWatcher([w({ id: "s", source: "schedule" })], r)).toBeUndefined();
+    expect(trackingWatcher([issues], run({ vars: { github_repo: "acme/app" } }))).toBeUndefined();
+  });
+});
