@@ -42,7 +42,7 @@ export function cardView(card, repo, { lit, onChain, onLeave }) {
       : null,
     !own && n.where?.label ? h("div", { onClick: (e) => e?.stopPropagation?.() }, whereLink(n.where)) : null,
     card.chain.length
-      ? h("button", { class: "ghost small", onClick: (e) => { e?.stopPropagation?.(); onChain(card.issue); } }, `What holds back #${card.issue}?`)
+      ? h("button", { class: "ghost small", onClick: (e) => { e?.stopPropagation?.(); onChain(card.issue); } }, `What is in the way of #${card.issue}?`)
       : null);
 }
 
@@ -63,7 +63,7 @@ export function boardView(data, wanted, { highlight, onChain, onClear, onLeave }
   const handlers = { lit, onChain, onLeave };
   const chainLine = target
     ? h("div", { class: "board-chain" },
-      `Holds back #${target.issue}:`,
+      `In the way of #${target.issue}:`,
       ...target.chain.flatMap((i) => [" ", issueLink(picked.repo, i, () => onLeave(target))]),
       " ", h("button", { class: "small", onClick: () => onClear() }, "Show all"))
     : null;

@@ -57,7 +57,7 @@ describe("boardView", () => {
     const heads = root.all("h3").map((e) => e.textContent);
     expect(heads).toEqual(TITLES.map((t) => (t === "Waiting for another story" ? `${t} 1` : `${t} 0`)));
     const text = cardEl(root)[0]!.textContent;
-    for (const s of ["#89", "Eighty-nine", "after #88", "What holds back #89?"]) expect(text).toContain(s);
+    for (const s of ["#89", "Eighty-nine", "after #88", "What is in the way of #89?"]) expect(text).toContain(s);
     expect(text).toContain(card().next.text);
   });
 
@@ -136,7 +136,7 @@ describe("cards", () => {
     gh.listeners.click![0]!({ stopPropagation: stop });
     expect(stop).toHaveBeenCalled();
     expect(h.onLeave).toHaveBeenCalledWith(expect.objectContaining({ issue: 89, watcher: "w1" }));
-    const btn = root.all("button").find((b) => b.textContent === "What holds back #89?")!;
+    const btn = root.all("button").find((b) => b.textContent === "What is in the way of #89?")!;
     btn.listeners.click![0]!({ stopPropagation: stop });
     expect(stop).toHaveBeenCalledTimes(2);
     expect(h.onChain).toHaveBeenCalledWith(89);
@@ -160,7 +160,7 @@ describe("highlight", () => {
     const byIssue = Object.fromEntries(cardEl(root).map((e) => [e.textContent.match(/#(\d+)/)![1], e.attrs.class]));
     expect(byIssue).toEqual({ 89: "board-card link chain", 88: "board-card link chain", 90: "board-card link dim" });
     const line = find(root, "div", "board-chain")[0]!;
-    expect(line.textContent).toContain("Holds back #89:");
+    expect(line.textContent).toContain("In the way of #89:");
     expect(line.all("a").map((a) => a.attrs.href)).toEqual(["https://github.com/acme/app/issues/88", "https://github.com/acme/app/issues/87"]);
     line.all("button").find((b) => b.textContent === "Show all")!.listeners.click![0]!();
     expect(h.onClear).toHaveBeenCalled();
@@ -238,12 +238,12 @@ describe("renderBoard", () => {
     const cleanup = ui.renderBoard(m, undefined);
     calls.shift()!.answer(board());
     await flush();
-    m.all("button").find((b) => b.textContent === "What holds back #89?")!.listeners.click![0]!();
-    expect(m.textContent).toContain("Holds back #89:");
+    m.all("button").find((b) => b.textContent === "What is in the way of #89?")!.listeners.click![0]!();
+    expect(m.textContent).toContain("In the way of #89:");
     await vi.advanceTimersByTimeAsync(5000);
     calls.shift()!.answer(board([]));
     await flush();
-    expect(m.textContent).not.toContain("Holds back");
+    expect(m.textContent).not.toContain("In the way of");
     cleanup();
   });
 
