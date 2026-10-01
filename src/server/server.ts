@@ -12,6 +12,7 @@ import { flowRoutes } from "./api-flows.js";
 import { runRoutes } from "./api-runs.js";
 import { HttpError, send, serveStatic } from "./http.js";
 import { areaWait, nextRoutes, type RestartState } from "./next.js";
+import { TurnNotifier } from "./notifier.js";
 import { yourTurnRoutes } from "./your-turn.js";
 
 const UI_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../../ui");
@@ -42,7 +43,7 @@ export type Route = (ctx: ApiContext, req: IncomingMessage, res: ServerResponse,
 
 const ROUTES: Route[] = [adminRoutes, flowRoutes, runRoutes, nextRoutes, yourTurnRoutes];
 
-export async function startServer(opts: ServerOptions): Promise<{ url: string; close: () => void; ctx: ApiContext }> {
+export async function startServer(opts: ServerOptions): Promise<{ url: string; close: () => void; ctx: ApiContext; notifier?: TurnNotifier }> {
   const log = opts.log ?? (() => {});
   let config = loadConfig();
   const scheduler = new Scheduler({
@@ -90,10 +91,17 @@ export async function startServer(opts: ServerOptions): Promise<{ url: string; c
     server.listen(opts.port, "127.0.0.1", () => ok());
   });
   if (opts.watchers !== false) watchers.sync();
+  let notifier: TurnNotifier | undefined;
+  if (process.env.FACTORY_NO_NOTIFY !== "1") {
+    notifier = new TurnNotifier(ctx, { baseUrl: `http://localhost:${opts.port}`, log });
+    notifier.start();
+  }
   return {
     url: `http://localhost:${opts.port}`,
     ctx,
+    notifier,
     close: () => {
+      notifier?.stop();
       watchers.stopAll();
       server.close();
     },

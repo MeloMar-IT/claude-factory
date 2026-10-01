@@ -57,6 +57,8 @@ const WatcherSchema = z
   .refine((w) => w.source !== "schedule" || !!w.task?.trim(), { message: "a schedule watcher needs a task", path: ["task"] })
   .refine((w) => !w.timezone || validTimeZone(w.timezone), { message: "unknown time zone (use e.g. Europe/Berlin)", path: ["timezone"] });
 
+const clock = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "HH:MM");
+
 function validTimeZone(tz: string): boolean {
   try {
     new Intl.DateTimeFormat("en", { timeZone: tz });
@@ -138,8 +140,16 @@ export const ConfigSchema = z
         slack_webhook: z.string().url().optional(),
         /** Shell command run with FACTORY_EVENT, FACTORY_RUN_ID, FACTORY_STATUS, FACTORY_MESSAGE in env. */
         command: z.string().optional(),
-        /** Which run outcomes notify. */
+        /** Which run outcomes run the command (macOS and Slack tell only what waits for you). */
         on: z.array(z.enum(["succeeded", "failed", "stopped", "waiting", "cancelled"])).default(["succeeded", "failed", "stopped", "waiting"]),
+        /** Also tell when a run succeeds. */
+        successes: z.boolean().default(false),
+        /** At most one notification in this many minutes. */
+        throttle_minutes: z.number().int().min(1).default(5),
+        /** No notifications between these times ("HH:MM", this machine's clock; may cross midnight). */
+        quiet_hours: z.object({ from: clock, to: clock }).strict().optional(),
+        /** "HH:MM": send a short summary once a day. */
+        daily_summary_at: clock.optional(),
       })
       .strict()
       .prefault({}),

@@ -404,24 +404,30 @@ steps:
     expect(l.endsWith("resume the run on its page.")).toBe(true);
   });
 
-  it("notifications are titled Foundry · flow status", async () => {
+  it("notifyRun does not post to Slack, but still runs the command", async () => {
     const s = await start("name: t\nworkspace: inplace\nsteps:\n  - {id: a, type: shell, run: 'true'}\n");
-    let body = "";
+    let posts = 0;
     const server = createServer((req, res) => {
-      req.on("data", (c) => (body += c));
-      req.on("end", () => res.end("ok"));
+      posts++;
+      res.end("ok");
     });
     await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
     const port = (server.address() as { port: number }).port;
+    const out = join(tmp, "cmd");
     const saved = process.env.FACTORY_NO_NOTIFY;
     delete process.env.FACTORY_NO_NOTIFY;
     try {
-      await notifyRun(baseConfig({ notify: { macos: false, slack_webhook: `http://127.0.0.1:${port}/hook` } }), s);
+      const slack_webhook = `http://127.0.0.1:${port}/hook`;
+      await notifyRun(baseConfig({ notify: { macos: false, slack_webhook } }), s);
+      await notifyRun(baseConfig({ notify: { macos: false, slack_webhook } }), { ...s, status: "failed" } as typeof s);
+      expect(posts).toBe(0);
+      await notifyRun(baseConfig({ notify: { macos: false, slack_webhook, command: `printf ran > ${out}` } }), s);
+      expect(posts).toBe(0);
+      expect(readFileSync(out, "utf8")).toBe("ran");
     } finally {
       process.env.FACTORY_NO_NOTIFY = saved;
       server.close();
     }
-    expect(JSON.parse(body).text.startsWith("*Foundry · t succeeded*\n")).toBe(true);
   });
 
   it("names the product when a run is too old to resume", async () => {

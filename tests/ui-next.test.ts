@@ -111,6 +111,32 @@ describe("ui/next.js renderer", () => {
   });
 });
 
+describe("notifyFrom (Settings)", () => {
+  const base = { macos: true, slack: "", command: "", on: ["failed"], successes: false, throttle: "", quietFrom: "", quietTo: "", summaryAt: "" };
+  let notifyFrom: (v: unknown) => any;
+  beforeAll(async () => {
+    notifyFrom = (await import("../ui/admin.js" as string)).notifyFrom;
+  });
+
+  it("builds quiet hours only from both times", () => {
+    expect(notifyFrom({ ...base, quietFrom: "22:00", quietTo: "07:00" }).quiet_hours).toEqual({ from: "22:00", to: "07:00" });
+    expect(notifyFrom({ ...base, quietFrom: "22:00" }).quiet_hours).toBeUndefined();
+  });
+  it("leaves out an empty summary time", () => {
+    expect(notifyFrom(base).daily_summary_at).toBeUndefined();
+    expect(notifyFrom({ ...base, summaryAt: "09:00" }).daily_summary_at).toBe("09:00");
+  });
+  it("defaults the throttle to 5 and keeps 0", () => {
+    expect(notifyFrom(base).throttle_minutes).toBe(5);
+    expect(notifyFrom({ ...base, throttle: "0" }).throttle_minutes).toBe(0);
+  });
+  it("passes the other values through", () => {
+    expect(notifyFrom({ ...base, successes: true, slack: " https://h/x ", command: "say hi" })).toMatchObject({
+      macos: true, successes: true, slack_webhook: "https://h/x", command: "say hi", on: ["failed"],
+    });
+  });
+});
+
 describe("the changed UI modules", () => {
   it("load", async () => {
     const dashboard = await import("../ui/dashboard.js" as string);

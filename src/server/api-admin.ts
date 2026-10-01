@@ -3,6 +3,7 @@ import { CONFIG_PATH, saveConfig } from "../config.js";
 import { spentToday } from "../engine/state.js";
 import { cleanRuns } from "../clean.js";
 import { listEvalReports } from "../evals.js";
+import { clickThrough } from "../notify.js";
 import { computeStats } from "../stats.js";
 import { HttpError, readJson, send } from "./http.js";
 import { watchersWithNext } from "./next.js";
@@ -20,6 +21,7 @@ export const adminRoutes: Route = async (ctx, req, res, seg, method) => {
       spentToday: spentToday(opts.runsDir),
       dailyBudget: config.cost_limits ? config.daily_budget_usd : undefined,
       costLimits: config.cost_limits,
+      clickThrough: process.platform === "darwin" ? clickThrough() : undefined,
     }), true;
   }
 

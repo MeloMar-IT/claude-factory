@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import type { RunSummary } from "../engine/state.js";
 import { FACTORY_HOME } from "../flow/load.js";
 import { releaseWatchersFor, trackingWatcher, type NextStep } from "../next-step.js";
-import { buildTurn, runOrigin, soonestAt, type ReleaseTime, type TurnSource, type YourTurn } from "../your-turn.js";
+import { buildTurn, runOrigin, soonest, type ReleaseTime, type TurnSource, type YourTurn } from "../your-turn.js";
 import { HttpError, readJson, send, str } from "./http.js";
 import { collectNext, runSince, type Entry } from "./next.js";
 import type { ApiContext, Route } from "./server.js";
@@ -117,7 +117,8 @@ export function turnFor(ctx: ApiContext, now = new Date()) {
     for (const w of releaseWatchersFor(cfg.watchers, r)) if (w.at) times.push({ at: w.at, timezone: w.timezone });
   }
 
-  return buildTurn(sources, { dismissed: readStore(), building: stories.size, releaseAt: soonestAt(times, now) });
+  const release = soonest(times, now);
+  return { ...buildTurn(sources, { dismissed: readStore(), building: stories.size, releaseAt: release?.at }), building: stories.size, release };
 }
 
 export function yourTurn(ctx: ApiContext): YourTurn {
