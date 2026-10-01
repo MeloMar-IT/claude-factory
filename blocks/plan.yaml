@@ -36,7 +36,7 @@ steps:
       printf '%s\n' "$out" | grep -Eq '^(PLAN_STATUS|ROUTE): NEEDS_INFO' || { echo "planning failed (no questions to ask)"; exit 1; }
       { echo "🤖 **Spaghetti Code Foundry** needs more information before it can work on this ticket:"; echo
         printf '%s\n' "$out" | sed -E '/^(PLAN_STATUS|ROUTE):/d'
-        echo; echo "_Reply on this issue; the Foundry continues once you answer._"
+        echo; echo "_${FACTORY_NEXT_PLANNER_QUESTIONS}_"
         echo; echo "<!-- claude-factory run=$FACTORY_RUN_ID -->"; } \
         | gh issue comment "$FACTORY_VAR_ISSUE" --repo "$FACTORY_VAR_GITHUB_REPO" --body-file -
     on_success: stop

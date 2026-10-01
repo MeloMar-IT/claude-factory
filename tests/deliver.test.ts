@@ -9,7 +9,8 @@ import { loadFlow, parseFlow } from "../src/flow/load.js";
 import { Scheduler } from "../src/queue/scheduler.js";
 import { Watcher } from "../src/queue/watcher.js";
 import { buildStamp, RESTART_CODE, supervise } from "../src/supervise.js";
-import { claudeBin, fakeGithub } from "./helpers/fake-github.js";
+import { commentText, runNextStep } from "../src/next-step.js";
+import { claudeBin, closing, fakeGithub } from "./helpers/fake-github.js";
 
 // The simpler pipeline: one label (Factory_go) → questions up front → plan + risk gate + code in one
 // run → one rolling factory PR with a daily report.
@@ -99,6 +100,10 @@ describe("deliver pipeline", () => {
     expect(run.history.some((h) => h.id === "implement")).toBe(false);
     expect(gh.ghLog()).toContain("A human decides before coding starts:** the risk score is above 75");
     expect(gh.ghLog()).toMatch(/gh issue edit 5 .*--add-label Factory_waiting/);
+    const planNext = runNextStep(run, { watched: true });
+    expect(planNext.kind).toBe("approve_plan");
+    expect(closing(gh.comments().find((c) => c.body.includes("A human decides"))!.body)).toEqual([`_${planNext.text}_`, `<!-- claude-factory run=${run.runId} approval -->`]);
+    expect(planNext.text).toBe(commentText("approve_plan"));
 
     issues([5, ["Factory_go", "Factory_waiting"]]);
     const request = { author: { login: "bot" }, body: `plan <!-- claude-factory run=${run.runId} approval -->`, createdAt: "2026-01-01T00:00:00Z" };
@@ -200,6 +205,11 @@ describe("deliver pipeline", () => {
     expect(run.status).toBe("waiting");
     expect(gh.ghLog()).toContain("split risk: 70/100");
     expect(gh.ghLog()).not.toContain("created issue");
+    expect(gh.ghLog()).toContain("✋ **You decide** (the split risk is 70/100 (above 50)).");
+    const splitNext = runNextStep(run, { watched: true });
+    expect(splitNext.kind).toBe("approve_split");
+    expect(closing(gh.comments().find((c) => c.body.includes("split risk: 70/100"))!.body)).toEqual([`_${splitNext.text}_`, `<!-- claude-factory run=${run.runId} approval -->`]);
+    expect(splitNext.text).toBe(commentText("approve_split"));
     issues([5, ["Factory_go", "Factory_waiting"]]);
     const request = { author: { login: "bot" }, body: `split <!-- claude-factory run=${run.runId} approval -->`, createdAt: "2026-01-01T00:00:00Z" };
     process.env.FAKE_GH_COMMENTS = JSON.stringify({ comments: [request, { author: { login: "marcel" }, body: "/approve", createdAt: "2026-01-01T01:00:00Z" }] });
@@ -283,6 +293,8 @@ describe("deliver pipeline", () => {
       url: "https://github.com/acme/app/issues/6",
     }]);
     expect(w.status.holds![0]!.reason).toContain("/defaults");
+    const asked = gh.comments().find((c) => c.issue === 6 && c.body.includes("has questions before it builds"))!;
+    expect(closing(asked.body)).toEqual([`_${commentText("questions")}_`, expect.stringMatching(/^<!-- claude-factory run=\S+ questions -->$/)]);
 
     // A bot comment with only the new marker is not an answer.
     process.env.FAKE_GH_COMMENTS = JSON.stringify({ comments: [

@@ -338,6 +338,21 @@ export function nextStep(kind: NextKind, base: NextBase = {}, d: NextData = {}):
   };
 }
 
+/** The reasons a flow asks for in a comment on the issue. */
+export type CommentKind = Extract<NextKind, "questions" | "planner_questions" | "approve_plan" | "approve_split" | "approval">;
+export const COMMENT_KINDS: readonly CommentKind[] = ["questions", "planner_questions", "approve_plan", "approve_split", "approval"];
+
+/** The sentence a Foundry comment on an issue ends with: the record's text for an issue that is answered on GitHub, without per-run details (number of questions, approval message). */
+export function commentText(kind: CommentKind): string {
+  // issueUrl is set only so "approval" does not fall back to "on the run page"; it never appears in text.
+  return nextStep(kind, {}, { watched: true, issueUrl: "issue" }).text;
+}
+
+/** Step environment: FACTORY_NEXT_<KIND> for every comment kind, e.g. FACTORY_NEXT_APPROVE_PLAN. */
+export function nextStepEnv(): Record<string, string> {
+  return Object.fromEntries(COMMENT_KINDS.map((k) => [`FACTORY_NEXT_${k.toUpperCase()}`, commentText(k)]));
+}
+
 /** Last "stopped at step" id of a reason, without sub-flow prefix. */
 function stoppedStep(reason: string | undefined): string | undefined {
   const m = /stopped at step "((?:[\w-]+\/)*)([\w-]+)"/.exec(reason ?? "");

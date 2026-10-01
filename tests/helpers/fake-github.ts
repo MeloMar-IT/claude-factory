@@ -40,6 +40,9 @@ export function fakeGithub() {
     tmp,
     remote,
     ghLog: () => readFileSync(ghLog, "utf8"),
+    /** Every comment the fake gh logged (up to its hidden marker). */
+    comments: () =>
+      [...readFileSync(ghLog, "utf8").matchAll(/^--- comment on #(\d+):\n([\s\S]*?<!-- claude-factory[^>]*-->)/gm)].map((m) => ({ issue: Number(m[1]), body: m[2]! })),
     remoteGit: (...a: string[]) => git(remote, ...a),
     restore: () => {
       process.env = { ...env };
@@ -47,3 +50,6 @@ export function fakeGithub() {
     },
   };
 }
+
+/** The last two non-empty lines of a comment: its closing sentence and its hidden marker. */
+export const closing = (body: string) => body.split("\n").filter((l) => l.trim()).slice(-2);

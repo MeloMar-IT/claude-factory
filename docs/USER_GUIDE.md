@@ -226,7 +226,7 @@ In **agent prompts** you can use:
 **Shell commands** may only template trusted values (`{{vars.*}}`, `{{workdir}}`, `{{run.*}}`).
 Task text and step outputs could contain anything, so shell steps read them from environment
 variables instead: `$FACTORY_TASK`, `$FACTORY_OUT_<STEP_ID>`, `$FACTORY_VAR_<NAME>`,
-`$FACTORY_RUN_ID`, `$FACTORY_BRANCH` (also as `$SCF_…`).
+`$FACTORY_RUN_ID`, `$FACTORY_BRANCH`, `$FACTORY_NEXT_<REASON>` (also as `$SCF_…`).
 
 An agent step can **continue the session** of an earlier agent step ("Continue session of"), so
 it remembers the conversation.
@@ -441,9 +441,10 @@ Every plan gets a score from 0 to 100 from Opus, and Codex gives its own; the hi
 | **76–100** | security or trust (signing, secrets, auth), installing/updating/deleting software or user data, irreversible steps, privacy — or assumptions the planner couldn't verify |
 
 **Above 75 a human decides:** the plan is posted with the score and the reason, and the run waits
-(label `Factory_waiting`). Reply **`/approve`** (optionally with notes for the coder) to start
-coding, or **`/reject` followed by what to change** — it then plans again with your feedback. Only
-people with write access to the repository can approve. (The threshold is the `risk_threshold`
+(label `Factory_waiting`). The comment ends with: "The plan is risky and waits for your decision —
+reply /approve to start coding (optionally with notes), or /reject followed by what to change — it
+then plans again." Your feedback goes into the new plan. Only people with write access to the
+repository can approve. (The threshold is the `risk_threshold`
 variable, default 75.)
 
 #### Issues that are too big
@@ -458,7 +459,9 @@ reinterpreting scope, or anything that needs your decision, is high).
   in order — comments the list on the original and closes it. The new issues then go through the
   questions check and are built like any other.
 - **Above 50**, or the issue has `Factory_review_plan`: the split is posted on the issue and waits
-  (`Factory_waiting`). Reply **/approve** and it creates the issues, or **/reject** + what to change.
+  (`Factory_waiting`). The comment ends with: "The issue is split into smaller ones and waits for
+  your decision — reply /approve and the Foundry creates these issues and closes this one, or
+  /reject followed by what to change."
 - **You already agreed** to a split in a comment ("split it"): it creates the issues without asking.
 
 The threshold is the `auto_split_max_risk` variable (default 50).
@@ -495,7 +498,10 @@ watcher's card on the **Watchers** page). Every line is one sentence that says w
 and what to do ("… — reply /approve to start coding …", "… — nothing to do, it starts
 tomorrow"), and has an "open ↗" link. Runs that started and then paused are listed too: a usage
 limit, the daily budget, a code area that another run uses, or an interruption. The same
-sentences are in the failure comment on the issue and in notifications, and the server gives
+sentences are in the failure comment on the issue and in notifications, and they also end the
+Foundry's comments that ask you something (questions, a risky plan, a split, the push approval).
+The comment has the fixed sentence; the Dashboard may add the number of questions or what is being
+approved. The server gives
 them for every run and issue at `GET /api/next` (and as `next` on each run). The usual reasons:
 
 - **It needs you:** a question (`Factory_needs_info`), a risky plan (`Factory_waiting`) or an
