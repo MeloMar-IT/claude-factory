@@ -321,3 +321,16 @@ td > .help > .help-mark { margin-left: 6px; }
 .help-text { display: block; flex-basis: 100%; order: 99; max-width: 60ch; margin: 4px 0 2px; padding: 6px 10px; border-radius: 8px; background: var(--panel-2); color: var(--text); font: 400 12.5px/1.45 var(--sans); white-space: normal; cursor: default; }
 .help-text[hidden] { display: none; }
 .meta dd .muted { font-family: var(--sans); word-break: normal; }
+
+.board { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(210px, 1fr); gap: 12px; overflow-x: auto; align-items: start; }
+.board-col { display: grid; gap: 8px; align-content: start; min-width: 0; }
+.board-col h3 { margin: 0; font-size: 13px; }
+.board-sub { font-size: 11.5px; text-transform: uppercase; letter-spacing: .04em; }
+.board-card { display: grid; gap: 4px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel, #fff); font-size: 12.5px; overflow-wrap: anywhere; }
+.board-card.link { cursor: pointer; }
+.board-card.link:hover { border-color: var(--accent); }
+.board-card.chain { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.board-card.dim { opacity: .4; }
+.board-step { font-weight: 550; }
+.board-deps { font-size: 12px; }
+.board-chain { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 12px; }

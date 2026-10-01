@@ -75,10 +75,10 @@ export function nextFor(ctx: ApiContext, runs?: RunSummary[]): (run: RunSummary)
 }
 
 type Queue = ReturnType<ApiContext["scheduler"]["queue"]>;
-type PendingJob = Queue["pending"][number];
+export type PendingJob = Queue["pending"][number];
 
 /** The record of a queued job that has no run yet. */
-function jobNext(p: PendingJob): NextStep {
+export function jobNext(p: PendingJob): NextStep {
   const issue = p.issue && /^\d+$/.test(p.issue) ? Number(p.issue) : undefined;
   return nextStep(p.waitingFor ? "one_at_a_time" : "queued", { repo: p.githubRepo ?? p.repo, issue, title: (p.task ?? "").split("\n")[0], runId: p.runId }, { blockingRun: p.waitingFor });
 }
@@ -164,7 +164,7 @@ export function collectNext(ctx: ApiContext, list: RunSummary[]) {
 
   const byRun = new Map(list.map((r) => [r.runId, r]));
   const live = new Set([...q.active.map((a) => a.runId), ...q.pending.map((p) => p.runId)]);
-  const issues: (Entry & { key: string; rank: number })[] = [];
+  const issues: (Entry & { key: string; rank: number; runId?: string })[] = [];
   for (const t of tracked) {
     for (const i of t.issues) {
       const base = { repo: t.watcher.github_repo, issue: i.issue, title: i.title, runId: i.runId };
@@ -180,7 +180,7 @@ export function collectNext(ctx: ApiContext, list: RunSummary[]) {
       else if (run) e = { next: next(run), since: runSince(run) };
       else if (i.done) e = { next: nextStep("done", base, data) };
       else e = { next: nextStep(ctx.restart ? "restart" : "starting", base, { ...data, restartWhy }) };
-      issues.push({ ...e, watcher: t.watcher.id, key: `${base.repo}#${i.issue}`, rank: isLive ? 0 : i.done ? 2 : 1 });
+      issues.push({ ...e, watcher: t.watcher.id, runId: i.runId, key: `${base.repo}#${i.issue}`, rank: isLive ? 0 : i.done ? 2 : 1 });
     }
   }
 
@@ -194,6 +194,19 @@ export function collectNext(ctx: ApiContext, list: RunSummary[]) {
   };
 
   return { server, watchers, issues, runs, next };
+}
+
+/** The newest runs plus the run of every tracked issue. */
+export function knownRuns(ctx: ApiContext, limit = 200): RunSummary[] {
+  const list = ctx.scheduler.list(limit);
+  const loaded = new Set(list.map((r) => r.runId));
+  for (const t of ctx.watchers.tracked()) {
+    for (const i of t.issues) {
+      const run = i.runId && !loaded.has(i.runId) ? ctx.scheduler.get(i.runId) : undefined;
+      if (run) list.push(run), loaded.add(run.runId);
+    }
+  }
+  return list;
 }
 
 /** Records for the server, the watchers, every tracked issue and every run. */
