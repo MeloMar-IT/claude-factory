@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { loadConfig, loadRepoVars, type Config } from "../config.js";
 import { FACTORY_HOME } from "../flow/load.js";
+import { claimRunStart } from "../home.js";
 import type { Flow, Step } from "../flow/schema.js";
 import { notifyRun } from "../notify.js";
 import {
@@ -35,7 +36,7 @@ interface CommonOptions {
   log?: (msg: string) => void;
   /** Called whenever run.json is written. */
   onUpdate?: (summary: RunSummary) => void;
-  /** Defaults to ~/.claude-factory/config.yaml. */
+  /** Defaults to <data folder>/config.yaml. */
   config?: Config;
 }
 
@@ -70,7 +71,6 @@ export async function runFlow(flow: Flow, opts: RunOptions): Promise<RunSummary>
   const config = opts.config ?? loadConfig();
   const runId = opts.runId ?? newRunId();
   const runDir = join(opts.runsDir, runId);
-  mkdirSync(join(runDir, "logs"), { recursive: true });
 
   let repoVars: Record<string, string> = {};
   try {
@@ -91,8 +91,12 @@ export async function runFlow(flow: Flow, opts: RunOptions): Promise<RunSummary>
     totalCostUsd: 0,
     history: [],
     state: { next: null, steps: {}, visits: {} },
+    pid: process.pid,
   };
-  saveRun(summary);
+  claimRunStart(opts.runsDir, () => {
+    mkdirSync(join(runDir, "logs"), { recursive: true });
+    saveRun(summary);
+  });
   opts.onUpdate?.(summary);
 
   try {
@@ -126,6 +130,8 @@ export async function resumeRun(opts: ResumeOptions): Promise<RunSummary> {
 
   const decision = opts.decision && summary.waiting ? { ...opts.decision, stepId: summary.waiting.stepId } : undefined;
   Object.assign(summary, { status: "running" as RunStatus, reason: undefined, finishedAt: undefined, resumes: (summary.resumes ?? 0) + 1 });
+  summary.pid = process.pid;
+  claimRunStart(opts.runsDir, () => saveRun(summary));
   summary.state.visits = {}; // fresh loop budget
   return drive(summary, opts, config, { startAt: from, decision });
 }

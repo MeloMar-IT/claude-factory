@@ -58,6 +58,8 @@ export interface RunSummary {
   waiting?: { stepId: string; message: string; since: string };
   /** How many times the run was resumed. */
   resumes?: number;
+  /** Process that last started or resumed the run. */
+  pid?: number;
 }
 
 export const runFile = (runDir: string) => join(runDir, "run.json");

@@ -86,6 +86,100 @@ describe("names that stay", () => {
   });
 
   it("built-in flows and tools keep FACTORY_ names", () => {
-    for (const f of [...walk("flows"), ...walk("tools")]) expect(readFileSync(f, "utf8"), f).not.toContain("SCF_");
+    // tools/area-lock also reads SCF_HOME and SCF_LOCK_DIR (it picks the data folder itself)
+    for (const f of [...walk("flows"), ...walk("tools")]) {
+      expect(readFileSync(f, "utf8").replace(/SCF_(HOME|LOCK_DIR)/g, ""), f).not.toContain("SCF_");
+    }
+  });
+});
+
+describe("data folder", () => {
+  const cli = resolve("dist/cli.js");
+  const lockTool = resolve("tools/area-lock");
+  const FLOW = "name: mine\nworkspace: inplace\nsteps:\n  - {id: a, type: shell, run: 'true'}\n";
+  /** Runs a command with HOME set to `home` and no home or lock variables from the test setup. */
+  const clean = (file: string, args: string[], home: string, extra: Record<string, string> = {}) => {
+    const env: Record<string, string> = {};
+    for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !/^(FACTORY_|SCF_)/.test(k)) env[k] = v;
+    return spawnSync(file, args, { encoding: "utf8", env: { ...env, HOME: home, ...extra } });
+  };
+  const scf = (args: string[], home: string, extra: Record<string, string> = {}) => clean(process.execPath, [cli, ...args], home, extra);
+  const withHome = () => {
+    const home = mkdtempSync(join(tmpdir(), "scf-home-"));
+    return { home, oldDir: join(home, ".claude-factory"), newDir: join(home, ".spaghetti-code-foundry") };
+  };
+  const seedOld = (oldDir: string) => {
+    mkdirSync(join(oldDir, "flows"), { recursive: true });
+    writeFileSync(join(oldDir, "flows", "mine.yaml"), FLOW);
+  };
+
+  it("scf flows moves ~/.claude-factory to ~/.spaghetti-code-foundry and keeps the backup", () => {
+    const { home, oldDir, newDir } = withHome();
+    seedOld(oldDir);
+    const r = scf(["flows"], home);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("mine");
+    expect(r.stdout).toContain(newDir);
+    expect(existsSync(join(newDir, "flows", "mine.yaml"))).toBe(true);
+    expect(existsSync(join(oldDir, "flows", "mine.yaml"))).toBe(true);
+    expect(existsSync(join(oldDir, "MOVED-TO-SPAGHETTI-CODE-FOUNDRY.txt"))).toBe(true);
+    expect(r.stderr).toContain("note: moved the data folder");
+  });
+
+  it("refuses to run when the note exists but the new folder is missing; help still works", () => {
+    const { home, oldDir } = withHome();
+    seedOld(oldDir);
+    writeFileSync(join(oldDir, "MOVED-TO-SPAGHETTI-CODE-FOUNDRY.txt"), "moved");
+    const r = scf(["flows"], home);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("SCF_HOME");
+    expect(existsSync(join(home, ".spaghetti-code-foundry"))).toBe(false);
+    expect(scf(["--help"], home).status).toBe(0);
+  });
+
+  it("--help shows the old folder while only that exists, and does not move it", () => {
+    const { home, oldDir, newDir } = withHome();
+    seedOld(oldDir);
+    const r = scf(["--help"], home);
+    expect(r.stdout).toContain(join(oldDir, "runs"));
+    expect(existsSync(newDir)).toBe(false);
+  });
+
+  it("an empty SCF_HOME does not hide FACTORY_HOME", () => {
+    const { home } = withHome();
+    const a = mkdtempSync(join(tmpdir(), "scf-a-"));
+    mkdirSync(join(a, "flows"));
+    writeFileSync(join(a, "flows", "mine.yaml"), FLOW);
+    const r = scf(["flows"], home, { SCF_HOME: "", FACTORY_HOME: a });
+    expect(r.stdout).toContain(a);
+    expect(readdirSync(home)).toEqual([]);
+  });
+
+  it("tools/area-lock picks the same default folder", () => {
+    const only = withHome();
+    seedOld(only.oldDir);
+    expect(clean(lockTool, ["list"], only.home).status).toBe(0);
+    expect(existsSync(join(only.oldDir, "locks", "local"))).toBe(true);
+    expect(existsSync(only.newDir)).toBe(false);
+
+    const both = withHome();
+    seedOld(both.oldDir);
+    mkdirSync(both.newDir);
+    clean(lockTool, ["list"], both.home);
+    expect(existsSync(join(both.newDir, "locks", "local"))).toBe(true);
+    expect(existsSync(join(both.oldDir, "locks"))).toBe(false);
+
+    const neither = withHome();
+    clean(lockTool, ["list"], neither.home);
+    expect(existsSync(join(neither.newDir, "locks", "local"))).toBe(true);
+
+    const moved = withHome();
+    seedOld(moved.oldDir);
+    writeFileSync(join(moved.oldDir, "MOVED-TO-SPAGHETTI-CODE-FOUNDRY.txt"), "moved");
+    const r = clean(lockTool, ["list"], moved.home);
+    expect(r.status).toBe(2);
+    expect(r.stderr).toContain("SCF_HOME");
+    expect(existsSync(join(moved.oldDir, "locks"))).toBe(false);
+    expect(existsSync(moved.newDir)).toBe(false);
   });
 });

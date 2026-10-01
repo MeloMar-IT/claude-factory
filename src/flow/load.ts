@@ -1,11 +1,12 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
 import { FlowSchema, type Flow } from "./schema.js";
 
-export const FACTORY_HOME = process.env.SCF_HOME ?? process.env.FACTORY_HOME ?? join(homedir(), ".claude-factory");
+import { FACTORY_HOME } from "../home.js";
+
+export { FACTORY_HOME };
 const BUILTIN_FLOWS = resolve(dirname(fileURLToPath(import.meta.url)), "../../flows");
 
 export type FlowScope = "repo" | "global" | "builtin";

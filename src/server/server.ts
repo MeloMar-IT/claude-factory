@@ -4,6 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig, type Config } from "../config.js";
 import { FACTORY_HOME } from "../flow/load.js";
+import { homeMoved } from "../home.js";
 import { Scheduler } from "../queue/scheduler.js";
 import { WatcherManager } from "../queue/watchers.js";
 import { adminRoutes } from "./api-admin.js";
@@ -52,6 +53,8 @@ export async function startServer(opts: ServerOptions): Promise<{ url: string; c
 
   async function api(req: IncomingMessage, res: ServerResponse, path: string) {
     const method = req.method ?? "GET";
+    const moved = method === "GET" ? undefined : homeMoved();
+    if (moved) throw new HttpError(503, `the data folder moved to ${moved}; the server restarts onto it — try again in a minute`);
     const seg = path.split("/").filter(Boolean).slice(1); // drop "api"
     for (const route of ROUTES) if (await route(ctx, req, res, seg, method)) return;
     throw new HttpError(404, "not found");

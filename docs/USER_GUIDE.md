@@ -15,6 +15,7 @@ flows, automating work from GitHub, choosing models, and keeping it all safe.
 - [8. Costs, dashboard and evals](#8-costs-dashboard-and-evals)
 - [9. Command line](#9-command-line)
 - [10. Troubleshooting](#10-troubleshooting)
+- [11. Upgrading from claude-factory](#11-upgrading-from-claude-factory)
 
 ---
 
@@ -129,7 +130,7 @@ how steps connect: grey = next, green = on success, red dashed = on failure, pur
 ![YAML view](images/flow-yaml.png)
 
 - **Save to** — *this repo* (`<repo>/.claude-factory/flows/`, shared with your team through git)
-  or *global* (`~/.claude-factory/flows/`, just for you). Saving a built-in flow creates your own
+  or *global* (`~/.spaghetti-code-foundry/flows/`, just for you). Saving a built-in flow creates your own
   copy that overrides it.
 - **✨ Draft flow with Claude** — describe what you want and Claude writes the YAML.
   **Ask Claude** changes the open flow the same way.
@@ -151,7 +152,7 @@ scf flow-guide > flow-guide.md        # or copy docs/FLOW_AUTHORING.md
    plans a database migration, I approve the plan, Sonnet implements it with pytest tests, up to
    3 fix rounds, Codex reviews once, then push the branch and open a PR."*
 2. Save the YAML it answers with as `<repo>/.claude-factory/flows/<name>.yaml` (or in
-   `~/.claude-factory/flows/`).
+   `~/.spaghetti-code-foundry/flows/`).
 3. Check it: `scf validate <name>` — it names the field and step for anything that is wrong;
    paste that back to the assistant to fix it. Then open it in the editor to see the graph.
 
@@ -345,7 +346,7 @@ in GitHub:
 Each watcher's card on the **Watchers** page lists the labelled issues it is *not* working on
 right now and why ("waits for #73", "needs your answer", …); the Dashboard shows the same list.
 
-More options are set in `~/.claude-factory/config.yaml` (the form keeps them when you edit the
+More options are set in `~/.spaghetti-code-foundry/config.yaml` (the form keeps them when you edit the
 watcher). This is the watcher for the [one-label pipeline](#the-label-pipeline-one-label--plan--code--one-pull-request):
 
 ```yaml
@@ -607,7 +608,7 @@ token (or a GitHub App) to make them as a bot instead.
 **Disk** — every run keeps its workspace so you can inspect or resume it. Remove old ones here
 or with `scf clean` (branches in your repositories are kept).
 
-Global settings are stored in `~/.claude-factory/config.yaml`; runs in `~/.claude-factory/runs/`.
+Global settings are stored in `~/.spaghetti-code-foundry/config.yaml`; runs in `~/.spaghetti-code-foundry/runs/`.
 
 ---
 
@@ -689,7 +690,7 @@ Both names work; if both are set, `SCF_…` wins.
 
 | Variable | Old name | What it does |
 |---|---|---|
-| `SCF_HOME` | `FACTORY_HOME` | Data folder (default `~/.claude-factory`) |
+| `SCF_HOME` | `FACTORY_HOME` | Data folder (default `~/.spaghetti-code-foundry`) |
 | `SCF_CLAUDE_BIN` | `FACTORY_CLAUDE_BIN` | Claude Code program to run |
 | `SCF_CODEX_BIN` | `FACTORY_CODEX_BIN` | Codex program to run |
 | `SCF_GH_BIN` | `FACTORY_GH_BIN` | `gh` program to run |
@@ -698,7 +699,7 @@ Both names work; if both are set, `SCF_…` wins.
 | `SCF_NO_NOTIFY` | `FACTORY_NO_NOTIFY` | Set to `1` to turn notifications off |
 | `SCF_LOCK_DIR` | `FACTORY_LOCK_DIR` | Where lock files are kept |
 
-Flows are looked up in `<repo>/.claude-factory/flows/`, then `~/.claude-factory/flows/`, then the
+Flows are looked up in `<repo>/.claude-factory/flows/`, then `~/.spaghetti-code-foundry/flows/`, then the
 built-in ones.
 
 ---
@@ -734,3 +735,49 @@ the step output lists the file, line and kind of secret.
 
 **Tests fail for reasons unrelated to the change.** Set the right command with the `test_cmd`
 variable, per repository in `<repo>/.claude-factory/config.yaml`.
+
+---
+
+## 11. Upgrading from claude-factory
+
+The data folder is now `~/.spaghetti-code-foundry` (or `SCF_HOME` / `FACTORY_HOME` if you set one).
+The `.claude-factory/` folder inside each repository does not change.
+
+**What happens.** On the first start of any `scf` command except help, the whole
+`~/.claude-factory` folder is copied to `~/.spaghetti-code-foundry`: config, runs, flows, blocks,
+learnings, queue, locks and evals. The copy is made next to the new folder and renamed into place
+in one step, so you never see a half-done move. Paths that point into the old folder (in run state,
+lock files, `queue.json` and `config.yaml`) are rewritten. If `config.yaml` can't be rewritten
+safely, it is kept as it was and a warning lists the values that still point to the old folder.
+
+**The backup.** `~/.claude-factory` is never changed or deleted, except for a note file
+`MOVED-TO-SPAGHETTI-CODE-FOUNDRY.txt`. Nothing there is used anymore. You can delete the folder
+once everything works.
+
+**When the move waits.** Nothing is copied when you set `SCF_HOME` / `FACTORY_HOME`, when the new
+folder already exists (it is never overwritten), while a run is running, when free space is short
+(size + 10% + 100 MiB), or when something in the old folder changed while it was copied. The move is
+tried again on later starts, and every minute by an idle `scf ui` / `scf serve`. A run counts as
+running when its `run.json` can't be read, or its status is `running` and it has no recorded `pid`
+(from the old version) or its `pid` is alive. The message names these runs. For a run that crashed,
+run `scf resume <id>` (or delete a leftover run folder without `run.json`).
+
+**Worktrees.** Runs that use a git worktree are repaired with `git worktree repair`, so a waiting
+run can be approved and resumed in the new folder. The workspaces left in the backup are no longer
+linked to your repositories. If a repair fails, everything is put back and the old folder stays in
+use. If an interrupted move left the repair unfinished, the next start finishes it.
+
+**Servers on the old folder.** A running `scf ui` or `scf serve` that still uses the old folder
+refuses changes after the move (HTTP 503) and restarts onto the new folder when it is idle. Other
+processes on the old folder refuse to start runs; restart them. Stop old `factory watch` processes
+before you upgrade: they run old code and can't join the lock the move uses.
+
+**If the new folder is missing.** When the note exists but `~/.spaghetti-code-foundry` is gone,
+`scf` refuses to run (help still works) and never copies the backup a second time by itself. Restore
+the folder, set `SCF_HOME` to the folder you want, or delete the note file to copy again.
+
+**Login service.** Run `scf service install` once, so its log and settings move to the new folder.
+`scf service status` tells you when it is still needed.
+
+**The command.** If `factory` still points at the old install, run
+`npm unlink -g claude-factory && npm link` in the repository.

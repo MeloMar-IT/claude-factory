@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { FACTORY_HOME } from "./flow/load.js";
 
 /** macOS login agent that keeps `scf serve` (UI + watchers + queue) running. */
@@ -141,6 +141,16 @@ export function uninstallService(host: ServiceHost = macHost()): string {
   return "service removed";
 }
 
+/** A hint when the installed service still logs outside the current data folder. */
+function logHint(plist: string): string {
+  const raw = /<key>StandardOutPath<\/key>\s*<string>([^<]*)<\/string>/.exec(readFileSync(plist, "utf8"))?.[1];
+  if (!raw) return "";
+  const logPath = raw.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+  const dataDir = process.env.FACTORY_HOME ?? FACTORY_HOME;
+  if (logPath.startsWith(dataDir + sep)) return "";
+  return `\n  the service still logs to ${logPath} — run \`scf service install\` once to use ${dataDir}`;
+}
+
 export function serviceStatus(host: ServiceHost = macHost()): string {
   requireMac(host);
   if (!existsSync(plistPath(host, SERVICE_LABEL))) {
@@ -153,8 +163,8 @@ export function serviceStatus(host: ServiceHost = macHost()): string {
     const out = host.launchctl(["print", `${host.domain}/${SERVICE_LABEL}`]);
     const state = /state = (\w+)/.exec(out)?.[1] ?? "unknown";
     const pid = /pid = (\d+)/.exec(out)?.[1];
-    return `installed · ${state}${pid ? ` (pid ${pid})` : ""}`;
+    return `installed · ${state}${pid ? ` (pid ${pid})` : ""}${logHint(plistPath(host, SERVICE_LABEL))}`;
   } catch {
-    return "installed but not loaded";
+    return `installed but not loaded${logHint(plistPath(host, SERVICE_LABEL))}`;
   }
 }

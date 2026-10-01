@@ -3,7 +3,7 @@
 > **For people:** give this whole file to any AI assistant (ChatGPT, Claude, Gemini, a local
 > model…), then describe the flow you want. Print it with `scf flow-guide`, or copy it from
 > `docs/FLOW_AUTHORING.md`. Save the answer as `<repo>/.claude-factory/flows/<name>.yaml` (or
-> `~/.claude-factory/flows/` for all repositories) and check it with
+> `~/.spaghetti-code-foundry/flows/` for all repositories) and check it with
 > `scf validate <name>.yaml`. The **Draft flow with Claude** button in the UI uses this same
 > file.
 >
