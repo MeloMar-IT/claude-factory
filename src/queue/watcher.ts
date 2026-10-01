@@ -1,5 +1,6 @@
 import type { WatcherConfig } from "../config.js";
 import { spentToday, type RunSummary } from "../engine/state.js";
+import { explainError } from "../errors.js";
 import { loadFlow } from "../flow/load.js";
 import { canWrite, commentsAfter, ensureLabel, gh, ghJson, isBot, issueComments, setLabels, type Comment, type Issue } from "../github.js";
 import { countQuestions, runClosedIssue, LIMIT_RETRY_MS, nextStep, runNextStep, type NextData, type BlockerInfo, type NextKind, type NextStep } from "../next-step.js";
@@ -28,6 +29,24 @@ export function labelNames(cfg: WatcherConfig): LabelNames {
     waiting: o.waiting ?? STATUS_LABELS.waiting.name,
     failed: o.failed ?? STATUS_LABELS.failed.name,
   };
+}
+
+/** The failure comment on an issue: what happened, why, what to do, then the raw text under Details. */
+export function failureComment(s: RunSummary, action: string): string {
+  const e = explainError(s.reason);
+  const failed = [...s.history].reverse().find((h) => !h.ok);
+  const tail = (failed?.output || failed?.error || "").trim().slice(-3000);
+  const raw = [e.detail, tail].filter(Boolean).join("\n\n");
+  return [
+    "🤖 **Spaghetti Code Foundry** could not finish this issue.",
+    "",
+    `- **What happened:** ${e.what}.`,
+    `- **Why:** ${e.why.charAt(0).toUpperCase()}${e.why.slice(1)}.`,
+    `- **What you can do:** ${action}.`,
+    failed ? `\nLast failing step: \`${failed.id}\`${failed.visit > 1 ? ` (attempt ${failed.visit})` : ""}` : "",
+    raw ? `\n<details><summary>Details</summary>\n\n\`\`\`\n${raw.replace(/`{3,}/g, (m) => "ˋ".repeat(m.length))}\n\`\`\`\n</details>` : "",
+    `\n<!-- claude-factory run=${s.runId} -->`,
+  ].join("\n");
 }
 
 /** Flow each source runs when the watcher doesn't name one. */
@@ -349,7 +368,8 @@ export class Watcher {
       const remove = s.status === "succeeded" ? [...this.allStatus, ...this.cfg.remove_on_done] : this.allStatus;
       await setLabels(this.repo, issue, label, remove).catch(() => {});
       if (label === this.L.failed && this.cfg.comment_on_failure) await this.commentFailure(issue, s).catch(() => {});
-      this.act(`#${issue} → ${s.status}${s.reason ? ` (${s.reason})` : ""} · $${s.totalCostUsd.toFixed(3)} · label → ${label ?? "none"}`);
+      const why = s.reason ? explainError(s.reason) : undefined;
+      this.act(`#${issue} → ${s.status}${why ? ` (${why.what}: ${why.why})` : ""} · $${s.totalCostUsd.toFixed(3)} · label → ${label ?? "none"}`);
     });
   }
 
@@ -364,15 +384,8 @@ export class Watcher {
 
   /** Tell the issue why the run failed, with the tail of the failing step's output. */
   private async commentFailure(issue: number, s: RunSummary) {
-    const failed = [...s.history].reverse().find((h) => !h.ok);
-    const tail = (failed?.output || failed?.error || "").trim().slice(-3000);
-    const body = [
-      "🤖 **Spaghetti Code Foundry** could not finish this issue.",
-      failed ? `\nLast failing step: \`${failed.id}\`${failed.visit > 1 ? ` (attempt ${failed.visit})` : ""}` : "",
-      tail ? `\n<details><summary>Output (tail)</summary>\n\n\`\`\`\n${tail.replace(/```/g, "ˋˋˋ")}\n\`\`\`\n</details>` : "",
-      `\n_${this.held("failed", { number: issue, title: "" }, { failedLabel: this.L.failed, reason: s.reason ?? s.status, runId: s.runId }).next.text}_`,
-      `\n<!-- claude-factory run=${s.runId} -->`,
-    ].join("\n");
+    const action = this.held("failed", { number: issue, title: "" }, { failedLabel: this.L.failed, reason: s.reason, runId: s.runId }).next.action;
+    const body = failureComment(s, action);
     await gh(["issue", "comment", String(issue), "--repo", this.repo, "--body", body]);
   }
 

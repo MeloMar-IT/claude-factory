@@ -1,4 +1,5 @@
 import type { WatcherConfig } from "./config.js";
+import { explainError } from "./errors.js";
 import type { RunSummary } from "./engine/state.js";
 import { statusHelp, statusName } from "./words.js";
 
@@ -77,6 +78,8 @@ export interface NextData {
   runId?: string;
   /** `closed_elsewhere`: the run waits for approval (it is not working). */
   runWaits?: boolean;
+  /** `failed`: false when the run has no step to resume at, so it must start over. */
+  canResume?: boolean;
   /** `watcher_stale`: ISO time of the last finished check. */
   lastCheck?: string;
 }
@@ -100,6 +103,8 @@ function clean(t: string | undefined): string {
 }
 
 const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
+const lowerFirst = (t: string) => t.charAt(0).toLowerCase() + t.slice(1);
+const upperFirst = (t: string) => t.charAt(0).toUpperCase() + t.slice(1);
 
 /** Number of questions (`**Q1.` …) in a Foundry comment. */
 export function countQuestions(body: string | undefined): number {
@@ -278,17 +283,21 @@ export function nextStep(kind: NextKind, base: NextBase = {}, d: NextData = {}):
     }
     case "failed": {
       who = "Something is wrong";
-      const r = clean(d.reason);
-      why = r ? `It failed: ${r}` : "It failed";
+      const e = explainError(d.reason);
+      why = `${e.what}: ${e.why}`;
+      const startOver = e.startOver || d.canResume === false;
+      let retry: string;
       if (d.watched) {
         const lbl = d.failedLabel ?? "factory:failed";
-        action = `Remove the \`${lbl}\` label to start over, or resume the run on its page to continue at the failed step`;
-        say = `remove the \`${lbl}\` label to start over, or resume the run on its page to continue at the failed step`;
+        retry = startOver
+          ? `then remove the \`${lbl}\` label to start over`
+          : `then remove the \`${lbl}\` label to start over, or resume the run on its page to continue at the failed step`;
       } else {
-        action = "Resume the run on its page";
-        say = "resume the run on its page";
+        retry = startOver ? "then start a new run" : "then resume the run on its page";
         w = runWhere ?? where;
       }
+      say = `${lowerFirst(e.todo)}, ${retry}`;
+      action = upperFirst(say);
       break;
     }
     case "restart": {
@@ -300,9 +309,10 @@ export function nextStep(kind: NextKind, base: NextBase = {}, d: NextData = {}):
     }
     case "watcher_error": {
       who = "Something is wrong";
-      why = `The watcher has an error: ${clean(d.reason) || "unknown"}`;
-      action = "Check the watcher on the Watchers page";
-      say = "check the watcher on the Watchers page";
+      const e = explainError(d.reason, "watcher");
+      why = `${e.what}: ${e.why}`;
+      action = e.todo;
+      say = lowerFirst(e.todo);
       w = WATCHERS;
       break;
     }
@@ -433,7 +443,7 @@ export function runNextStep(run: RunSummary, o: RunNextOptions = {}): NextStep {
     }
     default:
       if (/interrupted/.test(reason)) return make("interrupted");
-      return make("failed");
+      return make("failed", { canResume: o.canResume ?? (run.state ? run.state.next != null : undefined) });
   }
 }
 

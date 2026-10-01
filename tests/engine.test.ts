@@ -10,7 +10,7 @@ import { dockerCommand } from "../src/engine/guards.js";
 import { liveLogFile, saveRun } from "../src/engine/state.js";
 import { mirrorEnvPrefixes, withScfAliases } from "../src/engine/template.js";
 import { notifyRun } from "../src/notify.js";
-import { COMMENT_KINDS, commentText, runNextStep } from "../src/next-step.js";
+import { COMMENT_KINDS, commentText, nextStep, runNextStep } from "../src/next-step.js";
 import { parseFlow } from "../src/flow/load.js";
 
 const claudeBin = resolve("tests/fixtures/fake-claude.mjs");
@@ -392,16 +392,32 @@ steps:
     const w = await messageFor(waiting);
     expect(w).toContain("approve or reject it on the run page");
     expect(w.endsWith(runNextStep(waiting).text)).toBe(true);
-    const failed = { ...s, status: "failed", reason: 'step "a" failed: boom' } as typeof s;
+    const stopAt = { ...s.state, next: "a" }; // a failed run keeps the step to resume at
+    const failed = { ...s, state: stopAt, status: "failed", reason: 'step "a" failed: boom' } as typeof s;
     const f = await messageFor(failed);
     expect(f).toContain("resume the run on its page");
     expect(f.endsWith(runNextStep(failed).text)).toBe(true);
 
     // A long task and a long reason are shortened; the action stays whole.
-    const long = { ...s, task: "t".repeat(400), status: "failed", reason: `step "a" failed: ${"boom ".repeat(100)}` } as typeof s;
+    const long = { ...s, state: stopAt, task: "t".repeat(400), status: "failed", reason: `step "a" failed: ${"boom ".repeat(100)}` } as typeof s;
     const l = await messageFor(long);
     expect(l.length).toBeLessThanOrEqual(300);
     expect(l.endsWith("resume the run on its page.")).toBe(true);
+
+    // The message starts with the plain text, not the raw reason.
+    const shell = { ...s, status: "failed", reason: 'step "a" failed: exit code 1' } as typeof s;
+    const p = await messageFor(shell);
+    expect(p).toContain(" — The step a failed: its command ended with an error — ");
+    expect(p).not.toContain('step "a" failed');
+    expect(p).not.toContain("exit code");
+
+    // The longest advice for a watched issue with a long reference still ends whole.
+    const rec = nextStep("failed", {}, { watched: true, failedLabel: "factory:failed", reason: 'step "a" failed: timed out' });
+    expect(rec.text.endsWith("to continue at the failed step.")).toBe(true);
+    const longRef = { ...s, state: stopAt, task: "t".repeat(400), status: "failed", reason: 'step "a" failed: timed out', vars: { github_repo: "acme/" + "r".repeat(30), issue: "7" } } as typeof s;
+    const lr = await messageFor(longRef);
+    expect(lr.length).toBeLessThanOrEqual(300);
+    expect(lr.endsWith("resume the run on its page.")).toBe(true);
   });
 
   it("notifyRun does not post to Slack, but still runs the command", async () => {

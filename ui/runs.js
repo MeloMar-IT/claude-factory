@@ -97,31 +97,37 @@ function transcriptView(events) {
 
 function stepsView(runId, summary) {
   if (!summary.history.length) return h("p", { class: "muted" }, "No steps finished yet.");
-  return h("div", { class: "timeline" }, summary.history.map((s, i) => {
-    const body = h("div");
-    return h("details", {
-      class: "tl",
-      onToggle: async (e) => {
-        if (!e.target.open || body.dataset.loaded) return;
-        body.dataset.loaded = "1";
-        if (s.type !== "claude") return mount(body, h("pre", {}, s.output || "(no output)"));
-        mount(body, h("p", { class: "muted", style: { padding: "0 12px" } }, "Loading transcript…"));
-        const t = await api.transcript(runId, i).catch((err) => ({ events: [{ kind: "raw", text: err.message }] }));
-        mount(body, transcriptView(t.events));
-      },
-    },
-      h("summary", {},
-        h("span", { class: `pill ${s.ok ? "ok" : "fail"}` }, s.ok ? "✔" : "✘"),
-        h("b", { class: "mono" }, s.id),
-        s.visit > 1 ? h("span", { class: "pill" }, `visit ${s.visit}`) : null,
-        h("span", { class: "muted" }, s.agent ? s.agent : s.type),
-        h("span", { class: "spacer" }),
-        s.error ? h("span", { class: "status bad" }, s.error.slice(0, 60)) : null,
-        h("span", { class: "muted mono" }, secs(s.durationMs)),
-        s.costUsd ? h("span", { class: "muted mono" }, money(s.costUsd)) : s.tokens ? h("span", { class: "muted mono", title: "no per-token cost (local model or subscription)" }, `${Math.round((s.tokens.input + s.tokens.output) / 1000)}k tok`) : null),
-      body);
-  }));
+  return h("div", { class: "timeline" }, summary.history.map((s, i) => stepEntry(runId, s, i)));
 }
+
+/** One finished step: summary line, the raw error under "Details", and the output or transcript when opened. */
+export function stepEntry(runId, s, i) {
+  const body = h("div");
+  return h("details", {
+    class: "tl",
+    onToggle: async (e) => {
+      if (!e.target.open || body.dataset.loaded) return;
+      body.dataset.loaded = "1";
+      if (s.type !== "claude") return mount(body, h("pre", {}, s.output || "(no output)"));
+      mount(body, h("p", { class: "muted", style: { padding: "0 12px" } }, "Loading transcript…"));
+      const t = await api.transcript(runId, i).catch((err) => ({ events: [{ kind: "raw", text: err.message }] }));
+      mount(body, transcriptView(t.events));
+    },
+  },
+    h("summary", {},
+      h("span", { class: `pill ${s.ok ? "ok" : "fail"}` }, s.ok ? "✔" : "✘"),
+      h("b", { class: "mono" }, s.id),
+      s.visit > 1 ? h("span", { class: "pill" }, `visit ${s.visit}`) : null,
+      h("span", { class: "muted" }, s.agent ? s.agent : s.type),
+      h("span", { class: "spacer" }),
+      h("span", { class: "muted mono" }, secs(s.durationMs)),
+      s.costUsd ? h("span", { class: "muted mono" }, money(s.costUsd)) : s.tokens ? h("span", { class: "muted mono", title: "no per-token cost (local model or subscription)" }, `${Math.round((s.tokens.input + s.tokens.output) / 1000)}k tok`) : null),
+    s.error ? h("pre", { class: "mono" }, h("b", {}, "Details"), "\n", s.error) : null,
+    body);
+}
+
+/** The raw reason of a run, shown as a detail under the plain text. */
+export const detailsRow = (s) => (s.reason ? [h("dt", {}, "Details"), h("dd", { style: { whiteSpace: "pre-wrap" } }, s.reason)] : null);
 
 function diffView(d) {
   if (!d.patch) return h("p", { class: "muted" }, "No changes (or the workspace is not a git checkout).");
@@ -211,11 +217,11 @@ export function renderRunDetail(main, runId) {
         s.task ? h("p", { style: { margin: 0, whiteSpace: "pre-wrap" } }, s.task) : null,
         h("dl", { class: "meta" },
           what(s) ? [h("dt", {}, "Ticket"), h("dd", {}, what(s))] : null,
-          s.reason ? [h("dt", {}, "Reason"), h("dd", { style: { whiteSpace: "pre-wrap" } }, s.reason)] : null,
           h("dt", {}, "Run"), h("dd", {}, s.runId),
           s.branch ? [h("dt", {}, "Branch"), h("dd", {}, s.branch)] : null,
           s.workdir ? [h("dt", {}, "Workspace"), h("dd", {}, s.workdir)] : null,
-          stepRow(s))));
+          stepRow(s),
+          detailsRow(s))));
     if (tab === "steps" && (!prev || prev.history.length !== s.history.length)) showTab("steps");
   };
 

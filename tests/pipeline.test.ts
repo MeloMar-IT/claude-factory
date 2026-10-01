@@ -5,6 +5,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { ConfigSchema, WatcherSchema } from "../src/config.js";
 import { runFlow } from "../src/engine/runner.js";
 import { loadFlow } from "../src/flow/load.js";
+import { explainError } from "../src/errors.js";
 import { commentText, nextStep } from "../src/next-step.js";
 import { Scheduler } from "../src/queue/scheduler.js";
 import { minutesNow, Watcher } from "../src/queue/watcher.js";
@@ -183,7 +184,15 @@ describe("label-driven issue pipeline", () => {
     expect(log).not.toContain("**claude-factory** could not finish");
     expect(log).toMatch(new RegExp(`could not finish this issue[\\s\\S]*<!-- claude-factory run=${run.runId} -->`));
     expect(log).toContain("to start over, or resume the run");
-    expect(log).toContain(nextStep("failed", {}, { watched: true, failedLabel: "Factory_ERROR", reason: run.reason }).text);
+    const e = explainError(run.reason);
+    const rec = nextStep("failed", {}, { watched: true, failedLabel: "Factory_ERROR", reason: run.reason });
+    expect(log).toContain(`- **What happened:** ${e.what}.`);
+    expect(log).toContain("- **Why:** ");
+    expect(log).toContain(`- **What you can do:** ${rec.action}.`);
+    expect(log.indexOf("**What happened:**")).toBeLessThan(log.indexOf("Last failing step:"));
+    const at = log.indexOf("<summary>Details</summary>");
+    expect(at).toBeGreaterThan(0);
+    expect(log.indexOf(run.reason!)).toBeGreaterThan(at);
     expect(log).toContain("Last failing step: `run_tests` (attempt 4)");
     expect(log).toContain("result: FAILED");
     expect(gh.remoteGit("branch", "--list", "factory/*").trim()).toBe(""); // nothing was pushed

@@ -121,6 +121,15 @@ describe("ui server", () => {
     throw new Error(`run ${runId} never reached ${status}`);
   };
 
+  it("a failed run keeps the raw reason and carries the plain record", async () => {
+    const flow = "name: boom\nworkspace: inplace\nsteps:\n  - {id: boom, type: shell, run: exit 3}\n";
+    const { runId } = (await (await json("POST", "/api/runs", { yaml: flow, task: "t" })).json()) as { runId: string };
+    await waitFor(runId, "failed");
+    const r = (await (await json("GET", `/api/runs/${runId}`)).json()) as { reason: string; next: { why: string } };
+    expect(r.reason).toBe('step "boom" failed: exit code 3');
+    expect(r.next.why).toBe("The step boom failed: its command ended with an error");
+  });
+
   it("approves a waiting run, and serves transcripts, diffs and stats", async () => {
     const flow = `name: gated
 workspace: inplace
@@ -353,7 +362,7 @@ steps:
   it("watchers carry their records", async () => {
     const { nextStep } = await import("../src/next-step.js");
     const { toHold } = await import("../src/queue/watcher.js");
-    const withError = { id: "a", lastActions: [], lastError: "gh down", holds: [toHold(nextStep("questions", { repo: "acme/app", issue: 3, title: "three" }, { watched: true, questions: 2 }))] };
+    const withError = { id: "a", lastActions: [], lastError: "cannot access acme/app with gh: boom", holds: [toHold(nextStep("questions", { repo: "acme/app", issue: 3, title: "three" }, { watched: true, questions: 2 }))] };
     const clean = { id: "b", lastActions: [] };
     const cfg = { source: "issues", flow: "f", label: "l", every: "5m", max_per_tick: 1, enabled: true, vars: {} };
     const original = ctx.watchers.statuses;
@@ -361,6 +370,8 @@ steps:
     try {
       const list = (await (await json("GET", "/api/watchers")).json()) as { status: { next?: { kind: string; who: string; where: { url: string } }; holds?: { next: { kind: string } }[] } }[];
       expect(list[0]!.status.next).toMatchObject({ kind: "watcher_error", who: "Something is wrong", where: { url: "#/watchers" } });
+      expect(list[0]!.status.next).toMatchObject({ why: expect.stringContaining("The watcher cannot reach the repository") });
+      expect((list[0]!.status as { lastError?: string }).lastError).toBe("cannot access acme/app with gh: boom");
       expect(list[0]!.status.holds![0]!.next.kind).toBe("questions");
       expect(list[0]!.status.next).toMatchObject({ status: "watcher error" });
       expect(list[0]!.status.holds![0]!.next).toMatchObject({ status: "waiting for you — questions" });
@@ -386,7 +397,7 @@ steps:
     expect(watcherProblem(w, { id: "a", lastActions: [], startedAt: at(4 * every) }, now)?.kind).toBe("watcher_stale");
     expect(watcherProblem(w, { id: "a", lastActions: [], lastTick: at(9 * every), lastError: "x" }, now)?.kind).toBe("watcher_error");
     expect(watcherProblem({ ...(w as object), enabled: false } as never, { id: "a", lastActions: [], lastTick: at(9 * every) }, now)).toBeUndefined();
-    expect(watcherProblem({ ...(w as object), every: "soon" } as never, { id: "a", lastActions: [] }, now)?.why).toMatch(/invalid interval/);
+    expect(watcherProblem({ ...(w as object), every: "soon" } as never, { id: "a", lastActions: [] }, now)?.why).toMatch(/not a valid time/);
   });
 
   it("the UI shows the record and has no reason wording of its own", async () => {
@@ -401,7 +412,9 @@ steps:
     expect(api).toContain("/api/next");
     for (const w of ["Waiting for approval", "waiting for a free slot", "the run on the same ticket", "the coding run on", "Task / reason"]) expect(runs).not.toContain(w);
     expect(runs).not.toMatch(/status bad[^\n]*s\.reason|s\.reason[^\n]*status bad/);
-    expect(runs).toContain("Reason");
+    expect(runs).toContain("Details");
+    expect(runs).toContain("detailsRow(");
+    expect(runs).not.toContain("s.error.slice");
     expect(runs).toContain("s.reason");
     expect(runs).toContain("nextBlock(");
     for (const w of ["waiting for approval", "why issues aren't", "x.reason", "holdList"]) expect(dashboard).not.toContain(w);

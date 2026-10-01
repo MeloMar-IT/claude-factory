@@ -158,6 +158,40 @@ describe("the changed UI modules", () => {
   });
 });
 
+describe("plain error text in the UI", () => {
+  it("detailsRow shows the raw reason under Details", async () => {
+    const runs = (await import("../ui/runs.js" as string)) as any;
+    const row = runs.detailsRow({ reason: "x" }) as FakeElement[];
+    expect(row[0]!.tag).toBe("dt");
+    expect(row[0]!.textContent).toBe("Details");
+    expect(row[1]!.textContent).toBe("x");
+    expect(runs.detailsRow({})).toBeNull();
+  });
+
+  it("stepEntry keeps the raw error out of the summary and shows it under Details", async () => {
+    const runs = (await import("../ui/runs.js" as string)) as any;
+    const bad = runs.stepEntry("r", { id: "a", type: "shell", ok: false, visit: 1, durationMs: 5, error: "exit code 1" }, 0) as FakeElement;
+    expect(bad.all("summary")[0]!.textContent).not.toContain("exit code 1");
+    expect(bad.textContent).toContain("Details");
+    expect(bad.textContent).toContain("exit code 1");
+    const ok = runs.stepEntry("r", { id: "a", type: "shell", ok: true, visit: 1, durationMs: 5 }, 0) as FakeElement;
+    expect(ok.textContent).not.toContain("Details");
+  });
+
+  it("the run page block and the watcher card show the plain text, action first", () => {
+    const n = nextStep("failed", { runId: "r1" }, { reason: 'step "a" failed: exit code 1' });
+    const t = ui.nextBlock(n).textContent as string;
+    expect(t.indexOf(n.action)).toBeLessThan(t.indexOf(n.why));
+    expect(t).toContain("The step a failed");
+    expect(t).not.toContain('step "a" failed');
+    expect(t).not.toContain("exit code");
+    const w = nextStep("watcher_error", { repo: "o/r" }, { reason: "cannot access o/r with gh: x" });
+    const c = ui.nextList([w]).textContent as string;
+    expect(c.indexOf(w.action)).toBeLessThan(c.indexOf("The watcher cannot reach the repository"));
+    expect(c).not.toContain("cannot access");
+  });
+});
+
 describe("the \"?\" and the status names", () => {
   const text = (els: unknown[]) => (els.filter(Boolean) as FakeElement[]).map((e) => e.textContent).join(" ");
   const run = (over: Record<string, unknown> = {}) => ({ runId: "r9", flow: "f", status: "waiting", history: [], totalCostUsd: 0, startedAt: "2026-10-01T10:00:00Z", next: you(), ...over });
