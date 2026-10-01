@@ -240,7 +240,8 @@ describe("run source and briefs", () => {
     const s = await runFlow(parseFlow(yaml), { task: "t", repo, runsDir, claudeBin, runId: "20260101-000000-cccc" });
     const file = join(s.runDir, "run.json");
     writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, "utf8")), status: "running", reason: undefined, finishedAt: undefined, startedAt: "2020-01-01T00:00:00.000Z" }));
-    const written = new Date(Date.now() - 86_400_000);
+    // Whole seconds: file systems may round sub-second modification times by a millisecond.
+    const written = new Date(Math.floor((Date.now() - 86_400_000) / 1000) * 1000);
     utimesSync(file, written, written);
     const sched = new Scheduler({ runsDir, config: () => ConfigSchema.parse({}) });
     expect(sched.briefs()[0]).toMatchObject({ status: "failed", finishedAt: written.toISOString() });
