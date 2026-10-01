@@ -64,7 +64,7 @@ The folder of your clone can keep its name.
 
 ```bash
 cd ~/code/my-project
-scf ui                          # web UI at http://localhost:4777
+scf ui                          # web UI at http://localhost:4777; the first visit asks you to create the admin account
 
 # or from the terminal:
 scf run quick --task "Add a --json flag to the export command" --var test_cmd="npm test"

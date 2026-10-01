@@ -4,8 +4,9 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { PassThrough } from "node:stream";
-import { terminalIo, userCommand, type UserIo } from "../src/auth/cli.js";
-import { verifyPassword } from "../src/auth/users.js";
+import { adminHint, terminalIo, userCommand, type UserIo } from "../src/auth/cli.js";
+import { readSessions } from "../src/auth/sessions.js";
+import { listUsers, startSession, verifyPassword } from "../src/auth/users.js";
 
 const CLI = resolve("dist/cli.js");
 const PW = "test-password-12345";
@@ -324,4 +325,85 @@ describe("userCommand on a terminal", () => {
     expect(r.out).not.toContain(PW2);
     expect(await verifyPassword(PW2, stored().users[0]!.passwordHash)).toBe(true);
   });
+});
+
+// ---- sessions and the serve hint ----
+
+describe("accounts and sessions", () => {
+  let saved: string | undefined;
+  beforeEach(() => {
+    saved = process.env.FACTORY_HOME;
+    process.env.FACTORY_HOME = home;
+  });
+  afterEach(() => {
+    if (saved === undefined) delete process.env.FACTORY_HOME;
+    else process.env.FACTORY_HOME = saved;
+  });
+
+  /** Two accounts with one session each. */
+  function twoWithSessions() {
+    expect(create("ann@example.com").code).toBe(0);
+    expect(create("bob@example.com", []).code).toBe(0);
+    const users = listUsers();
+    const [ann, bob] = ["ann@example.com", "bob@example.com"].map((e) => users.find((u) => u.email === e)!);
+    for (const u of [ann!, bob!]) expect(startSession(u.id, u.passwordHash)).toBeDefined();
+    expect(readSessions()).toHaveLength(2);
+    return { ann: ann!, bob: bob! };
+  }
+
+  it("`password` signs the account out and leaves the others", () => {
+    const { ann, bob } = twoWithSessions();
+    expect(run(["user", "password", "ann@example.com"], PW2 + "\n").code).toBe(0);
+    expect(readSessions().map((s) => s.userId)).toEqual([bob.id]);
+    expect(ann.id).not.toBe(bob.id);
+  });
+
+  it("`block` signs the account out, and `unblock` does not bring it back", () => {
+    const { bob } = twoWithSessions();
+    expect(run(["user", "block", "ann@example.com"], "").code).toBe(0);
+    expect(readSessions().map((s) => s.userId)).toEqual([bob.id]);
+    expect(run(["user", "unblock", "ann@example.com"], "").code).toBe(0);
+    expect(readSessions().map((s) => s.userId)).toEqual([bob.id]);
+  });
+
+  it("adminHint is set until an admin exists", () => {
+    expect(adminHint()).toBe("no admin account yet — open the UI to create one, or run: scf user create --admin");
+    expect(create("bob@example.com", []).code).toBe(0);
+    expect(adminHint()).toContain("scf user create --admin");
+    expect(create("ann@example.com").code).toBe(0);
+    expect(adminHint()).toBeUndefined();
+  });
+});
+
+describe("scf serve", () => {
+  /** Starts the server, waits for the banner and the line after it, stops it, and returns what it printed. */
+  async function banner(): Promise<string> {
+    const port = 20000 + Math.floor(Math.random() * 20000);
+    const repo = join(tmp, "repo");
+    mkdirSync(repo, { recursive: true });
+    const child = spawn(process.execPath, [CLI, "serve", "--port", String(port), "--repo", repo], {
+      env: { ...cleanEnv(), FACTORY_NO_SUPERVISE: "1", FACTORY_NO_OPEN: "1" },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let out = "";
+    child.stdout.on("data", (d) => (out += d));
+    child.stderr.resume();
+    try {
+      const until = Date.now() + 15_000;
+      while (!out.includes("Ctrl+C to stop") && Date.now() < until) await new Promise((r) => setTimeout(r, 50));
+      await new Promise((r) => setTimeout(r, 500));
+      return out;
+    } finally {
+      child.kill();
+    }
+  }
+
+  it("prints a hint while there is no admin, and not after", async () => {
+    const hint = "no admin account yet — open the UI to create one, or run: scf user create --admin";
+    expect(await banner()).toContain(hint);
+    expect(create().code).toBe(0);
+    const after = await banner();
+    expect(after).toContain("Ctrl+C to stop");
+    expect(after).not.toContain("no admin account");
+  }, 40_000);
 });

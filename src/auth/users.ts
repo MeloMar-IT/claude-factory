@@ -1,6 +1,7 @@
 import { randomBytes, randomUUID, scrypt, timingSafeEqual } from "node:crypto";
 import { join } from "node:path";
 import { z } from "zod";
+import { addSessionLocked, removeSessionsLocked } from "./sessions.js";
 import { dataHome, readJsonFile, withAuthLock, writeJsonFile } from "./store.js";
 
 export type UserErrorCode = "bad-name" | "bad-email" | "bad-password" | "email-taken" | "admin-exists" | "not-found";
@@ -172,12 +173,14 @@ export async function createUser(input: NewUser, opts: { onlyIfNoAdmin?: boolean
   });
 }
 
-function change(id: string, apply: (u: User) => User): User {
+function change(id: string, apply: (u: User) => User, endSessions = false): User {
   return withAuthLock(() => {
     const file = read();
     const i = file.users.findIndex((u) => u.id === id);
     if (i < 0) throw new UserError("not-found", "no such account");
     const next = apply(file.users[i]!);
+    // sessions first: if the user file cannot be written, the account is only signed out too early
+    if (endSessions) removeSessionsLocked((s) => s.userId === id);
     writeJsonFile(usersPath(), { ...file, users: file.users.map((u, j) => (j === i ? next : u)) });
     return next;
   });
@@ -185,9 +188,45 @@ function change(id: string, apply: (u: User) => User): User {
 
 export async function setPassword(id: string, password: string): Promise<User> {
   const passwordHash = await hashPassword(password);
-  return change(id, (u) => ({ ...u, passwordHash }));
+  return change(id, (u) => ({ ...u, passwordHash }), true);
 }
 
 export async function setStatus(id: string, status: "active" | "blocked"): Promise<User> {
-  return change(id, (u) => ({ ...u, status }));
+  return change(id, (u) => ({ ...u, status }), status === "blocked");
+}
+
+// ---- sign-in ---------------------------------------------------------------------------------------
+
+// A valid hash in our form that no password is known for: checking against it costs exactly one scrypt.
+const DUMMY_HASH = `scrypt$${PARAMS}$${Buffer.alloc(SALT_BYTES, 1).toString("base64")}$${Buffer.alloc(KEY_BYTES, 2).toString("base64")}`;
+
+/**
+ * The account for an e-mail and password, or undefined. An unknown e-mail still costs one scrypt, so the
+ * time does not tell whether the account exists. The account may be blocked: the caller decides.
+ */
+export async function checkSignIn(email: string, password: string): Promise<User | undefined> {
+  const user = findUserByEmail(email);
+  const fits = typeof password === "string" && password.length <= PASSWORD_MAX;
+  if (!user || !fits) {
+    await verifyPassword(fits ? password : "", DUMMY_HASH);
+    return undefined;
+  }
+  return (await verifyPassword(password, user.passwordHash)) ? user : undefined;
+}
+
+/**
+ * Creates the session once the password was checked. Reads the user again under the lock: the hash must be the one
+ * that was checked and the account must be active, else there is no session (a password change or block in between wins).
+ * `replaces` is the id of the session the sign-in came with.
+ */
+export function startSession(userId: string, verifiedHash: string, replaces?: string): { user: User; token: string } | undefined {
+  return withAuthLock(() => {
+    const file = read();
+    const i = file.users.findIndex((u) => u.id === userId);
+    const current = file.users[i];
+    if (!current || current.passwordHash !== verifiedHash || current.status !== "active") return undefined;
+    const user: User = { ...current, lastSignIn: new Date().toISOString() };
+    writeJsonFile(usersPath(), { ...file, users: file.users.map((u, j) => (j === i ? user : u)) });
+    return { user, token: addSessionLocked(userId, replaces) };
+  });
 }

@@ -7,6 +7,7 @@ import { FACTORY_HOME } from "../flow/load.js";
 import { homeMoved } from "../home.js";
 import { Scheduler } from "../queue/scheduler.js";
 import { WatcherManager } from "../queue/watchers.js";
+import { SESSION_RECHECK_MS, authRoutes, requireSession, sessionAlive } from "./api-auth.js";
 import { adminRoutes } from "./api-admin.js";
 import { flowRoutes } from "./api-flows.js";
 import { runRoutes } from "./api-runs.js";
@@ -29,6 +30,8 @@ export interface ServerOptions {
   /** Run the watchers from config.yaml (default true). */
   watchers?: boolean;
   log?: (msg: string) => void;
+  /** How often an open response re-checks its session, in ms (default 4000). */
+  sessionRecheckMs?: number;
 }
 
 export interface ApiContext {
@@ -61,11 +64,26 @@ export async function startServer(opts: ServerOptions): Promise<{ url: string; c
 
   async function api(req: IncomingMessage, res: ServerResponse, path: string) {
     const method = req.method ?? "GET";
+    const seg = path.split("/").filter(Boolean).slice(1); // drop "api"
+    // The guard comes first: without a session nothing is answered, not even the moved-folder message with its path.
+    if (await authRoutes(ctx, req, res, seg, method)) return;
+    await requireSession(ctx, req, method);
     const moved = method === "GET" ? undefined : homeMoved();
     if (moved) throw new HttpError(503, `the data folder moved to ${moved}; the server restarts onto it — try again in a minute`);
-    const seg = path.split("/").filter(Boolean).slice(1); // drop "api"
-    for (const route of ROUTES) if (await route(ctx, req, res, seg, method)) return;
+    for (const route of ROUTES) {
+      if (await route(ctx, req, res, seg, method)) return watchSession(req, res);
+    }
     throw new HttpError(404, "not found");
+  }
+
+  /** A response that stays open (the run log stream) is closed when its session ends. */
+  function watchSession(req: IncomingMessage, res: ServerResponse) {
+    if (res.writableEnded || res.destroyed) return;
+    const timer = setInterval(() => {
+      if (!sessionAlive(ctx, req)) res.destroy();
+    }, opts.sessionRecheckMs ?? SESSION_RECHECK_MS);
+    timer.unref();
+    res.on("close", () => clearInterval(timer));
   }
 
   const server = createServer((req, res) => {

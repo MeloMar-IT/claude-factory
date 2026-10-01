@@ -13,6 +13,7 @@ import { acquireLock, lockHolder, lockPath, releaseLock } from "../src/home-migr
 import { StoreError, withAuthLock, writeJsonFile } from "../src/auth/store.js";
 import { createUser, setStatus } from "../src/auth/users.js";
 import { RESTART_CODE } from "../src/supervise.js";
+import { signInAs } from "./helpers/session.js";
 
 let tmp: string;
 let oldHome: string;
@@ -288,15 +289,40 @@ describe("server on a moved folder", () => {
     expect(prepareDataHome({ log: quiet }).home).toBe(oldHome);
     const port = 20000 + Math.floor(Math.random() * 20000);
     const { startServer } = await import("../src/server/server.js");
+    const base = `http://127.0.0.1:${port}`;
     const { close } = await startServer({ repo: tmp, runsDir: join(oldHome, "runs"), port, claudeBin: resolve("tests/fixtures/fake-claude.mjs") });
     try {
+      const pw = "test-password-12345";
+      const s = await signInAs(base, { email: "ann@example.com", password: pw });
       fakeRun("succeeded");
       expect(migrateDataHome({ from: oldHome, to: newHome, env: {}, freeBytes: () => 1e15, sizeBytes: () => 1 }).status).toBe("migrated");
       const before = readFileSync(join(oldHome, "config.yaml"), "utf8");
-      const put = await fetch(`http://127.0.0.1:${port}/api/config`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ concurrency: 5 }) });
-      expect(put.status).toBe(503);
+      const putOpts = (headers: Record<string, string>) => ({ method: "PUT", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify({ concurrency: 5 }) });
+      // without a session nothing is answered, and no folder path
+      expect((await fetch(`${base}/api/config`, putOpts({}))).status).toBe(401);
+      const noSession = await fetch(`${base}/api/config`);
+      expect(noSession.status).toBe(401);
+      const bodies: string[] = [await noSession.text()];
+      const put = await fetch(`${base}/api/config`, putOpts(s.headers("PUT")));
+      expect(put.status).toBe(503); // a signed-in user is told where the folder went
       expect(readFileSync(join(oldHome, "config.yaml"), "utf8")).toBe(before);
-      expect((await fetch(`http://127.0.0.1:${port}/api/config`)).status).toBe(200);
+      expect((await fetch(`${base}/api/config`, { headers: s.headers() })).status).toBe(200);
+      // the public changes answer 503 too, without the path
+      const post = (path: string, body: unknown) =>
+        fetch(base + path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      const signIn = await post("/api/session", { email: "ann@example.com", password: pw });
+      const setup = await post("/api/setup", { name: "B", email: "b@example.com", password: pw });
+      expect([signIn.status, setup.status]).toEqual([503, 503]);
+      bodies.push(await signIn.text(), await setup.text());
+      // sign-out is refused as well: no cookie change, and the session still works
+      for (const headers of [s.headers("DELETE"), {}]) {
+        const out = await fetch(`${base}/api/session`, { method: "DELETE", headers });
+        expect(out.status).toBe(503);
+        expect(out.headers.get("set-cookie")).toBeNull();
+        bodies.push(await out.text());
+      }
+      expect((await fetch(`${base}/api/config`, { headers: s.headers() })).status).toBe(200);
+      for (const b of bodies) expect(b).not.toContain(newHome);
     } finally {
       close();
     }

@@ -34,6 +34,19 @@ scf ui
 The UI opens at **http://localhost:4777**. It only listens on your own machine. The path in the
 top-right corner is the repository runs work on by default.
 
+**First start.** The first time you open the UI there is no account yet, so it shows
+**Create the admin account**: enter a name, an e-mail and a password (at least 10 characters,
+twice). That signs you in. You can also create the admin in a terminal with
+`scf user create --admin`; `scf ui` and `scf serve` print a hint while there is no admin. After
+an upgrade from a version without sign-in, do this once; nothing else changes. The CLI, the
+watchers and runs that are already going do not need an account.
+
+**Sign in and out.** After that, the UI shows a sign-in form. Your name and a **Sign out**
+button are in the top bar. You stay signed in for 7 days, or until you sign out. A password
+change or a block (`scf user password`, `scf user block`) signs that account out at once. If you
+are blocked, you cannot sign in. If the session ends while a page is open, the next action
+brings you back to the sign-in form.
+
 | Page | What it is for |
 |---|---|
 | **Your turn** | Only what waits for you, one button each; the app opens here when something waits |
@@ -819,8 +832,31 @@ random salt per account, N=32768, r=8, p=3 and a 64-byte key. The parameters are
 hash (`scrypt$N=32768,r=8,p=3$<salt>$<key>`). A hash in any other form makes the file invalid.
 Anyone who can run commands on the machine as you has admin rights: they can read the file or run
 `scf user create --admin`. This includes the agent and shell steps of flows, which run as your
-user. Nothing asks you to sign in yet. A file that cannot be read or is not valid is an error,
-never "no accounts".
+user. A file that cannot be read or is not valid is an error, never "no accounts".
+
+**Sign-in and sessions.** The UI and its API need a signed-in account; only the sign-in, sign-out
+and first-admin calls and the static files are open. A session is kept on the server in
+`sessions.json` (mode `0600`): it holds only a SHA-256 of the session token, never the token. It
+lasts 7 days from sign-in and is not renewed. Sessions survive a restart and move with the data
+folder. The browser holds the token in the cookie `scf_session_<port>` (`HttpOnly`,
+`SameSite=Strict`); the port is in the name because `localhost` cookies are shared between ports.
+There is no `Secure` flag, because the server speaks plain HTTP on 127.0.0.1 only.
+- **CSRF.** Every call that changes something must send the header `X-CSRF-Token` with the token
+  the server gave at sign-in; otherwise it gets 403. The UI does this for you. Requests from a
+  foreign origin or host are refused as before.
+- **Wrong passwords.** After 10 wrong tries for one e-mail in 15 minutes, sign-in answers 429
+  for that e-mail until the 15 minutes are over. A server restart also clears the count. The
+  answer for a wrong password and for an unknown e-mail is the same.
+- **Ending sessions.** Signing out, expiry, `scf user password` and `scf user block` end sessions.
+  A run log that is open in the browser stops within 5 seconds.
+- **Problems with the files.** If `users.json` or `sessions.json` cannot be read or written, or
+  another `scf` process holds the lock, sign-in shows "sign-in is not working; see the server
+  log". The log names the file and the kind of problem, never a password or a hash.
+- **Every account can do everything for now.** The role (`admin` or `user`) is stored but not
+  checked yet: any active account can use every page and call, including starting runs and
+  changing settings. Only give an account to people you trust with your machine's user rights.
+  Managing accounts and changing a password in the UI, permissions per role, access from other
+  machines and TLS come later.
 
 Global settings are stored in `~/.spaghetti-code-foundry/config.yaml`; runs in `~/.spaghetti-code-foundry/runs/`.
 
@@ -906,11 +942,11 @@ The command is `scf`. `factory` still works as an alias and prints a short note.
 | `scf clean [--older-than 7] [--purge] [--dry-run]` | Remove old run workspaces |
 | `scf user create [--admin] [--name n] [--email e]` | Create an account. The first one needs `--admin`. Name and e-mail are asked for on a terminal |
 | `scf user list` | List accounts (never shows passwords or hashes) |
-| `scf user password <e-mail>` | Set a new password |
-| `scf user block <e-mail>` / `scf user unblock <e-mail>` | Block or unblock an account |
+| `scf user password <e-mail>` | Set a new password and sign the account out |
+| `scf user block <e-mail>` / `scf user unblock <e-mail>` | Block (and sign out) or unblock an account |
 
 The password is asked twice on a terminal, or read from the first line of stdin; it is never an
-option or an environment variable.
+option or an environment variable. No command needs a signed-in session; only the web UI does.
 
 ### Environment variables
 

@@ -3,12 +3,14 @@ import { tmpdir } from "node:os";
 import { createServer } from "node:http";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { signInAs, type TestSession } from "./helpers/session.js";
 
 const port = 20000 + Math.floor(Math.random() * 20000);
 const base = `http://127.0.0.1:${port}`;
 let tmp: string;
 let close: () => void;
 let ctx: import("../src/server/server.js").ApiContext;
+let session: TestSession;
 
 beforeAll(async () => {
   tmp = mkdtempSync(join(tmpdir(), "factory-srv-"));
@@ -20,6 +22,7 @@ beforeAll(async () => {
     port,
     claudeBin: resolve("tests/fixtures/fake-claude.mjs"),
   }));
+  session = await signInAs(base);
 });
 afterAll(() => {
   close();
@@ -29,7 +32,7 @@ afterAll(() => {
 const json = (method: string, path: string, body?: unknown) =>
   fetch(base + path, {
     method,
-    headers: body ? { "content-type": "application/json" } : {},
+    headers: { ...(body ? { "content-type": "application/json" } : {}), ...session.headers(method) },
     body: body ? JSON.stringify(body) : undefined,
   });
 
@@ -74,7 +77,7 @@ describe("ui server", () => {
   });
 
   it("requires JSON bodies", async () => {
-    const r = await fetch(base + "/api/validate", { method: "POST", body: "yaml=x" });
+    const r = await fetch(base + "/api/validate", { method: "POST", headers: session.headers("POST"), body: "yaml=x" });
     expect(r.status).toBe(415);
   });
 
@@ -94,7 +97,7 @@ describe("ui server", () => {
     expect(r.status).toBe(201);
     const { runId } = (await r.json()) as { runId: string };
 
-    const res = await fetch(`${base}/api/runs/${runId}/events`);
+    const res = await fetch(`${base}/api/runs/${runId}/events`, { headers: session.headers() });
     const reader = res.body!.getReader();
     let text = "";
     while (!text.includes('"status":"succeeded"')) {
@@ -203,7 +206,7 @@ steps:
     const dismiss = (key?: string) => json("POST", "/api/your-turn/dismiss", key === undefined ? {} : { key });
     expect((await dismiss()).status).toBe(400);
     expect((await dismiss("no such key")).status).toBe(404);
-    expect((await fetch(base + "/api/your-turn/dismiss", { method: "POST", headers: { "content-type": "text/plain" }, body: "x" })).status).toBe(415);
+    expect((await fetch(base + "/api/your-turn/dismiss", { method: "POST", headers: session.headers("POST", { "content-type": "text/plain" }), body: "x" })).status).toBe(415);
     const res = await dismiss(item.key);
     expect(res.status).toBe(200);
     const after = (await res.json()) as Turn;
@@ -313,7 +316,7 @@ steps:
     const queue = (await (await json("GET", "/api/queue")).json()) as { pending: { runId: string; next: unknown }[] };
     expect(queue.pending.find((p) => p.runId === b.runId)!.next).toMatchObject({ kind: "one_at_a_time", status: "waiting for another run", where: { url: `#/runs/${a.runId}` } });
 
-    const res = await fetch(`${base}/api/runs/${b.runId}/events`);
+    const res = await fetch(`${base}/api/runs/${b.runId}/events`, { headers: session.headers() });
     const reader = res.body!.getReader();
     let text = "";
     while (!text.includes('"status":"succeeded"')) {
@@ -335,7 +338,7 @@ steps:
   - {id: claim_areas, type: shell, run: "echo 'waiting for run r9 (src)'; sleep 5"}
 `;
     const { runId } = (await (await json("POST", "/api/runs", { yaml: flow, task: "t" })).json()) as { runId: string };
-    const res = await fetch(`${base}/api/runs/${runId}/events`);
+    const res = await fetch(`${base}/api/runs/${runId}/events`, { headers: session.headers() });
     const reader = res.body!.getReader();
     let text = "";
     const stop = Date.now() + 15_000;

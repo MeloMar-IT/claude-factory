@@ -282,6 +282,9 @@ async function main(argv: string[]): Promise<number> {
       });
       const n = ctx.config().watchers.filter((w) => w.enabled).length;
       process.stdout.write(`Spaghetti Code Foundry → ${url}\n  repo: ${repo}\n  data: ${FACTORY_HOME}\n  watchers: ${n}\n  Ctrl+C to stop\n`);
+      const { adminHint } = await import("./auth/cli.js");
+      const hint = adminHint();
+      if (hint) process.stdout.write(`  ${hint}\n`);
       if (cmd === "ui" && !values["no-open"] && !process.env.FACTORY_NO_OPEN && process.platform === "darwin") execFile("open", [url]);
       const idle = () => { const q = ctx.scheduler.queue(); return q.active.length === 0 && q.pending.length === 0; };
       const beforeExit = () => ctx.watchers.stopAll();

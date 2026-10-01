@@ -1,5 +1,6 @@
 import YAML from "yaml";
 import { api } from "./api.js";
+import { ensureSignedIn } from "./auth.js";
 import { debounce, h, modal, mount, toast } from "./dom.js";
 import { cleanFlow, renderEditor } from "./editor.js";
 import { renderGraph } from "./graph.js";
@@ -398,6 +399,7 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
+await ensureSignedIn();
 startHealth(healthEl);
 S.info = await api.info();
 document.getElementById("repo").textContent = S.info.repo;
