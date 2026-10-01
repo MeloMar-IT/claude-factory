@@ -1,8 +1,10 @@
-# claude-factory
+# Spaghetti Code Foundry
+
+Formerly **claude-factory**. The command is now `scf` (`factory` still works), the repository is [MeloMar-IT/spaghetti-code-foundry](https://github.com/MeloMar-IT/spaghetti-code-foundry) and the data folder is `~/.spaghetti-code-foundry`. The `<repo>/.claude-factory` folder, the labels (`claude-factory`, `factory:*`) and `factory/…` branches keep the old name.
 
 An AI coding factory that runs on your own machine. You describe work as **flows** — YAML
 pipelines of agent steps (Claude Code or OpenAI's Codex CLI), shell steps, approvals and
-branches — and the factory runs them headlessly: from a task you type, a GitHub issue that gets
+branches — and the Foundry runs them headlessly: from a task you type, a GitHub issue that gets
 a label, a red CI build, or a schedule.
 
 ![Flow editor](docs/images/flows.png)
@@ -14,7 +16,7 @@ a label, a red CI build, or a schedule.
 - **Two agents, any model.** Steps run on Claude Code or Codex (with your ChatGPT login), on
   Anthropic, OpenAI or local models (Ollama, LM Studio). Routing rules pick the model per step,
   with fallbacks when a model hits a limit.
-- **Hands-off from GitHub.** Put one label on an issue — or a whole epic — and the factory asks
+- **Hands-off from GitHub.** Put one label on an issue — or a whole epic — and the Foundry asks
   its open questions up front, then plans (Opus, checked by Codex) and codes (Sonnet, two Codex
   reviews) each issue in dependency order, into one pull request you merge when you like. Plans
   get a 0–100 risk score; above 75 a human approves first. Watchers also answer review comments,
@@ -36,21 +38,36 @@ a label, a red CI build, or a schedule.
 ## Install
 
 ```bash
-git clone https://github.com/MeloMar-IT/claude-factory.git
-cd claude-factory
+git clone https://github.com/MeloMar-IT/spaghetti-code-foundry.git
+cd spaghetti-code-foundry
 npm install
 npm run build
-npm link            # or: ln -s "$PWD/dist/cli.js" ~/.local/bin/factory
+npm link            # gives the scf command (factory still works)
+# or: ln -s "$PWD/dist/cli.js" ~/.local/bin/scf
+#     ln -s "$PWD/dist/factory.js" ~/.local/bin/factory   # optional old name
 ```
+
+If you linked the old name before, run `npm rm -g claude-factory` first.
+
+**Already have a clone?** The repository was renamed from `MeloMar-IT/claude-factory`. GitHub
+redirects the old address, but point your clone at the new one:
+
+```bash
+git remote set-url origin https://github.com/MeloMar-IT/spaghetti-code-foundry.git
+# SSH: git remote set-url origin git@github.com:MeloMar-IT/spaghetti-code-foundry.git
+git remote -v    # check
+```
+
+The folder of your clone can keep its name.
 
 ## Quick start
 
 ```bash
 cd ~/code/my-project
-factory ui                      # web UI at http://localhost:4777
+scf ui                          # web UI at http://localhost:4777
 
 # or from the terminal:
-factory run quick --task "Add a --json flag to the export command" --var test_cmd="npm test"
+scf run quick --task "Add a --json flag to the export command" --var test_cmd="npm test"
 ```
 
 The run happens in a fresh worktree on a `factory/<run-id>` branch — your checkout is not
@@ -64,8 +81,8 @@ running and resuming them, the GitHub watchers, models and routing, safety setti
 evals and the CLI.
 
 To have **any AI assistant write a flow** for you, give it
-**[docs/FLOW_AUTHORING.md](docs/FLOW_AUTHORING.md)** (or the output of `factory flow-guide`) and
-describe the flow you want; check the result with `factory validate`.
+**[docs/FLOW_AUTHORING.md](docs/FLOW_AUTHORING.md)** (or the output of `scf flow-guide`) and
+describe the flow you want; check the result with `scf validate`.
 
 ## Built-in flows
 
@@ -77,10 +94,10 @@ describe the flow you want; check the result with `factory validate`.
 | `github-issue` | Issue → plan (or questions) → code → tests → review → push → report on the issue |
 | `github-pr` | Like `github-issue`, then PR → wait for CI and fix it → learn |
 | `github-auto` | Triage first: small fix, full feature, split into sub-issues, or ask |
-| `epic-questions`, `issue-gitflow`, `release-daily` | Gitflow pipeline: questions up front; per issue plan (risk gate, size limit with automatic splitting) and code on a feature branch, merged into `develop` by the factory — in parallel for different code areas; once a day one PR `develop` → `main` |
+| `epic-questions`, `issue-gitflow`, `release-daily` | Gitflow pipeline: questions up front; per issue plan (risk gate, size limit with automatic splitting) and code on a feature branch, merged into `develop` by the Foundry — in parallel for different code areas; once a day one PR `develop` → `main` |
 | `epic-questions`, `issue-deliver`, `daily-pr` | One-label pipeline: questions up front, plan (with a risk score — a human approves above 75) and code in one run, one rolling PR with a daily report |
 | `issue-plan`, `issue-code-daily` | Older two-label pipeline: approve every plan, pause while the daily PR is open |
-| `pr-feedback` | Address review comments on a factory PR |
+| `pr-feedback` | Address review comments on a Foundry PR |
 | `ci-fix` | Fix CI that is red on the default branch |
 | `chore` | Scheduled maintenance; opens a PR only if something changed |
 | `jira-ticket`, `linear-ticket` | Tickets from Jira or Linear, code in the local repo |

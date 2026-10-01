@@ -80,9 +80,9 @@ function prText(branch, note = "") {
     if (m && !issues.some((i) => i.n === m[1])) issues.push({ n: m[1], title: m[2] });
   }
   const body = [
-    "Work from claude-factory. This pull request stays open and grows as issues are finished; merge it",
+    "Work from Spaghetti Code Foundry. This pull request stays open and grows as issues are finished; merge it",
     "whenever you like — new work continues on a fresh branch after that. Every day at the report time",
-    "the factory runs the full tests and build here and comments the result.",
+    "the Foundry runs the full tests and build here and comments the result.",
     "",
     "### Issues",
     ...(issues.length ? issues.map((i) => `- #${i.n} ${i.title}`) : ["- (no issue commits)"]),
@@ -96,7 +96,7 @@ function prText(branch, note = "") {
     `<!-- claude-factory run=${process.env.FACTORY_RUN_ID ?? ""} daily -->`,
   ].join("\n");
   const nums = issues.map((i) => `#${i.n}`);
-  const title = `claude-factory: ${nums.length ? (nums.length > 8 ? `${nums.slice(0, 8).join(", ")} +${nums.length - 8} more` : nums.join(", ")) : branch.slice(prefix.length)}`;
+  const title = `Foundry: ${nums.length ? (nums.length > 8 ? `${nums.slice(0, 8).join(", ")} +${nums.length - 8} more` : nums.join(", ")) : branch.slice(prefix.length)}`;
   return { title, body, base: b.replace(/^origin\//, "") };
 }
 

@@ -283,9 +283,9 @@ steps:
         TOO_BIG) head="thinks this issue is too big for one change and proposes splitting it:" ;;
         *) echo "planning failed: no PLAN_STATUS line"; exit 1 ;;
       esac
-      { echo "🤖 **claude-factory** $head"; echo
+      { echo "🤖 **Spaghetti Code Foundry** $head"; echo
         printf '%s\n' "$out" | sed '/^PLAN_STATUS:/d'
-        echo; echo "_Reply on this issue and it plans again._"
+        echo; echo "_${FACTORY_NEXT_PLANNER_QUESTIONS}_"
         echo; echo "<!-- claude-factory run=$FACTORY_RUN_ID -->"; } \
         | gh issue comment "$FACTORY_VAR_ISSUE" --repo "$FACTORY_VAR_GITHUB_REPO" --body-file -
     on_success: stop
@@ -303,9 +303,10 @@ steps:
       if [ -n "$agreed" ]; then echo "The owner already agreed to the split — creating the issues."; echo "GATE: no"; exit 0; fi
       if [ "$risk" -le "$limit" ] && [ -z "$forced" ]; then echo "Split risk $risk/100 (≤ $limit) — creating the issues without asking."; echo "GATE: no"; exit 0; fi
       why="the split risk is $risk/100 (above $limit)"; [ -n "$forced" ] && why="the issue has the \`$FACTORY_VAR_REVIEW_PLAN_LABEL\` label"
-      { echo "🤖 **claude-factory** thinks this issue is too big for one change and proposes splitting it (**split risk: $risk/100**):"; echo
+      { echo "🤖 **Spaghetti Code Foundry** thinks this issue is too big for one change and proposes splitting it (**split risk: $risk/100**):"; echo
         printf '%s\n' "$out" | sed '/^PLAN_STATUS:/d; /^SPLIT_RISK:/d; /^SPLIT_APPROVED:/d'
-        echo; echo "✋ **You decide** ($why). Reply **/approve** and the factory creates these issues (with \`Depends on\` and the build label) and closes this one — or **/reject** followed by what to change."
+        echo; echo "✋ **You decide** ($why)."
+        echo; echo "_${FACTORY_NEXT_APPROVE_SPLIT}_"
         echo; echo "<!-- claude-factory run=$FACTORY_RUN_ID approval -->"; } | gh issue comment "$FACTORY_VAR_ISSUE" --repo "$FACTORY_VAR_GITHUB_REPO" --body-file - >/dev/null
       echo "asked the owner: $why"; echo "GATE: yes"
     routes:
@@ -347,16 +348,16 @@ steps:
       plan=$(printf '%s\n' "$out" | sed '/^PLAN_STATUS:/d; /^RISK_SCORE:/d; /^RISK_REASON:/d')
       reviewed=""; [ -n "$FACTORY_OUT_PLAN_REVIEW" ] && reviewed=" (checked against the code by Codex)"
       [ -n "$notes" ] && reviewed=" (draft — the revision did not finish; Codex's review notes are below)"
-      { echo "🤖 **claude-factory plan**$reviewed"; echo; echo "**Risk: $risk/100**${reason:+ — $reason}"; echo
+      { echo "🤖 **Spaghetti Code Foundry plan**$reviewed"; echo; echo "**Risk: $risk/100**${reason:+ — $reason}"; echo
         printf '%s\n' "$plan"
         if [ -n "$notes" ]; then echo; echo "## Codex review notes (not yet worked in)"; echo; printf '%s\n' "$notes" | sed '/^VERDICT:/d; /^RISK_SCORE:/d'; fi
         echo
         if [ "$gate" = yes ]; then
           echo "✋ **A human decides before coding starts:** $why."
-          echo "Reply **/approve** to start coding (optionally with notes), or **/reject** followed by what to change — it then plans again."
+          echo; echo "_${FACTORY_NEXT_APPROVE_PLAN}_"
           echo; echo "<!-- claude-factory run=$FACTORY_RUN_ID approval -->"
         else
-          echo "_Coding starts now; the result goes into the factory pull request, where you review it._"
+          echo "_Coding starts now; the result goes into the Foundry pull request, where you review it._"
           echo; echo "<!-- claude-factory run=$FACTORY_RUN_ID plan -->"
         fi; } | gh issue comment "$FACTORY_VAR_ISSUE" --repo "$FACTORY_VAR_GITHUB_REPO" --body-file - >/dev/null
       printf '%s\n' "$plan"
@@ -384,7 +385,8 @@ steps:
       {{steps.risk_gate.output}}
 
       Notes from the person who approved the plan, if any: {{steps.approve_plan.output}}
-       Follow the repository's CLAUDE.md conventions.
+
+      Follow the repository's CLAUDE.md conventions.
       - Add or update tests for everything you change.
       - Do not add new dependencies. Do not change: {{vars.forbidden_paths}}
       - Do not write documentation yet; that is a separate step.
@@ -612,7 +614,7 @@ steps:
     run: |-
       git add -A
       title=$(gh issue view "$FACTORY_VAR_ISSUE" --repo "$FACTORY_VAR_GITHUB_REPO" --json title -q .title 2>/dev/null)
-      git commit -q -m "Resolve #$FACTORY_VAR_ISSUE: $title" -m "Written by Claude, reviewed by Codex, tests passing. claude-factory run $FACTORY_RUN_ID"
+      git commit -q -m "Resolve #$FACTORY_VAR_ISSUE: $title" -m "Written by Claude, reviewed by Codex, tests passing. Spaghetti Code Foundry run $FACTORY_RUN_ID"
       git log --oneline -1
   - id: push
     type: shell
@@ -629,14 +631,14 @@ steps:
     run: |-
       branch=$(git branch --show-current); sha=$(git rev-parse HEAD)
       verdict() { printf '%s\n' "$1" | sed -n 's/^VERDICT: *//p' | tail -1; }
-      { echo "🤖 **claude-factory** implemented this on branch \`$branch\` (commit https://github.com/$FACTORY_VAR_GITHUB_REPO/commit/$sha)."
+      { echo "🤖 **Spaghetti Code Foundry** implemented this on branch \`$branch\` (commit https://github.com/$FACTORY_VAR_GITHUB_REPO/commit/$sha)."
         echo; echo "### What was done"; printf '%s\n' "$FACTORY_OUT_IMPLEMENT"
         echo; echo "### Review (Codex)"
         echo "- round 1: $(verdict "$FACTORY_OUT_REVIEW_1")"
         [ -n "$FACTORY_OUT_REVIEW_2" ] && echo "- round 2: $(verdict "$FACTORY_OUT_REVIEW_2")"
         echo; echo "### Tests"; echo '```'; cat "{{run.dir}}/last-tests.txt"; echo '```'
         echo; echo "### Files changed"; echo '```'; git show --stat --format= HEAD | tail -40; echo '```'
-        echo; echo "_It is in the factory pull request: $FACTORY_OUT_OPEN_PR — merge it whenever you like._"
+        echo; echo "_It is in the Foundry pull request: $FACTORY_OUT_OPEN_PR — merge it whenever you like._"
         echo; echo "<!-- claude-factory run=$FACTORY_RUN_ID -->"; } \
         | gh issue comment "$FACTORY_VAR_ISSUE" --repo "$FACTORY_VAR_GITHUB_REPO" --body-file -
     on_success: end

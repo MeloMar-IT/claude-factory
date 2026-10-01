@@ -1,4 +1,4 @@
-# ─── claude-factory flow ────────────────────────────────────────────────
+# ─── Spaghetti Code Foundry flow ────────────────────────────────────────
 # A flow is a list of steps run top to bottom. Each step either calls the
 # local Claude Code CLI headlessly (type: claude) or runs a shell command
 # (type: shell). Jumps between steps give you loops and gates.

@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { execFile } from "node:child_process";
 import { parseArgs } from "node:util";
+import { mirrorEnvPrefixes } from "./engine/template.js";
 import { resumeRun, runFlow, type RunSummary } from "./engine/runner.js";
 import { listBlocks } from "./flow/blocks.js";
 import { FACTORY_HOME, listFlows, loadFlow, resolveFlowPath } from "./flow/load.js";
@@ -16,28 +17,30 @@ import { installService, serviceStatus, uninstallService } from "./service.js";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
 import { restartOnNewBuild, supervise } from "./supervise.js";
+import { dropEmptyHomeVars, prepareDataHome, watchDataHome } from "./home.js";
 
-const USAGE = `claude-factory — run custom flows of headless Claude Code + shell steps
+const usage = () => `Spaghetti Code Foundry (scf) — run custom flows of headless Claude Code + shell steps
+("factory" still works as an alias for "scf".)
 
 Usage:
-  factory run <flow> --task "<text>" [options]   Run a flow against a repo
-  factory resume <run-id> [--from <step>]        Continue a stopped/failed/interrupted run
-  factory approve <run-id> [--note "..."]        Approve a run waiting at an approval step
-  factory reject <run-id> [--note "..."]         Reject it (the flow's on_failure path runs)
-  factory eval <suite.yaml> [--flows a,b] [--models sonnet,codex,ollama:qwen3-coder]
+  scf run <flow> --task "<text>" [options]       Run a flow against a repo
+  scf resume <run-id> [--from <step>]            Continue a stopped/failed/interrupted run
+  scf approve <run-id> [--note "..."]            Approve a run waiting at an approval step
+  scf reject <run-id> [--note "..."]             Reject it (the flow's on_failure path runs)
+  scf eval <suite.yaml> [--flows a,b] [--models sonnet,codex,ollama:qwen3-coder]
                                                  Benchmark flows/agents/models on sample tasks
-  factory clean [--older-than 7] [--purge] [--include-paused] [--dry-run]
+  scf clean [--older-than 7] [--purge] [--include-paused] [--dry-run]
                                                  Remove old run workspaces/worktrees (branches kept)
-  factory flows [--repo <dir>]                   List available flows
-  factory blocks [--repo <dir>]                  List reusable step blocks (the library)
-  factory validate <flow|file.yaml>              Check a flow definition
-  factory flow-guide                             Print the flow-writing guide for AI assistants
+  scf flows [--repo <dir>]                       List available flows
+  scf blocks [--repo <dir>]                      List reusable step blocks (the library)
+  scf validate <flow|file.yaml>                  Check a flow definition
+  scf flow-guide                                 Print the flow-writing guide for AI assistants
                                                  (give it to any LLM, then ask it for a flow)
-  factory new <name> [--from <flow>] [--global]  Create your own flow (copies a template)
-  factory ui [--port 4777] [--no-open]           Web UI + queue + watchers from config.yaml
-  factory serve [--port 4777]                    Same without opening a browser (for services)
-  factory service install|uninstall|status       Keep \`factory serve\` running as a macOS login agent
-  factory watch [flow] --var github_repo=o/r     Every 5 min, run the flow (default github-issue) on
+  scf new <name> [--from <flow>] [--global]      Create your own flow (copies a template)
+  scf ui [--port 4777] [--no-open]               Web UI + queue + watchers from config.yaml
+  scf serve [--port 4777]                        Same without opening a browser (for services)
+  scf service install|uninstall|status          Keep \`scf serve\` running as a macOS login agent
+  scf watch [flow] --var github_repo=o/r         Every 5 min, run the flow (default github-issue) on
         [--every 5m] [--label claude-factory]    each open issue with the label; results are marked
         [--max 1] [--once] [--source …]          with factory:* status labels; resumes runs when
                                                  questions are answered or /approve is commented.
@@ -85,14 +88,16 @@ function report(s: RunSummary): number {
       `\n  run log:   ${join(s.runDir, "run.json")}` +
       (s.workdir ? `\n  workspace: ${s.workdir}` : "") +
       (s.branch ? `\n  branch:    ${s.branch}` : "") +
-      (s.status === "waiting" ? `\n  next:      factory approve ${s.runId}   (or: factory reject ${s.runId})` : "") +
-      (s.status === "stopped" || s.status === "failed" ? `\n  next:      factory resume ${s.runId}` : "") +
+      (s.status === "waiting" ? `\n  next:      scf approve ${s.runId}   (or: scf reject ${s.runId})` : "") +
+      (s.status === "stopped" || s.status === "failed" ? `\n  next:      scf resume ${s.runId}` : "") +
       "\n",
   );
   return s.status === "succeeded" ? 0 : s.status === "waiting" || s.status === "stopped" ? 3 : 2;
 }
 
 async function main(argv: string[]): Promise<number> {
+  dropEmptyHomeVars();
+  mirrorEnvPrefixes();
   const { values, positionals } = parseArgs({
     args: argv,
     allowPositionals: true,
@@ -125,13 +130,16 @@ async function main(argv: string[]): Promise<number> {
   const repo = resolve(values.repo ?? process.cwd());
 
   if (values.help || !cmd) {
-    process.stdout.write(USAGE);
+    process.stdout.write(usage());
     return cmd || values.help ? 0 : 1;
   }
 
+  const moved = prepareDataHome({ checkConfig: (p) => void loadConfig(p) });
+  if (moved.reason === "moved-missing" || moved.reason === "incomplete") throw new Error(moved.message);
+
   switch (cmd) {
     case "run": {
-      if (!arg) throw new Error("usage: factory run <flow> --task \"...\"");
+      if (!arg) throw new Error("usage: scf run <flow> --task \"...\"");
       const task = values.task ?? (values["task-file"] ? readFileSync(values["task-file"], "utf8") : undefined);
       // The task is optional: e.g. GitHub flows take their work from the ticket.
       if (!existsSync(repo)) throw new Error(`repo not found: ${repo}`);
@@ -141,6 +149,7 @@ async function main(argv: string[]): Promise<number> {
         repo,
         runsDir: resolve(values["runs-dir"] ?? join(FACTORY_HOME, "runs")),
         vars: parseVars(values.var),
+        source: "cli",
         log: (m) => process.stdout.write(m + "\n"),
       });
       return report(summary);
@@ -149,7 +158,7 @@ async function main(argv: string[]): Promise<number> {
     case "resume":
     case "approve":
     case "reject": {
-      if (!arg) throw new Error(`usage: factory ${cmd} <run-id>`);
+      if (!arg) throw new Error(`usage: scf ${cmd} <run-id>`);
       const summary = await resumeRun({
         runId: arg,
         runsDir: resolve(values["runs-dir"] ?? join(FACTORY_HOME, "runs")),
@@ -183,21 +192,21 @@ async function main(argv: string[]): Promise<number> {
     }
 
     case "validate": {
-      if (!arg) throw new Error("usage: factory validate <flow>");
+      if (!arg) throw new Error("usage: scf validate <flow>");
       const { flow, path } = loadFlow(arg, repo);
       process.stdout.write(`✔ ${path}\n  ${flow.name}: ${flow.steps.map((s) => s.id).join(" → ")}\n`);
       return 0;
     }
 
     case "new": {
-      if (!arg || !/^[\w-]+$/.test(arg)) throw new Error("usage: factory new <name> (letters, digits, _ or -)");
+      if (!arg || !/^[\w-]+$/.test(arg)) throw new Error("usage: scf new <name> (letters, digits, _ or -)");
       const dir = values.global ? join(FACTORY_HOME, "flows") : join(repo, ".claude-factory", "flows");
       const dest = join(dir, `${arg}.yaml`);
       if (existsSync(dest)) throw new Error(`${dest} already exists`);
       const template = readFileSync(resolveFlowPath(values.from ?? "feature", repo), "utf8");
       mkdirSync(dir, { recursive: true });
       writeFileSync(dest, template.replace(/^name:.*$/m, `name: ${arg}`));
-      process.stdout.write(`created ${dest}\nedit it, then: factory run ${arg} --task "..."\n`);
+      process.stdout.write(`created ${dest}\nedit it, then: scf run ${arg} --task "..."\n`);
       return 0;
     }
 
@@ -252,6 +261,9 @@ async function main(argv: string[]): Promise<number> {
       if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("--port must be 1-65535");
       // Run the server as a child that is restarted when a new build is installed.
       if (process.env.FACTORY_SUPERVISED !== "1" && process.env.FACTORY_NO_SUPERVISE !== "1") {
+        // supervise() sets FACTORY_SUPERVISED/FACTORY_NO_OPEN for the child; drop the SCF_ copies so its mirror can't undo them.
+        delete process.env.SCF_SUPERVISED;
+        delete process.env.SCF_NO_OPEN;
         return supervise(fileURLToPath(import.meta.url), process.argv.slice(2), (m) => process.stdout.write(`${new Date().toISOString()} ${m}\n`));
       }
       const { url, ctx } = await startServer({
@@ -261,20 +273,30 @@ async function main(argv: string[]): Promise<number> {
         log: (m) => process.stdout.write(`${new Date().toISOString()} ${m}\n`),
       });
       const n = ctx.config().watchers.filter((w) => w.enabled).length;
-      process.stdout.write(`claude-factory → ${url}\n  repo: ${repo}\n  watchers: ${n}\n  Ctrl+C to stop\n`);
+      process.stdout.write(`Spaghetti Code Foundry → ${url}\n  repo: ${repo}\n  data: ${FACTORY_HOME}\n  watchers: ${n}\n  Ctrl+C to stop\n`);
       if (cmd === "ui" && !values["no-open"] && !process.env.FACTORY_NO_OPEN && process.platform === "darwin") execFile("open", [url]);
+      const idle = () => { const q = ctx.scheduler.queue(); return q.active.length === 0 && q.pending.length === 0; };
+      const beforeExit = () => ctx.watchers.stopAll();
+      const log = (m: string) => process.stdout.write(`${new Date().toISOString()} ${m}\n`);
       restartOnNewBuild({
         distDir: dirname(fileURLToPath(import.meta.url)),
-        idle: () => { const q = ctx.scheduler.queue(); return q.active.length === 0 && q.pending.length === 0; },
-        drain: () => ctx.watchers.stopAll(), // watchers start again with the new version
-        beforeExit: () => ctx.watchers.stopAll(),
-        log: (m) => process.stdout.write(`${new Date().toISOString()} ${m}\n`),
+        idle,
+        drain: () => {
+          ctx.restart = { why: "new_version", since: new Date().toISOString() };
+          ctx.watchers.stopAll(); // watchers start again with the new version
+        },
+        beforeExit,
+        log,
       });
+      watchDataHome({ idle, beforeExit, log, busy: () => {
+        ctx.restart ??= { why: "data_folder", since: new Date().toISOString() };
+        ctx.watchers.stopAll(); // drain, as for a new version: start nothing new while the restart waits
+      } });
       return new Promise<number>(() => {}); // run until killed
     }
 
     case "eval": {
-      if (!arg) throw new Error("usage: factory eval <suite.yaml> [--flows a,b] [--models sonnet,opus]");
+      if (!arg) throw new Error("usage: scf eval <suite.yaml> [--flows a,b] [--models sonnet,opus]");
       const split = (v?: string) => v?.split(",").map((x) => x.trim()).filter(Boolean);
       const { report, file } = await runEval({
         suitePath: arg,
@@ -315,12 +337,12 @@ async function main(argv: string[]): Promise<number> {
         process.stdout.write(installService({ cliPath: fileURLToPath(import.meta.url), port, repo }) + "\n");
       } else if (sub === "uninstall") process.stdout.write(uninstallService() + "\n");
       else if (sub === "status") process.stdout.write(serviceStatus() + "\n");
-      else throw new Error("usage: factory service install|uninstall|status");
+      else throw new Error("usage: scf service install|uninstall|status");
       return 0;
     }
 
     default:
-      throw new Error(`unknown command "${cmd}"\n\n${USAGE}`);
+      throw new Error(`unknown command "${cmd}"\n\n${usage()}`);
   }
 }
 

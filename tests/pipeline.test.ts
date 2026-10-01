@@ -5,9 +5,10 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { ConfigSchema, WatcherSchema } from "../src/config.js";
 import { runFlow } from "../src/engine/runner.js";
 import { loadFlow } from "../src/flow/load.js";
+import { commentText, nextStep } from "../src/next-step.js";
 import { Scheduler } from "../src/queue/scheduler.js";
 import { minutesNow, Watcher } from "../src/queue/watcher.js";
-import { claudeBin, fakeGithub } from "./helpers/fake-github.js";
+import { claudeBin, closing, fakeGithub } from "./helpers/fake-github.js";
 
 // The label-driven pipeline: issue-plan → issue-code-daily → daily-pr, as configured for a real repo.
 const REPO = "acme/app";
@@ -63,7 +64,7 @@ describe("label-driven issue pipeline", () => {
     expect(runOf("issue-plan", "5")?.status).toBe("succeeded");
     expect(runOf("issue-plan", "8")).toBeUndefined();
     const log = gh.ghLog();
-    expect(log).toContain("claude-factory plan**");
+    expect(log).toContain("Spaghetti Code Foundry plan**");
     expect(log).toContain("Add the `Factory_code` label to start coding");
     expect(log).toMatch(/gh issue edit 5 .*--remove-label Factory_ready.*--add-label Factory_planned/);
     expect(log).not.toMatch(/issue edit 8 /);
@@ -81,7 +82,7 @@ describe("label-driven issue pipeline", () => {
     // The revision is a fresh, targeted session (cheaper than replaying the planning session).
     expect(run.history.find((h) => h.id === "revise_plan")!.sessionId).not.toBe(run.history.find((h) => h.id === "plan")!.sessionId);
     const log = gh.ghLog();
-    expect(log).toContain("claude-factory plan** (checked against the code by Codex)");
+    expect(log).toContain("Spaghetti Code Foundry plan** (checked against the code by Codex)");
     expect(log).toContain("Add feature.txt (revised)");
   });
 
@@ -117,7 +118,8 @@ describe("label-driven issue pipeline", () => {
     await settle();
     expect(runOf("issue-plan", "5")).toBeUndefined();
     expect(w.status.lastActions.join("\n")).toContain("#5 waits for #4");
-    expect(w.status.holds).toEqual([{ issue: 5, title: "Story 5 — Verify", reason: "waits for #4 to be done (Depends on)" }]);
+    expect(w.status.holds).toMatchObject([{ issue: 5, title: "Story 5 — Verify", next: { kind: "dependency", who: "Another story", until: "after #4" } }]);
+    expect(w.status.holds![0]!.reason).toContain("waits for #4");
     expect(runOf("issue-plan", "6")?.status).toBe("succeeded"); // #3 is not a known issue: not blocking
     // Story 4 is coded (Factory_done, not merged yet): now Story 5 can be planned.
     process.env.FAKE_GH_ISSUES = process.env.FAKE_GH_ISSUES.replace('"Factory_code"', '"Factory_done"');
@@ -133,6 +135,8 @@ describe("label-driven issue pipeline", () => {
     await settle();
     expect(runOf("issue-plan", "1")?.status).toBe("stopped");
     expect(gh.ghLog()).toContain("thinks this issue is not a coding task");
+    const sent = gh.comments().find((c) => c.body.includes("thinks this issue is not a coding task"))!;
+    expect(closing(sent.body)).toEqual([`_${commentText("planner_questions")}_`, expect.stringMatching(/^<!-- claude-factory run=\S+ [\w-]+ -->$|^<!-- claude-factory run=\S+ -->$/)]);
     expect(gh.ghLog()).toMatch(/issue edit 1 .*--add-label Factory_needs_info/);
   });
 
@@ -175,7 +179,11 @@ describe("label-driven issue pipeline", () => {
     expect(run.history.filter((h) => h.id === "fix_tests")).toHaveLength(3);
     const log = gh.ghLog();
     expect(log).toMatch(/issue edit 6 .*--add-label Factory_ERROR/);
-    expect(log).toContain("could not finish this issue");
+    expect(log).toContain("🤖 **Spaghetti Code Foundry** could not finish this issue");
+    expect(log).not.toContain("**claude-factory** could not finish");
+    expect(log).toMatch(new RegExp(`could not finish this issue[\\s\\S]*<!-- claude-factory run=${run.runId} -->`));
+    expect(log).toContain("to start over, or resume the run");
+    expect(log).toContain(nextStep("failed", {}, { watched: true, failedLabel: "Factory_ERROR", reason: run.reason }).text);
     expect(log).toContain("Last failing step: `run_tests` (attempt 4)");
     expect(log).toContain("result: FAILED");
     expect(gh.remoteGit("branch", "--list", "factory/*").trim()).toBe(""); // nothing was pushed
@@ -221,7 +229,8 @@ describe("label-driven issue pipeline", () => {
     await settle();
     expect(runOf("issue-code-daily", "7")).toBeUndefined();
     expect(w.status.lastActions[0]).toContain("not starting new work while PR #99");
-    expect(w.status.holds).toMatchObject([{ issue: 7, reason: "waits until daily pull request #99 is merged" }]);
+    expect(w.status.holds).toMatchObject([{ issue: 7, next: { kind: "release", action: "Merge the daily pull request #99" } }]);
+    expect(w.status.holds).toHaveLength(1);
 
     // … and after the merge, work continues on a fresh branch for today.
     mergePr(`factory/daily-${today}`);

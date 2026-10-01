@@ -21,8 +21,10 @@ const trigger = process.env.FACTORY_VAR_TRIGGER_LABEL ?? "";
 const reviewLabel = process.env.FACTORY_VAR_REVIEW_PLAN_LABEL ?? "";
 const MARK = "<!-- claude-factory split";
 // Only our own finished-split comment counts — not a comment that merely mentions the marker.
-const DONE_RE = /^<!-- claude-factory split run=\S* -->\s*$/m;
-const OURS = "🤖 **claude-factory** split this issue into";
+const DONE_RE = /^<!-- (?:claude-factory|spaghetti-code-foundry) split run=\S* -->\s*$/m;
+const HEADING = "🤖 **Spaghetti Code Foundry** split this issue into";
+// Our finished-split comments: current heading, and the one used before the rename.
+const OURS = [HEADING, "🤖 **claude-factory** split this issue into"];
 const gh = (args, input) => execFileSync(process.env.FACTORY_GH_BIN || "gh", args, { encoding: "utf8", input, stdio: [input ? "pipe" : "ignore", "pipe", "pipe"] }).trim();
 
 function fail(msg) {
@@ -53,7 +55,7 @@ if (parts.length < 2) fail(`expected at least 2 parts, found ${parts.length}`);
 
 // ── the original issue ──
 const parent = JSON.parse(gh(["issue", "view", parentNo, "--repo", repo, "--json", "title,body,labels,comments"]));
-const done = (parent.comments ?? []).find((c) => c.body.startsWith(OURS) && DONE_RE.test(c.body));
+const done = (parent.comments ?? []).find((c) => OURS.some((h) => c.body.startsWith(h)) && DONE_RE.test(c.body));
 if (done) {
   console.log(`already split: ${(done.body.match(/#\d+/g) ?? []).join(" ")}`);
   process.exit(0);
@@ -84,7 +86,7 @@ for (const [i, p] of parts.entries()) {
   const body = kept.join("\n").trim();
   const doc = [
     ...(epic ? [epic, ""] : []),
-    `Part ${i + 1} of ${parts.length} of #${parentNo} (${parent.title}), split by claude-factory.`,
+    `Part ${i + 1} of ${parts.length} of #${parentNo} (${parent.title}), split by Spaghetti Code Foundry.`,
     "",
     body,
     "",
@@ -103,7 +105,7 @@ for (const [i, p] of parts.entries()) {
 // ── close the original with the list ──
 const list = parts.map((p) => `- #${created.get(p.n)} ${p.title}`).join("\n");
 gh(["issue", "comment", parentNo, "--repo", repo, "--body-file", "-"],
-  `🤖 **claude-factory** split this issue into ${parts.length} issues, built in this order:\n\n${list}\n\nClosing this one in favour of them.\n\n${MARK} run=${process.env.FACTORY_RUN_ID ?? ""} -->`);
+  `${HEADING} ${parts.length} issues, built in this order:\n\n${list}\n\nClosing this one in favour of them.\n\n${MARK} run=${process.env.FACTORY_RUN_ID ?? ""} -->`);
 // Issues that depended on the original now depend on its parts (else they'd start as soon as the
 // original is closed).
 const partRefs = [...created.values()].map((n) => `#${n}`);

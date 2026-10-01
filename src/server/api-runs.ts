@@ -5,17 +5,23 @@ import { runDiff } from "../engine/diff.js";
 import { readTranscript } from "../engine/transcript.js";
 import { parseFlow, resolveFlowPath } from "../flow/load.js";
 import { HttpError, NAME_RE, readJson, send, str } from "./http.js";
+import { nextFor, queueWithNext } from "./next.js";
+import type { RunEvent } from "../queue/scheduler.js";
 import type { Route } from "./server.js";
 
-export const runRoutes: Route = async ({ opts, scheduler }, req, res, seg, method) => {
-  if (seg[0] === "queue" && method === "GET") return send(res, 200, scheduler.queue()), true;
+const NEXT_RECHECK_MS = 2_000;
+
+export const runRoutes: Route = async (ctx, req, res, seg, method) => {
+  const { opts, scheduler } = ctx;
+  if (seg[0] === "queue" && method === "GET") return send(res, 200, queueWithNext(ctx)), true;
   if (seg[0] !== "runs") return false;
   const id = seg[1];
 
   if (!id && method === "GET") {
     const runs = scheduler.list(200);
     const replaced = supersededRuns(runs);
-    return send(res, 200, runs.map((r) => (replaced.has(r.runId) ? { ...r, superseded: true } : r))), true;
+    const next = nextFor(ctx, runs);
+    return send(res, 200, runs.map((r) => ({ ...r, ...(replaced.has(r.runId) ? { superseded: true } : {}), next: next(r) }))), true;
   }
   if (!id && method === "POST") {
     const body = await readJson(req);
@@ -59,10 +65,26 @@ export const runRoutes: Route = async ({ opts, scheduler }, req, res, seg, metho
 
   if (action === "events" && method === "GET") {
     res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store", connection: "keep-alive" });
-    const unsubscribe = scheduler.subscribe(id, (e) => res.write(`event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`));
+    let last = ""; // text of the record sent last
+    const write = (e: RunEvent) => {
+      let out: unknown = e;
+      if (e.type === "update") {
+        const next = nextFor(ctx)(e.summary);
+        last = next.text;
+        out = { ...e, summary: { ...e.summary, next } };
+      }
+      res.write(`event: ${e.type}\ndata: ${JSON.stringify(out)}\n\n`);
+    };
+    const unsubscribe = scheduler.subscribe(id, write);
+    // A wait for a code area shows up in the step log only, without an update event: look again now and then.
+    const recheck = setInterval(() => {
+      const s = scheduler.get(id);
+      if (s?.status === "running" && nextFor(ctx)(s).text !== last) write({ type: "update", summary: s });
+    }, NEXT_RECHECK_MS);
     const ping = setInterval(() => res.write(": ping\n\n"), 15_000);
     req.on("close", () => {
       clearInterval(ping);
+      clearInterval(recheck);
       unsubscribe();
     });
     return true;
@@ -70,7 +92,7 @@ export const runRoutes: Route = async ({ opts, scheduler }, req, res, seg, metho
 
   const s = scheduler.get(id);
   if (!s) throw new HttpError(404, "run not found");
-  if (!action && method === "GET") return send(res, 200, s), true;
+  if (!action && method === "GET") return send(res, 200, { ...s, next: nextFor(ctx)(s) }), true;
   if (action === "diff" && method === "GET") return send(res, 200, runDiff(s)), true;
   if (action === "transcript" && method === "GET") {
     const n = Number(seg[3]);

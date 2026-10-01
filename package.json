@@ -1,15 +1,20 @@
 {
-  "name": "claude-factory",
+  "name": "spaghetti-code-foundry",
   "version": "0.1.0",
   "description": "AI coding factory: run custom YAML flows of headless Claude Code CLI and shell steps",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/MeloMar-IT/claude-factory.git"
+    "url": "git+https://github.com/MeloMar-IT/spaghetti-code-foundry.git"
+  },
+  "homepage": "https://github.com/MeloMar-IT/spaghetti-code-foundry#readme",
+  "bugs": {
+    "url": "https://github.com/MeloMar-IT/spaghetti-code-foundry/issues"
   },
   "type": "module",
   "bin": {
-    "factory": "dist/cli.js"
+    "scf": "dist/cli.js",
+    "factory": "dist/factory.js"
   },
   "files": [
     "dist",
@@ -21,7 +26,7 @@
     "docs/FLOW_AUTHORING.md"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && chmod +x dist/cli.js",
+    "build": "tsc -p tsconfig.build.json && chmod +x dist/cli.js dist/factory.js",
     "dev": "tsx src/cli.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"

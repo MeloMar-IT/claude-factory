@@ -46,3 +46,21 @@ export function outputEnvName(stepId: string): string {
 export function varEnvName(name: string): string {
   return "FACTORY_VAR_" + envSuffix(name);
 }
+
+/** Returns a copy of env where every FACTORY_X is also set as SCF_X. */
+export function withScfAliases<T extends Record<string, string | undefined>>(env: T): T {
+  const out: Record<string, string | undefined> = { ...env };
+  for (const [k, v] of Object.entries(env)) if (k.startsWith("FACTORY_")) out["SCF_" + k.slice(8)] = v;
+  return out as T;
+}
+
+/** In place: SCF_X → FACTORY_X (SCF_ wins), then FACTORY_X → SCF_X where SCF_X is missing. Returns env. */
+export function mirrorEnvPrefixes(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  for (const k of Object.keys(env)) {
+    if (k.startsWith("SCF_") && env[k] !== undefined) env["FACTORY_" + k.slice(4)] = env[k];
+  }
+  for (const k of Object.keys(env)) {
+    if (k.startsWith("FACTORY_") && env["SCF_" + k.slice(8)] === undefined) env["SCF_" + k.slice(8)] = env[k];
+  }
+  return env;
+}

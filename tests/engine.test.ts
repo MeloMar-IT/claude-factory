@@ -1,11 +1,16 @@
 import { execFileSync } from "node:child_process";
+import { createServer } from "node:http";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ConfigSchema, type Config } from "../src/config.js";
 import { learningsFile, resumeRun, runFlow } from "../src/engine/runner.js";
-import { liveLogFile } from "../src/engine/state.js";
+import { dockerCommand } from "../src/engine/guards.js";
+import { liveLogFile, saveRun } from "../src/engine/state.js";
+import { mirrorEnvPrefixes, withScfAliases } from "../src/engine/template.js";
+import { notifyRun } from "../src/notify.js";
+import { COMMENT_KINDS, commentText, runNextStep } from "../src/next-step.js";
 import { parseFlow } from "../src/flow/load.js";
 
 const claudeBin = resolve("tests/fixtures/fake-claude.mjs");
@@ -26,6 +31,41 @@ const start = (yaml: string, opts: { vars?: Record<string, string>; config?: Con
   runFlow(parseFlow(yaml), { task: opts.task ?? "t", repo, runsDir, claudeBin, vars: opts.vars, config: opts.config ?? baseConfig() });
 const resume = (runId: string, extra: Partial<Parameters<typeof resumeRun>[0]> = {}) =>
   resumeRun({ runId, runsDir, claudeBin, config: baseConfig(), ...extra });
+
+describe("next-step sentences in the step environment", () => {
+  const names = COMMENT_KINDS.map((k) => k.toUpperCase());
+  const print = (prefix: string) => names.map((n) => `echo "$${prefix}_NEXT_${n}"`).join("; ");
+
+  it("gives shell steps FACTORY_NEXT_… and SCF_NEXT_… with the module's sentences", async () => {
+    const s = await start(`
+name: t
+workspace: inplace
+steps:
+  - {id: f, type: shell, run: '${print("FACTORY")}'}
+  - {id: s, type: shell, run: '${print("SCF")}'}
+`);
+    expect(s.status).toBe("succeeded");
+    const want = COMMENT_KINDS.map(commentText);
+    expect(s.history[0]!.output.trim().split("\n")).toEqual(want);
+    expect(s.history[1]!.output.trim().split("\n")).toEqual(want);
+  });
+
+  it("resumes a run whose stored flow has the old hard-coded text", async () => {
+    const s = await start(`
+name: t
+workspace: inplace
+steps:
+  - {id: ask, type: shell, run: 'echo "Reply **/approve** to continue or **/reject** to stop (optionally followed by a note)."'}
+  - {id: gate, type: approval, message: "Go?"}
+  - {id: after, type: shell, run: 'echo "$FACTORY_NEXT_APPROVAL"'}
+`);
+    expect(s.status).toBe("waiting");
+    const r = await resume(s.runId, { decision: { approved: true, by: "marcel" } });
+    expect(r.status).toBe("succeeded");
+    expect(r.history.find((h) => h.id === "ask")!.output).toContain("Reply **/approve** to continue");
+    expect(r.history.find((h) => h.id === "after")!.output.trim()).toBe(commentText("approval"));
+  });
+});
 
 describe("approvals", () => {
   const FLOW = `
@@ -231,7 +271,7 @@ steps:
   - {id: to_feature, type: shell, run: git push -q origin HEAD:refs/heads/factory/x 2>&1}
 `, { config: baseConfig({ protected_branches: ["main", "release/*"] }) });
     expect(s.history[0]!.ok).toBe(false);
-    expect(s.history[0]!.output).toContain("protected branch 'main' is blocked");
+    expect(s.history[0]!.output).toContain("Spaghetti Code Foundry: pushing to protected branch 'main' is blocked");
     expect(s.history[1]!.ok).toBe(true);
     expect(s.status).toBe("succeeded");
   });
@@ -268,5 +308,125 @@ describe("schema", () => {
     expect(() => parseFlow("name: t\nsteps:\n  - {id: p, type: parallel, steps: [a, nope]}\n  - {id: a, type: shell, run: x}")).toThrow(/unknown step "nope"/);
     expect(() => parseFlow("name: t\nsteps:\n  - {id: a, type: shell, run: x, routes: [{if: '(', goto: a}]}")).toThrow(/invalid regex/);
     expect(existsSync("flows")).toBe(true);
+  });
+});
+
+describe("SCF_ names", () => {
+  it("gives steps every FACTORY_ variable also as SCF_", async () => {
+    const s = await start(`
+name: t
+workspace: inplace
+vars: {x: hello}
+steps:
+  - {id: a, type: shell, run: 'echo first'}
+  - {id: b, type: shell, run: 'printf "%s|%s|%s|%s|%s" "$SCF_TASK" "$SCF_RUN_ID" "$SCF_VAR_X" "$SCF_OUT_A" "$SCF_TOOLS"'}
+  - {id: c, type: shell, run: 'printf "%s|%s|%s|%s|%s" "$FACTORY_TASK" "$FACTORY_RUN_ID" "$FACTORY_VAR_X" "$FACTORY_OUT_A" "$FACTORY_TOOLS"'}
+`);
+    const b = s.history.find((h) => h.id === "b")!.output;
+    expect(b).toBe(s.history.find((h) => h.id === "c")!.output);
+    expect(b).toContain(s.runId);
+    expect(b).toContain("hello");
+    expect(b.startsWith("|")).toBe(false);
+  });
+
+  it("copes with large step outputs under both names", async () => {
+    const steps = Array.from({ length: 20 }, (_, i) => `  - {id: s${i + 1}, type: shell, run: "printf '%020000d' 0"}`).join("\n");
+    const s = await start(`name: t\nworkspace: inplace\nsteps:\n${steps}\n  - {id: last, type: shell, run: 'echo "\${#SCF_OUT_S1} \${#FACTORY_OUT_S20}"'}\n`);
+    expect(s.status).toBe("succeeded");
+    expect(s.history.at(-1)!.output.trim()).toBe("20000 20000");
+  });
+
+  it("withScfAliases adds SCF_ copies without touching the input", () => {
+    const input = { FACTORY_A: "1", SCF_A: "stale", OTHER: "x" };
+    expect(withScfAliases(input)).toEqual({ FACTORY_A: "1", SCF_A: "1", OTHER: "x" });
+    expect(input.SCF_A).toBe("stale");
+  });
+
+  it("mirrorEnvPrefixes lets SCF_ win and fills the gaps", () => {
+    const env: NodeJS.ProcessEnv = { SCF_HOME: "/new", FACTORY_HOME: "/old", FACTORY_NO_OPEN: "1", SCF_CLAUDE_BIN: "/c", PATH: "/bin" };
+    expect(mirrorEnvPrefixes(env)).toBe(env);
+    expect(env.SCF_HOME).toBe("/new");
+    expect(env.FACTORY_HOME).toBe("/new");
+    expect(env.SCF_NO_OPEN).toBe("1");
+    expect(env.FACTORY_CLAUDE_BIN).toBe("/c");
+    expect(env.PATH).toBe("/bin");
+  });
+
+  it("dockerCommand passes SCF_TOOLS itself and the other names through", () => {
+    const { args } = dockerCommand("img", "/w", "c", ["FACTORY_TASK", "SCF_TASK", "FACTORY_TOOLS", "SCF_TOOLS"]);
+    expect(args).toContain("SCF_TOOLS=/factory-tools");
+    expect(args).toContain("FACTORY_TOOLS=/factory-tools");
+    const i = args.indexOf("SCF_TASK");
+    expect(args[i - 1]).toBe("-e");
+    expect(args).not.toContain("SCF_TOOLS");
+    expect(args).not.toContain("FACTORY_TOOLS");
+  });
+
+  it("notify commands get both names", async () => {
+    const s = await start("name: t\nworkspace: inplace\nsteps:\n  - {id: a, type: shell, run: 'true'}\n");
+    const out = join(tmp, "n");
+    const saved = process.env.FACTORY_NO_NOTIFY;
+    delete process.env.FACTORY_NO_NOTIFY;
+    try {
+      await notifyRun(baseConfig({ notify: { macos: false, command: `printf "%s %s" "$SCF_STATUS" "$FACTORY_STATUS" > ${out}` } }), s);
+    } finally {
+      process.env.FACTORY_NO_NOTIFY = saved;
+    }
+    expect(readFileSync(out, "utf8")).toBe("succeeded succeeded");
+  });
+
+  it("FACTORY_MESSAGE says who has to do what", async () => {
+    const s = await start("name: t\nworkspace: inplace\nsteps:\n  - {id: a, type: shell, run: 'true'}\n");
+    const out = join(tmp, "msg");
+    const messageFor = async (run: typeof s) => {
+      const saved = process.env.FACTORY_NO_NOTIFY;
+      delete process.env.FACTORY_NO_NOTIFY;
+      try {
+        await notifyRun(baseConfig({ notify: { macos: false, command: `printf "%s" "$FACTORY_MESSAGE" > ${out}` } }), run);
+      } finally {
+        process.env.FACTORY_NO_NOTIFY = saved;
+      }
+      return readFileSync(out, "utf8");
+    };
+    const waiting = { ...s, status: "waiting", waiting: { stepId: "gate", message: "Deploy now?", since: "x" } } as typeof s;
+    const w = await messageFor(waiting);
+    expect(w).toContain("approve or reject it on the run page");
+    expect(w.endsWith(runNextStep(waiting).text)).toBe(true);
+    const failed = { ...s, status: "failed", reason: 'step "a" failed: boom' } as typeof s;
+    const f = await messageFor(failed);
+    expect(f).toContain("resume the run on its page");
+    expect(f.endsWith(runNextStep(failed).text)).toBe(true);
+
+    // A long task and a long reason are shortened; the action stays whole.
+    const long = { ...s, task: "t".repeat(400), status: "failed", reason: `step "a" failed: ${"boom ".repeat(100)}` } as typeof s;
+    const l = await messageFor(long);
+    expect(l.length).toBeLessThanOrEqual(300);
+    expect(l.endsWith("resume the run on its page.")).toBe(true);
+  });
+
+  it("notifications are titled Foundry · flow status", async () => {
+    const s = await start("name: t\nworkspace: inplace\nsteps:\n  - {id: a, type: shell, run: 'true'}\n");
+    let body = "";
+    const server = createServer((req, res) => {
+      req.on("data", (c) => (body += c));
+      req.on("end", () => res.end("ok"));
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const port = (server.address() as { port: number }).port;
+    const saved = process.env.FACTORY_NO_NOTIFY;
+    delete process.env.FACTORY_NO_NOTIFY;
+    try {
+      await notifyRun(baseConfig({ notify: { macos: false, slack_webhook: `http://127.0.0.1:${port}/hook` } }), s);
+    } finally {
+      process.env.FACTORY_NO_NOTIFY = saved;
+      server.close();
+    }
+    expect(JSON.parse(body).text.startsWith("*Foundry · t succeeded*\n")).toBe(true);
+  });
+
+  it("names the product when a run is too old to resume", async () => {
+    const s = await start("name: t\nworkspace: inplace\nsteps:\n  - {id: a, type: shell, run: 'true'}\n");
+    saveRun({ ...s, flowDef: undefined } as unknown as typeof s);
+    await expect(resume(s.runId)).rejects.toThrow("older version of Spaghetti Code Foundry");
   });
 });

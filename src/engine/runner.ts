@@ -2,8 +2,10 @@ import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
+import { nextStepEnv } from "../next-step.js";
 import { loadConfig, loadRepoVars, type Config } from "../config.js";
 import { FACTORY_HOME } from "../flow/load.js";
+import { claimRunStart } from "../home.js";
 import type { Flow, Step } from "../flow/schema.js";
 import { notifyRun } from "../notify.js";
 import {
@@ -35,7 +37,7 @@ interface CommonOptions {
   log?: (msg: string) => void;
   /** Called whenever run.json is written. */
   onUpdate?: (summary: RunSummary) => void;
-  /** Defaults to ~/.claude-factory/config.yaml. */
+  /** Defaults to <data folder>/config.yaml. */
   config?: Config;
 }
 
@@ -45,6 +47,8 @@ export interface RunOptions extends CommonOptions {
   vars?: Record<string, string>;
   /** Pre-allocated run id (e.g. so a UI can subscribe before the run starts). */
   runId?: string;
+  /** Who started the run; saved in run.json. */
+  source?: string;
 }
 
 export interface ResumeOptions extends CommonOptions {
@@ -70,7 +74,6 @@ export async function runFlow(flow: Flow, opts: RunOptions): Promise<RunSummary>
   const config = opts.config ?? loadConfig();
   const runId = opts.runId ?? newRunId();
   const runDir = join(opts.runsDir, runId);
-  mkdirSync(join(runDir, "logs"), { recursive: true });
 
   let repoVars: Record<string, string> = {};
   try {
@@ -91,8 +94,13 @@ export async function runFlow(flow: Flow, opts: RunOptions): Promise<RunSummary>
     totalCostUsd: 0,
     history: [],
     state: { next: null, steps: {}, visits: {} },
+    pid: process.pid,
+    ...(opts.source ? { source: opts.source } : {}),
   };
-  saveRun(summary);
+  claimRunStart(opts.runsDir, () => {
+    mkdirSync(join(runDir, "logs"), { recursive: true });
+    saveRun(summary);
+  });
   opts.onUpdate?.(summary);
 
   try {
@@ -115,7 +123,7 @@ export async function resumeRun(opts: ResumeOptions): Promise<RunSummary> {
   const config = opts.config ?? loadConfig();
   const summary = loadRun(opts.runsDir, opts.runId);
   if (!summary) throw new Error(`run ${opts.runId} not found`);
-  if (!summary.flowDef || !summary.state) throw new Error("this run was created by an older version of claude-factory and can't be resumed");
+  if (!summary.flowDef || !summary.state) throw new Error("this run was created by an older version of Spaghetti Code Foundry and can't be resumed");
   if (opts.decision && summary.status !== "waiting") throw new Error(`run ${opts.runId} is not waiting for approval`);
   if (summary.status === "waiting" && !opts.decision && !opts.from) throw new Error("run is waiting for approval: approve or reject it");
   if (summary.status === "succeeded" && !opts.from) throw new Error("run already succeeded (pass a step to re-run from)");
@@ -126,6 +134,8 @@ export async function resumeRun(opts: ResumeOptions): Promise<RunSummary> {
 
   const decision = opts.decision && summary.waiting ? { ...opts.decision, stepId: summary.waiting.stepId } : undefined;
   Object.assign(summary, { status: "running" as RunStatus, reason: undefined, finishedAt: undefined, resumes: (summary.resumes ?? 0) + 1 });
+  summary.pid = process.pid;
+  claimRunStart(opts.runsDir, () => saveRun(summary));
   summary.state.visits = {}; // fresh loop budget
   return drive(summary, opts, config, { startAt: from, decision });
 }
@@ -156,6 +166,7 @@ async function drive(
       FACTORY_LEARNINGS_FILE: lf,
       FACTORY_TOOLS: TOOLS_DIR,
       FACTORY_BASE_SHA: summary.baseSha ?? "",
+      ...nextStepEnv(),
       ...protectedBranchEnv(config.protected_branches, config.secret_scan),
       ...(await identityEnv(config)),
     };

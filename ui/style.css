@@ -58,8 +58,9 @@ code, pre, .mono { font-family: var(--mono); font-size: 12.5px; }
 
 /* ── top bar ── */
 .top { display: flex; align-items: center; gap: 24px; height: 52px; padding: 0 20px; border-bottom: 1px solid var(--border); background: var(--panel); position: sticky; top: 0; z-index: 10; }
-.brand { font-weight: 650; text-decoration: none; display: flex; gap: 8px; align-items: center; }
+.brand { font-weight: 650; text-decoration: none; display: flex; gap: 8px; align-items: center; white-space: nowrap; }
 .logo { color: var(--accent); }
+.brand-short { display: none; }
 .top nav { display: flex; gap: 4px; }
 .top nav a { text-decoration: none; padding: 6px 12px; border-radius: 8px; color: var(--muted); }
 .top nav a.active { background: var(--panel-2); color: var(--text); }
@@ -217,7 +218,6 @@ button.block-card:not(:disabled):hover { border-color: var(--accent); background
 
 /* ── run page ── */
 .tabs button.on { background: var(--panel-2); font-weight: 600; }
-.card.waiting { border-color: #7c3aed; background: color-mix(in srgb, #7c3aed 6%, var(--panel)); }
 .pill.queued { background: var(--panel-2); color: var(--muted); }
 .transcript { display: grid; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--border); }
 .tx-text { white-space: pre-wrap; font-size: 13.5px; }
@@ -274,6 +274,8 @@ pre.diff .file { font-weight: 700; display: block; }
   .graph-pane { position: static; max-height: none; }
 }
 @media (max-width: 760px) {
+  .brand-full { display: none; }
+  .brand-short { display: inline; }
   .layout { grid-template-columns: 1fr; }
   aside { border-right: none; border-bottom: 1px solid var(--border); }
   main { padding: 16px; }
@@ -284,7 +286,25 @@ pre.diff .file { font-weight: 700; display: block; }
 
 /* Why issues are waiting (Dashboard, Admin watcher cards) */
 .holds { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 4px; font-size: 13px; }
-.holds li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px; }
+.holds li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; }
 .holds .hold-title { font-weight: 500; }
 .holds .hold-link { margin-left: 8px; font-size: 12.5px; }
 .hold-group + .hold-group { margin-top: 12px; }
+.holds .hold-action, .next-parts .hold-action { font-weight: 550; }
+.next-parts { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; }
+.hold-rest { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+.card.next-step { margin-bottom: 12px; }
+.card.next-step.who-you { border-color: #7c3aed; background: color-mix(in srgb, #7c3aed 6%, var(--panel)); }
+.card.next-step.who-something-is-wrong { border-color: var(--fail); }
+.pill.who-you { background: #ede9fe; color: #6d28d9; }
+.pill.who-something-is-wrong { background: var(--fail-soft); color: var(--fail); }
+.table .task div { overflow: hidden; text-overflow: ellipsis; font-size: 12.5px; }
+.badge { display: inline-block; min-width: 18px; margin-left: 6px; padding: 0 6px; border-radius: 999px; background: var(--accent); color: #fff; font-size: 11.5px; font-weight: 600; line-height: 18px; text-align: center; }
+.badge[hidden] { display: none; }
+a.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 550; }
+a.btn.primary:hover { filter: brightness(1.06); }
+.turn-group { margin-bottom: 16px; }
+.turn-item { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 8px 0; border-top: 1px dashed var(--border); }
+.turn-item:first-of-type { border-top: none; }
+.turn-item .turn-main { flex: 1 1 320px; display: grid; gap: 2px; min-width: 0; }
+.turn-item .turn-side { display: flex; align-items: center; gap: 8px; margin-left: auto; }

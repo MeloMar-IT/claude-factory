@@ -75,5 +75,5 @@ steps:
     run: |
       git add -A
       if git diff --cached --quiet; then echo "nothing to commit"; exit 1; fi
-      git commit -q -m "factory: $(printf '%s' "$FACTORY_TASK" | head -1)" -m "Written by Claude, reviewed by Codex (claude-factory run $FACTORY_RUN_ID)"
+      git commit -q -m "factory: $(printf '%s' "$FACTORY_TASK" | head -1)" -m "Written by Claude, reviewed by Codex (Spaghetti Code Foundry run $FACTORY_RUN_ID)"
       git log --oneline -1

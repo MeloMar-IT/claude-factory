@@ -1,6 +1,6 @@
 import { api } from "./api.js";
 import { h, modal, mount, timeAgo, toast } from "./dom.js";
-import { holdList } from "./dashboard.js";
+import { nextList, watcherNext } from "./next.js";
 
 const f = (label, el, hint) => h("label", { class: "field" }, h("span", {}, label), el, hint ? h("small", {}, hint) : null);
 const input = (value, attrs = {}) => h("input", { value: value ?? "", ...attrs });
@@ -21,7 +21,7 @@ async function saveConfig(mutate, okMsg) {
 
 const SOURCES = {
   issues: "Issues with a label → run a flow",
-  "pr-feedback": "Review comments on factory PRs → pr-feedback",
+  "pr-feedback": "Review comments on Foundry PRs → pr-feedback",
   "ci-failures": "CI red on the default branch → ci-fix PR",
   schedule: "On a schedule → run a chore (PR if anything changed)",
 };
@@ -148,15 +148,15 @@ export async function renderWatchers(main) {
           w.pause_while_pr_open ? ` · pauses while a ${w.pause_while_pr_open}* PR is open` : "",
           st?.lastTick ? ` · last check ${timeAgo(st.lastTick)}` : "",
           st?.nextTick ? ` · next ${new Date(st.nextTick).toLocaleTimeString()}` : ""),
-        st?.lastError ? h("div", { class: "errors", style: { margin: 0 } }, st.lastError) : null,
-        w.enabled && st?.holds?.length ? h("div", {}, h("div", { class: "muted", style: { fontSize: "12.5px", marginTop: "6px" } }, "Waiting:"), holdList(st.holds, w.github_repo)) : null,
+        w.enabled && watcherNext(w).length ? h("div", {}, h("div", { class: "muted", style: { fontSize: "12.5px", marginTop: "6px" } }, "What happens next:"), nextList(watcherNext(w))) : null,
+        st?.lastError ? h("details", {}, h("summary", {}, "Error details"), h("pre", { class: "mono" }, st.lastError)) : null,
         st?.lastActions?.length ? h("details", {}, h("summary", {}, `Recent activity (${st.lastActions.length})`), h("pre", { class: "mono" }, st.lastActions.join("\n"))) : null);
     })) : h("div", { class: "empty" },
       h("p", {}, "No watchers yet. A watcher checks a GitHub repo on a schedule and runs a flow: for labelled issues, review comments, red CI on the default branch, or a recurring chore."),
       h("button", { class: "primary", onClick: async () => (await editWatcher(null, flows)) && reload() }, "+ Add watcher")),
     h("p", { class: "muted", style: { marginTop: "16px" } },
       "Watchers run inside this server. To keep them running after you close the terminal or restart your Mac: ",
-      h("code", {}, "factory service install")));
+      h("code", {}, "scf service install")));
 }
 
 // ── disk ──
@@ -178,7 +178,7 @@ function diskSection(section) {
     }
   };
   return section("Disk",
-    h("p", { class: "muted", style: { margin: 0 } }, "Each run keeps its workspace (worktree or clone) so you can inspect or resume it. Clean up old ones here or with ", h("code", {}, "factory clean"), "."),
+    h("p", { class: "muted", style: { margin: 0 } }, "Each run keeps its workspace (worktree or clone) so you can inspect or resume it. Clean up old ones here or with ", h("code", {}, "scf clean"), "."),
     h("div", { class: "row" }, h("span", {}, "Runs finished more than"), days, h("span", {}, "days ago")),
     purge.row, paused.row,
     h("div", { class: "row" }, h("button", { onClick: () => go(true) }, "Preview"), h("button", { class: "danger", onClick: () => go(false) }, "Clean up"), out));

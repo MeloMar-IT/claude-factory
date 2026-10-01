@@ -1,5 +1,6 @@
 import { api } from "./api.js";
 import { h, mount, timeAgo, toast } from "./dom.js";
+import { needsYou, nextBlock, whereLink } from "./next.js";
 
 const money = (n) => (n ? `$${n.toFixed(4)}` : "—");
 const secs = (ms) => (ms < 60_000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`);
@@ -16,22 +17,18 @@ export async function renderRunsList(main) {
   const draw = async () => {
     const [runs, queue] = await Promise.all([api.runs(), api.queue()]);
     if (!main.isConnected) return;
-    // Not runs that a newer run on the same issue replaced (e.g. an old stopped plan run).
-    const needsYou = runs.filter((r) => (r.status === "waiting" || r.status === "stopped") && !r.superseded);
-    const flowOf = new Map(runs.map((r) => [r.runId, r.flow]));
+    const yours = needsYou(runs);
     const row = (r) => h("tr", { class: "link", onClick: () => (location.hash = `#/runs/${r.runId}`) },
       h("td", {}, pill(r.status)),
       h("td", {}, h("b", {}, r.flow), what(r) ? h("div", { class: "muted mono", style: { fontSize: "11.5px" } }, what(r)) : null),
-      h("td", { class: "task", title: r.task }, r.reason && r.status !== "succeeded" ? h("span", { class: "muted" }, r.reason) : r.task || h("span", { class: "muted" }, "—")),
+      h("td", { class: "task", title: r.task }, r.task || h("span", { class: "muted" }, "—"),
+        r.next ? h("div", { class: "muted", title: r.next.text }, r.next.text) : null),
       h("td", { class: "mono" }, r.history.length),
       h("td", { class: "mono" }, money(r.totalCostUsd)),
       h("td", { class: "muted" }, timeAgo(r.startedAt)));
     const table = (list) => h("table", { class: "table" },
-      h("thead", {}, h("tr", {}, ["Status", "Flow", "Task / reason", "Steps", "Cost", "Started"].map((t) => h("th", {}, t)))),
+      h("thead", {}, h("tr", {}, ["Status", "Flow", "Task / what happens next", "Steps", "Cost", "Started"].map((t) => h("th", {}, t)))),
       h("tbody", {}, list.map(row)));
-    const why = (p) => p.waitingFor
-      ? `waiting for ${p.repoLock ? `the coding run on ${p.repoLock.slice(5)}` : "the run on the same ticket"} (${flowOf.get(p.waitingFor) ?? p.waitingFor})`
-      : "waiting for a free slot";
 
     mount(main,
       h("div", { class: "toolbar" }, h("h1", {}, "Runs"),
@@ -42,10 +39,11 @@ export async function renderRunsList(main) {
       queue.pending.length ? h("div", { class: "card", style: { marginBottom: "16px" } },
         h("h3", {}, "Queue"),
         queue.pending.map((p) => h("div", { class: "row" },
-          pill("queued"), h("span", { class: "mono" }, p.runId), h("span", { class: "muted" }, `${p.kind} · ${p.source ?? ""} · ${why(p)}`),
+          pill("queued"), h("span", { class: "mono" }, p.runId), h("span", { class: "muted" }, [p.kind, p.source, p.next?.text].filter(Boolean).join(" · ")),
+          p.next ? whereLink(p.next.where) : null,
           h("span", { class: "spacer" }),
           h("button", { class: "small", onClick: async () => { await api.cancelRun(p.runId); draw(); } }, "Remove")))) : null,
-      needsYou.length ? h("div", { style: { marginBottom: "16px" } }, h("h3", { style: { marginBottom: "8px" } }, `Needs you (${needsYou.length})`), table(needsYou)) : null,
+      yours.length ? h("div", { style: { marginBottom: "16px" } }, h("h3", { style: { marginBottom: "8px" } }, `Needs you (${yours.length})`), table(yours)) : null,
       runs.length ? table(runs) : h("div", { class: "empty" }, "No runs yet. Open a flow and press ▶ Run."));
   };
   await draw();
@@ -195,12 +193,12 @@ export function renderRunDetail(main, runId) {
         h("span", { class: "spacer" }),
         ...actions(s),
         h("a", { class: "btn", href: `#/flows/${encodeURIComponent(s.flow)}` }, "Open flow")),
-      s.status === "waiting" ? h("div", { class: "card waiting", style: { marginBottom: "12px" } }, h("b", {}, "✋ Waiting for approval"), h("div", {}, s.waiting?.message ?? "")) : null,
+      s.next ? nextBlock(s.next) : null,
       h("div", { class: "card", style: { marginBottom: "16px" } },
         s.task ? h("p", { style: { margin: 0, whiteSpace: "pre-wrap" } }, s.task) : null,
-        s.reason && s.status !== "waiting" ? h("p", { class: "status bad", style: { margin: 0 } }, s.reason) : null,
         h("dl", { class: "meta" },
           what(s) ? [h("dt", {}, "Ticket"), h("dd", {}, what(s))] : null,
+          s.reason ? [h("dt", {}, "Reason"), h("dd", { style: { whiteSpace: "pre-wrap" } }, s.reason)] : null,
           h("dt", {}, "Run"), h("dd", {}, s.runId),
           s.branch ? [h("dt", {}, "Branch"), h("dd", {}, s.branch)] : null,
           s.workdir ? [h("dt", {}, "Workspace"), h("dd", {}, s.workdir)] : null,

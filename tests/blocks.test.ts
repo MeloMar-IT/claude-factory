@@ -1,11 +1,13 @@
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { parse as parseYaml } from "yaml";
+import { readdirSync, readFileSync } from "node:fs";
 import { learningsFile, resumeRun, runFlow } from "../src/engine/runner.js";
 import { listBlocks, parseBlock } from "../src/flow/blocks.js";
-import { loadFlow } from "../src/flow/load.js";
-import { fakeGithub } from "./helpers/fake-github.js";
+import { loadFlow, parseFlow } from "../src/flow/load.js";
+import { commentText, nextStepEnv } from "../src/next-step.js";
+import { closing, fakeGithub } from "./helpers/fake-github.js";
 
 describe("block library", () => {
   it("all built-in blocks are valid", () => {
@@ -18,6 +20,48 @@ describe("block library", () => {
     const y = "name: x\nsteps:\n  - {id: a, type: shell, run: x, on_failure: elsewhere}";
     expect(() => parseBlock(y)).toThrow(/only jump to their own steps/);
     expect(parseBlock("name: x\nsteps:\n  - {id: a, type: shell, run: x, on_failure: stop}").category).toBe("Custom");
+  });
+});
+
+describe("comment wording comes from the next-step module", () => {
+  const files = [
+    ...readdirSync("blocks").filter((f) => f.endsWith(".yaml")).map((f) => join("blocks", f)),
+    ...readdirSync("flows").filter((f) => f.endsWith(".yaml")).map((f) => join("flows", f)),
+    "tools/post-questions",
+  ];
+  const text = (f: string) => readFileSync(f, "utf8");
+
+  it("has no own 'Reply …' wording any more", () => {
+    const old = [
+      "continues once you answer", "and it plans again", "to go with the recommendations",
+      "to start coding (optionally with notes)", "and the Foundry creates these issues", "to continue or **/reject** to stop",
+    ];
+    for (const f of files) {
+      expect(text(f), f).not.toMatch(/\bReply\b/);
+      for (const o of old) expect(text(f), `${f}: ${o}`).not.toContain(o);
+    }
+  });
+
+  it("only uses variables the engine sets", () => {
+    const known = Object.keys(nextStepEnv());
+    for (const f of files) for (const m of text(f).matchAll(/FACTORY_NEXT_[A-Z]+(?:_[A-Z]+)*/g)) expect(known, `${f}: ${m[0]}`).toContain(m[0]);
+  });
+
+  const stepRun = (file: string, id: string) => {
+    const def = parseYaml(readFileSync(file, "utf8")) as { steps: { id: string; run?: string }[] };
+    const step = def.steps.find((s) => s.id === id);
+    expect(step, `${file}#${id}`).toBeDefined();
+    return step!.run ?? "";
+  };
+  it("uses the right variable in the right step", () => {
+    expect(stepRun("blocks/plan.yaml", "ask_for_info")).toContain("${FACTORY_NEXT_PLANNER_QUESTIONS}");
+    expect(stepRun("blocks/request-approval.yaml", "request_approval")).toContain("${FACTORY_NEXT_APPROVAL}");
+    for (const f of ["issue-plan", "issue-deliver", "issue-gitflow"]) expect(stepRun(`flows/${f}.yaml`, "send_back")).toContain("${FACTORY_NEXT_PLANNER_QUESTIONS}");
+    for (const f of ["issue-deliver", "issue-gitflow"]) {
+      expect(stepRun(`flows/${f}.yaml`, "risk_gate")).toContain("${FACTORY_NEXT_APPROVE_PLAN}");
+      expect(stepRun(`flows/${f}.yaml`, "split_gate")).toContain("${FACTORY_NEXT_APPROVE_SPLIT}");
+    }
+    expect(text("tools/post-questions")).toContain("FACTORY_NEXT_QUESTIONS");
   });
 });
 
@@ -49,13 +93,18 @@ describe("github-issue flow (fake gh + claude)", { timeout: 30_000 }, () => {
       "run_tests", "review", "commit", "push", "push_result",
     ]);
     const log = ghLog();
-    expect(log).toContain("claude-factory plan");
-    expect(log).toContain("finished this ticket");
+    expect(log).toContain("🤖 **Spaghetti Code Foundry plan**");
+    expect(log).toContain("✅ **Spaghetti Code Foundry finished this ticket**");
+    expect(log).toContain(`<!-- claude-factory run=${s.runId} -->`);
+    expect(log).not.toContain("**claude-factory");
     expect(log).toContain("added feature.txt");
     const branches = gh.remoteGit("branch", "--list");
     expect(branches).toMatch(/factory\/issue-7-/);
     const msg = gh.remoteGit("log", "-1", "--format=%s", branches.match(/factory\/\S+/)![0]);
     expect(msg.trim()).toBe("Resolve #7");
+    const body = gh.remoteGit("log", "-1", "--format=%B", branches.match(/factory\/\S+/)![0]);
+    expect(body).toContain(`Automated by Spaghetti Code Foundry (run ${s.runId})`);
+    expect(body).not.toContain("claude-factory");
   });
 
   it("asks for more info on the ticket and stops when the plan is unclear", async () => {
@@ -64,7 +113,9 @@ describe("github-issue flow (fake gh + claude)", { timeout: 30_000 }, () => {
     expect(s.status).toBe("stopped");
     expect(s.history.map((h) => h.id)).toEqual(["check_repo", "pull_ticket", "pull_repo", "plan", "ask_for_info"]);
     const log = ghLog();
-    expect(log).toContain("needs more information");
+    expect(log).toContain("🤖 **Spaghetti Code Foundry** needs more information before it can work on this ticket:");
+    const c = gh.comments().at(-1)!;
+    expect(closing(c.body)).toEqual([`_${commentText("planner_questions")}_`, `<!-- claude-factory run=${s.runId} -->`]);
     expect(log).toContain("Which database should be used?");
     expect(log).not.toContain("PLAN_STATUS");
   });
@@ -95,7 +146,9 @@ describe("github-pr flow (fake gh + claude)", () => {
     });
     expect(s.reason).toMatch(/Push the changes for acme\/app#7/);
     expect(s.status).toBe("waiting");
-    expect(gh.ghLog()).toContain("Reply **/approve**");
+    expect(closing(gh.comments().at(-1)!.body)).toEqual([`_${commentText("approval")}_`, `<!-- claude-factory run=${s.runId} approval -->`]);
+    expect(gh.ghLog()).toContain("✋ **Spaghetti Code Foundry is ready to push** branch");
+    expect(gh.ghLog()).toContain(`<!-- claude-factory run=${s.runId} approval -->`);
     expect(gh.remoteGit("branch", "--list")).not.toMatch(/factory\//); // nothing pushed yet
 
     const r = await resumeRun({ ...common, runId: s.runId, decision: { approved: true, by: "marcel" } });
@@ -107,10 +160,63 @@ describe("github-pr flow (fake gh + claude)", () => {
     ]);
     const log = gh.ghLog();
     expect(log).toContain("Closes #7");
+    expect(log).toContain("✅ **Spaghetti Code Foundry finished this ticket**");
     expect(log).toContain("Pull request: https://github.com/owner/repo/pull/99");
     const branch = gh.remoteGit("branch", "--list").match(/factory\/\S+/)![0];
     expect(gh.remoteGit("log", "-2", "--format=%s", branch).trim().split("\n")).toEqual(["Fix CI", "Resolve #7"]);
+    expect(gh.remoteGit("log", "-1", "--format=%b", branch).trim()).toBe(`Automated by Spaghetti Code Foundry (run ${r.runId})`);
     expect(readFileSync(learningsFile({ github_repo: "acme/app" }, ""), "utf8")).toContain("CI runs tests that expect 2");
+  });
+});
+
+describe("generated ticket flows", () => {
+  const flows = ["github-issue", "github-pr", "github-auto"];
+  const text = (f: string) => readFileSync(`flows/${f}.yaml`, "utf8");
+
+  it("say the new name and write the old marker only", () => {
+    for (const f of flows) {
+      const y = text(f);
+      expect(y, f).not.toMatch(/(🤖|✅|✋) \*\*claude-factory/);
+      expect(y, f).not.toContain("claude-factory continues");
+      expect(y, f).not.toContain("<!-- spaghetti-code-foundry");
+      expect(y, f).toContain("<!-- claude-factory run=$FACTORY_RUN_ID -->");
+    }
+    expect(text("github-pr")).toContain("<!-- claude-factory run=$FACTORY_RUN_ID approval -->");
+    expect(text("github-auto")).toContain('label="claude-factory"');
+    expect(text("github-auto")).toContain("They are labelled \\`claude-factory\\` and will be picked up automatically.");
+  });
+
+  it("commit messages and Jira/Linear comments say the new name", () => {
+    const all = ["chore", "ci-fix", "github-issue", "github-pr", "github-auto", "jira-ticket", "linear-ticket", "cross-review"];
+    for (const f of all) {
+      expect(text(f), f).not.toMatch(/Automated by claude-factory|claude-factory plan:|claude-factory finished|\(claude-factory run/);
+    }
+    expect(text("cross-review")).toContain('-m "factory: $(printf');
+    expect(text("cross-review")).toContain("reviewed by Codex (Spaghetti Code Foundry run $FACTORY_RUN_ID)");
+  });
+
+  it("match the blocks they are built from", () => {
+    const pairs: [string, string, string[]][] = [
+      ["plan", "ask_for_info", flows],
+      ["push-plan", "push_plan", flows],
+      ["push-result", "push_result", flows],
+      ["request-approval", "request_approval", ["github-pr"]],
+      ["triage", "split_ticket", ["github-auto"]],
+      ["commit", "commit", ["github-issue", "github-pr", "github-auto", "chore", "ci-fix", "jira-ticket", "linear-ticket"]],
+      ["ci", "push_ci_fix", ["github-pr", "github-auto", "chore", "ci-fix"]],
+      ["jira-push-plan", "jira_push_plan", ["jira-ticket"]],
+      ["jira-push-result", "jira_push_result", ["jira-ticket"]],
+      ["linear-push-plan", "linear_push_plan", ["linear-ticket"]],
+      ["linear-push-result", "linear_push_result", ["linear-ticket"]],
+    ];
+    const runOf = (steps: { id: string }[], id: string) => (steps.find((s) => s.id === id) as { run?: string } | undefined)?.run;
+    for (const [block, step, inFlows] of pairs) {
+      const expected = runOf(parseBlock(readFileSync(`blocks/${block}.yaml`, "utf8")).steps, step);
+      expect(expected, `${block}/${step}`).toBeTruthy();
+      for (const f of inFlows) {
+        expect(runOf(parseFlow(text(f), f).steps, step), `${f}/${step}`).toBe(expected);
+      }
+    }
   });
 });
 

@@ -10,7 +10,7 @@ steps:
     run: |
       branch=$(git branch --show-current)
       {
-        echo "✅ **claude-factory finished this ticket**"
+        echo "✅ **Spaghetti Code Foundry finished this ticket**"
         echo
         pr=$(gh pr view "$branch" --repo "$FACTORY_VAR_GITHUB_REPO" --json url -q .url 2>/dev/null || true)
         if [ -n "$pr" ]; then echo "Pull request: $pr"

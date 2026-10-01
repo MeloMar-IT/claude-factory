@@ -8,6 +8,7 @@ import { renderSettings, renderWatchers } from "./admin.js";
 import { refreshModelLists, renderModels } from "./models.js";
 import { renderDashboard } from "./dashboard.js";
 import { renderRunDetail, renderRunsList } from "./runs.js";
+import { renderYourTurn, startBadge, startHash } from "./turn.js";
 
 const sidebar = document.getElementById("sidebar");
 const main = document.getElementById("main");
@@ -267,7 +268,7 @@ async function runDialog() {
   if (!c.validation?.ok) return toast("Fix the errors before running", "error");
   const flow = c.validation.flow;
   const runId = await modal(`Run ${flow.name}`, (close) => {
-    const usesTask = /\{\{\s*task\s*\}\}|FACTORY_TASK/.test(c.yaml);
+    const usesTask = /\{\{\s*task\s*\}\}|(FACTORY|SCF)_TASK/.test(c.yaml);
     const task = h("textarea", { rows: 5, placeholder: "Describe the task, e.g. “Add a --json flag to the export command”" });
     const repo = h("input", { class: "mono", value: S.info.repo });
     const vars = Object.entries(flow.vars).map(([k, v]) => [k, h("input", { class: "mono", value: v })]);
@@ -344,8 +345,8 @@ async function generateDialog(modify) {
 
 function welcome() {
   mount(main, h("div", { class: "empty" },
-    h("h1", { style: { marginBottom: "8px" } }, "Build your own coding flows"),
-    h("p", {}, "Pick a flow on the left, start from a blank one, or describe what you want and let Claude draft it."),
+    h("h1", { style: { marginBottom: "8px" } }, "Welcome to Spaghetti Code Foundry"),
+    h("p", {}, "Build your own coding flows: pick a flow on the left, start from a blank one, or describe what you want and let Claude draft it."),
     h("div", { class: "row", style: { justifyContent: "center", marginTop: "16px" } },
       h("button", { class: "primary", onClick: () => generateDialog(false) }, "✨ Draft flow with Claude"),
       h("button", { onClick: () => openNew() }, "+ Blank flow"))));
@@ -365,7 +366,8 @@ async function route() {
   S.cleanup = null;
   document.querySelectorAll("[data-nav]").forEach((a) => a.classList.toggle("active", a.dataset.nav === (section === "new" ? "flows" : section)));
   try {
-    if (section === "library") await renderLibrary(main);
+    if (section === "your-turn") S.cleanup = await renderYourTurn(main);
+    else if (section === "library") await renderLibrary(main);
     else if (section === "dashboard") await renderDashboard(main);
     else if (section === "watchers") await renderWatchers(main);
     else if (section === "settings") await renderSettings(main);
@@ -394,4 +396,7 @@ S.info = await api.info();
 document.getElementById("repo").textContent = S.info.repo;
 await refreshFlows();
 void refreshModelLists();
+// When something waits for the owner, the app opens on the Your turn page.
+const to = startHash(location.hash, await startBadge());
+if (to) history.replaceState(null, "", to);
 route();

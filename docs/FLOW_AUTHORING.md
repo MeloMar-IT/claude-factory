@@ -1,17 +1,17 @@
-# Writing claude-factory flows — reference for AI assistants
+# Writing Spaghetti Code Foundry flows — reference for AI assistants
 
 > **For people:** give this whole file to any AI assistant (ChatGPT, Claude, Gemini, a local
-> model…), then describe the flow you want. Print it with `factory flow-guide`, or copy it from
+> model…), then describe the flow you want. Print it with `scf flow-guide`, or copy it from
 > `docs/FLOW_AUTHORING.md`. Save the answer as `<repo>/.claude-factory/flows/<name>.yaml` (or
-> `~/.claude-factory/flows/` for all repositories) and check it with
-> `factory validate <name>.yaml`. The **Draft flow with Claude** button in the UI uses this same
+> `~/.spaghetti-code-foundry/flows/` for all repositories) and check it with
+> `scf validate <name>.yaml`. The **Draft flow with Claude** button in the UI uses this same
 > file.
 >
 > **For the AI assistant:** everything below is the complete, exact format. Follow it strictly.
 
 ## What you are writing
 
-claude-factory runs **flows**: YAML files describing a pipeline of steps that is executed
+Spaghetti Code Foundry runs **flows**: YAML files describing a pipeline of steps that is executed
 headlessly on the user's machine, against a git repository. Steps are:
 
 - **agent steps** (`type: claude`) — run a coding agent (Claude Code, or OpenAI's Codex CLI)
@@ -202,7 +202,7 @@ In `prompt`, `message` and `vars` values, `{{…}}` placeholders are replaced:
 
 A flow variable named **`agent_env`** is special: its `KEY=value` pairs (separated by `;` or new
 lines) are added to the environment of every agent step — e.g. `agent_env: JAVA_HOME=/opt/jdk21`
-so the agent can run `./gradlew`. (`PATH`, tokens and `FACTORY_*` can't be set this way.)
+so the agent can run `./gradlew`. (`PATH`, tokens, `FACTORY_*` and `SCF_*` can't be set this way.)
 
 **Shell `run` may only use `{{vars.*}}`, `{{workdir}}` and `{{run.*}}`** — never `{{task}}` or
 `{{steps.*}}` (that text is untrusted and would be a shell-injection risk). In shell steps, use
@@ -216,7 +216,10 @@ these environment variables instead (always quote them: `"$FACTORY_TASK"`):
 | `$FACTORY_RUN_ID`, `$FACTORY_WORKDIR`, `$FACTORY_BRANCH` | Run id, workspace, branch |
 | `$FACTORY_BASE_SHA` | The commit the run started from (`git diff $FACTORY_BASE_SHA` = everything the run changed) |
 | `$FACTORY_TOOLS` | Folder with helper scripts (below) |
+| `$FACTORY_NEXT_<REASON>` | The closing "what to do next" sentence for a comment on the issue. `<REASON>` is `QUESTIONS`, `PLANNER_QUESTIONS`, `APPROVE_PLAN`, `APPROVE_SPLIT` or `APPROVAL`; e.g. `$FACTORY_NEXT_APPROVAL` is "It waits for your approval — reply /approve or /reject." The sentence is fixed per reason. Write `"_${FACTORY_NEXT_APPROVAL}_"` with braces when `_` follows |
 | `$FACTORY_LEARNINGS_FILE` | File where lessons for this repository are kept |
+
+Every `FACTORY_…` variable is also set as `SCF_…` (e.g. `$SCF_TASK`); the built-in flows use `FACTORY_…`.
 
 **Helper scripts** in `$FACTORY_TOOLS`:
 
@@ -226,7 +229,7 @@ these environment variables instead (always quote them: `"$FACTORY_TASK"`):
 | `"$FACTORY_TOOLS/test-summary" <marker-file>` | Summarises test reports newer than the marker file |
 | `"$FACTORY_TOOLS/secret-scan" [range]` | Checks commits for secrets (pushes are always checked anyway) |
 
-The factory always blocks pushes to protected branches (`main`, `master`, …) and pushes that
+The Foundry always blocks pushes to protected branches (`main`, `master`, …) and pushes that
 contain secrets — a flow cannot turn that off. Push to a new branch and open a pull request.
 
 ## Patterns

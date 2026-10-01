@@ -19,11 +19,11 @@ steps:
       R="$FACTORY_VAR_GITHUB_REPO"; N="$FACTORY_VAR_PR"
       gh pr view "$N" --repo "$R" --json number,title,body -q '"# PR #\(.number // "") \(.title)\n\(.body)\n"' 2>/dev/null || true
       echo "## Line comments"
-      gh api "repos/$R/pulls/$N/comments" --jq '.[] | select(.body | contains("claude-factory") | not) | "--- \(.user.login) on \(.path):\(.line // .original_line):\n\(.body)\n"'
+      gh api "repos/$R/pulls/$N/comments" --jq '.[] | select(.body | (contains("claude-factory") or contains("spaghetti-code-foundry")) | not) | "--- \(.user.login) on \(.path):\(.line // .original_line):\n\(.body)\n"'
       echo "## Reviews and comments"
       gh pr view "$N" --repo "$R" --json reviews,comments --jq '
         (.reviews[] | select(.body != "") | "--- review by \(.author.login) (\(.state)):\n\(.body)\n"),
-        (.comments[] | select(.body | contains("claude-factory") | not) | "--- \(.author.login):\n\(.body)\n")'
+        (.comments[] | select(.body | (contains("claude-factory") or contains("spaghetti-code-foundry")) | not) | "--- \(.author.login):\n\(.body)\n")'
 
   - id: address_comments
     type: claude

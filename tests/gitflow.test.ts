@@ -139,7 +139,7 @@ describe("gitflow pipeline", () => {
     const log = gh.ghLog();
     expect(log).toMatch(/gh pr create --repo acme\/app --base main --head develop --title Release/);
     expect(log).toContain("Closes #5");
-    expect(log).toContain("claude-factory daily release check");
+    expect(log).toContain("Spaghetti Code Foundry daily release check");
   });
 });
 
@@ -182,6 +182,6 @@ describe("coding agents can run the build", () => {
 
   it("passes agent_env to the agents, but never PATH, tokens or factory variables", async () => {
     const { agentEnv } = await import("../src/agents/run.js");
-    expect(agentEnv("JAVA_HOME=/opt/jdk21; GRADLE_OPTS=-Xmx2g\nPATH=/evil\nGH_TOKEN=x\nFACTORY_VAR_X=1\nnot a pair")).toEqual({ JAVA_HOME: "/opt/jdk21", GRADLE_OPTS: "-Xmx2g" });
+    expect(agentEnv("JAVA_HOME=/opt/jdk21; GRADLE_OPTS=-Xmx2g\nPATH=/evil\nGH_TOKEN=x\nFACTORY_VAR_X=1\nSCF_VAR_X=1\nnot a pair")).toEqual({ JAVA_HOME: "/opt/jdk21", GRADLE_OPTS: "-Xmx2g" });
   });
 });

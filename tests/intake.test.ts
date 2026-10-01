@@ -39,6 +39,9 @@ describe("github-auto (triage routes)", () => {
     const log = gh.ghLog();
     expect(log).toContain("created issue: issue create --repo acme/app --title Add model --body Part of #7");
     expect(log).toContain("--label claude-factory");
+    expect(log).toContain("🤖 **Spaghetti Code Foundry** split this ticket into smaller ones:");
+    expect(log).toContain("They are labelled `claude-factory` and will be picked up automatically.");
+    expect(log).toContain(`<!-- claude-factory run=${s.runId} -->`);
     expect(log).toContain("https://github.com/owner/repo/issues/102");
   });
 
@@ -48,6 +51,7 @@ describe("github-auto (triage routes)", () => {
     expect(s.status).toBe("stopped");
     expect(s.state.next).toBe("pull_ticket");
     expect(gh.ghLog()).toContain("Which endpoint?");
+    expect(gh.ghLog()).toContain("🤖 **Spaghetti Code Foundry** needs more information");
     expect(gh.ghLog()).not.toContain("ROUTE:");
   });
 });
@@ -122,7 +126,10 @@ describe("jira-ticket and linear-ticket flows", () => {
     expect(comments).toHaveLength(2);
     expect(comments[0]!.auth).toBe(`Basic ${Buffer.from("me@x:tok").toString("base64")}`);
     const text = (c: (typeof comments)[0]) => c.body.body.content.map((p: any) => p.content.map((t: any) => t.text).join("")).join("\n");
-    expect(text(comments[0]!)).toContain("claude-factory plan");
+    expect(text(comments[0]!)).toContain("🤖 Spaghetti Code Foundry plan:");
+    expect(text(comments[0]!)).not.toContain("claude-factory plan");
+    expect(text(comments[1]!)).toContain("✅ Spaghetti Code Foundry finished: branch ");
+    expect(text(comments[1]!)).not.toContain("claude-factory finished");
     expect(text(comments[1]!)).toContain("added feature.txt");
     expect(gh.remoteGit("branch", "--list")).toMatch(/factory\//);
   });
@@ -137,6 +144,8 @@ describe("jira-ticket and linear-ticket flows", () => {
     expect(mutations).toHaveLength(2);
     expect(mutations[0]!.body.variables.issueId).toBe("uuid-9");
     expect(mutations[0]!.auth).toBe("lin_key");
+    expect(mutations[0]!.body.variables.body).toContain("🤖 Spaghetti Code Foundry plan:");
+    expect(mutations[1]!.body.variables.body).toMatch(/^✅ Spaghetti Code Foundry finished: branch `[^`]+`\n/);
     expect(mutations[1]!.body.variables.body).toContain("added feature.txt");
   });
 

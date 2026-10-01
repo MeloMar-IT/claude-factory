@@ -99,7 +99,7 @@ steps:
       - $url"
       done < subtasks.txt
       rm -f subtasks.txt
-      { echo "🤖 **claude-factory** split this ticket into smaller ones:"; printf '%s\n' "$created"
+      { echo "🤖 **Spaghetti Code Foundry** split this ticket into smaller ones:"; printf '%s\n' "$created"
         [ -n "$label" ] && echo && echo "They are labelled \`claude-factory\` and will be picked up automatically."
         echo; echo "<!-- claude-factory run=$FACTORY_RUN_ID -->"; } \
         | gh issue comment "$N" --repo "$R" --body-file -
@@ -140,9 +140,9 @@ steps:
       # Questions come from the plan step, or from triage when it ran without planning.
       out="${FACTORY_OUT_PLAN:-$FACTORY_OUT_TRIAGE}"
       printf '%s\n' "$out" | grep -Eq '^(PLAN_STATUS|ROUTE): NEEDS_INFO' || { echo "planning failed (no questions to ask)"; exit 1; }
-      { echo "🤖 **claude-factory** needs more information before it can work on this ticket:"; echo
+      { echo "🤖 **Spaghetti Code Foundry** needs more information before it can work on this ticket:"; echo
         printf '%s\n' "$out" | sed -E '/^(PLAN_STATUS|ROUTE):/d'
-        echo; echo "_Reply on this issue; claude-factory continues once you answer._"
+        echo; echo "_${FACTORY_NEXT_PLANNER_QUESTIONS}_"
         echo; echo "<!-- claude-factory run=$FACTORY_RUN_ID -->"; } \
         | gh issue comment "$FACTORY_VAR_ISSUE" --repo "$FACTORY_VAR_GITHUB_REPO" --body-file -
     on_success: stop
@@ -150,7 +150,7 @@ steps:
   - id: push_plan
     type: shell
     run: |
-      { echo "🤖 **claude-factory plan**"; echo
+      { echo "🤖 **Spaghetti Code Foundry plan**"; echo
         printf '%s\n' "$FACTORY_OUT_PLAN" | sed '/^PLAN_STATUS:/d'
         echo; echo "<!-- claude-factory run=$FACTORY_RUN_ID -->"; } \
         | gh issue comment "$FACTORY_VAR_ISSUE" --repo "$FACTORY_VAR_GITHUB_REPO" --body-file -
@@ -258,7 +258,7 @@ steps:
       git add -A
       if git diff --cached --quiet; then echo "nothing to commit"; exit 1; fi
       if [ -n "$FACTORY_VAR_ISSUE" ]; then msg="Resolve #$FACTORY_VAR_ISSUE"; else msg="factory: $(printf '%s' "$FACTORY_TASK" | head -1)"; fi
-      git commit -q -m "$msg" -m "Automated by claude-factory (run $FACTORY_RUN_ID)"
+      git commit -q -m "$msg" -m "Automated by Spaghetti Code Foundry (run $FACTORY_RUN_ID)"
       git log --oneline -1
   - id: push
     type: shell
@@ -321,7 +321,7 @@ steps:
     run: |
       git add -A
       git diff --cached --quiet && { echo "fix_ci changed nothing"; exit 1; }
-      git commit -q -m "Fix CI" -m "Automated by claude-factory (run $FACTORY_RUN_ID)"
+      git commit -q -m "Fix CI" -m "Automated by Spaghetti Code Foundry (run $FACTORY_RUN_ID)"
       git push -q && git log --oneline -1
     on_success: wait_ci
   - id: push_result
@@ -329,7 +329,7 @@ steps:
     run: |
       branch=$(git branch --show-current)
       {
-        echo "✅ **claude-factory finished this ticket**"
+        echo "✅ **Spaghetti Code Foundry finished this ticket**"
         echo
         pr=$(gh pr view "$branch" --repo "$FACTORY_VAR_GITHUB_REPO" --json url -q .url 2>/dev/null || true)
         if [ -n "$pr" ]; then echo "Pull request: $pr"

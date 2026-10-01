@@ -1,8 +1,10 @@
-# claude-factory user guide
+# Spaghetti Code Foundry user guide
 
-claude-factory runs **flows**: pipelines of steps that code, test, review and ship changes with
-AI coding agents on your own machine. This guide walks through the web UI, writing your own
-flows, automating work from GitHub, choosing models, and keeping it all safe.
+Spaghetti Code Foundry runs **flows**: pipelines of steps that code, test, review and ship
+changes with AI coding agents on your own machine. This guide walks through the web UI, writing
+your own flows, automating work from GitHub, choosing models, and keeping it all safe.
+
+Formerly **claude-factory**. The command is now `scf` (`factory` still works), the repository is `MeloMar-IT/spaghetti-code-foundry` and the data folder is `~/.spaghetti-code-foundry` (see [section 11](#11-upgrading-from-claude-factory)). The `<repo>/.claude-factory` folder, the labels (`claude-factory`, `factory:*`) and `factory/…` branches keep the old name.
 
 - [1. Start](#1-start)
 - [2. Run a flow](#2-run-a-flow)
@@ -15,6 +17,7 @@ flows, automating work from GitHub, choosing models, and keeping it all safe.
 - [8. Costs, dashboard and evals](#8-costs-dashboard-and-evals)
 - [9. Command line](#9-command-line)
 - [10. Troubleshooting](#10-troubleshooting)
+- [11. Upgrading from claude-factory](#11-upgrading-from-claude-factory)
 
 ---
 
@@ -25,7 +28,7 @@ to work on:
 
 ```bash
 cd ~/code/my-project
-factory ui
+scf ui
 ```
 
 The UI opens at **http://localhost:4777**. It only listens on your own machine. The path in the
@@ -33,6 +36,7 @@ top-right corner is the repository runs work on by default.
 
 | Page | What it is for |
 |---|---|
+| **Your turn** | Only what waits for you, one button each; the app opens here when something waits |
 | **Flows** | Your flows and the built-in ones: edit, create, run |
 | **Library** | Reusable blocks of steps to drop into flows |
 | **Runs** | Everything that ran or is running; the ones that need you on top |
@@ -53,7 +57,7 @@ Pick a flow on the left, press **▶ Run**, describe the task and start it.
 
 - **Task** — what you want done, in plain language. Flows use it in their prompts.
 - **Repository** — the local git repository to work on.
-- **Variables** — settings the flow exposes, e.g. `test_cmd`. Leave `auto` to let the factory
+- **Variables** — settings the flow exposes, e.g. `test_cmd`. Leave `auto` to let the Foundry
   detect the test command (npm/pnpm/yarn, pytest, Go, Cargo, Gradle, Maven, Make).
 
 **Your checkout is never touched.** Depending on the flow's *workspace* setting, a run works in:
@@ -70,16 +74,34 @@ When a run finishes, its branch stays in your repository. Review it, merge it, o
 
 ## 3. Follow, approve and resume runs
 
+### Your turn
+
+**Your turn** lists only what waits for you, one button each: questions to answer, approvals, failed or stopped work, a release pull request to merge, and a watcher that has an error. It never lists work that is running, queued, paused by a limit or waiting for another story, and never evaluation runs.
+
+- **Order:** the item that holds back the most stories comes first, then the one that waits longest. Items are grouped by repository.
+- **Each item:** what it is, why it waits, the action, and since when. The button opens the place to do it (GitHub in a new tab, or the run page).
+- **Runs you started yourself** (UI or `scf run`) count when they wait for approval, at any age, or when they failed or stopped in the last 7 days. Failed release, CI-fix and review runs started by a watcher show the same way. Runs of older versions have no record of who started them and are treated like watcher runs.
+- **Dismiss** hides an item. It stays hidden until its situation changes (a new question, a new approval, a new failure). **Show again** at the bottom brings all dismissed items back. Watcher errors cannot be dismissed. Dismissals are kept in `your-turn.json` in the data folder.
+- **No refresh needed:** the page updates every 5 seconds. When you come back from a GitHub link, the watcher checks GitHub at once. An answer you give elsewhere shows at the next watcher check.
+- **Empty:** it says "Nothing needs you." and, when it can, how many stories are being built and when the next release pull request is expected.
+- **Badge:** the number of items shows in the navigation and in the tab title, for example "(3) Foundry". When something waits, the app opens on this page.
+
 ### The runs list
 
 ![Runs](images/runs.png)
 
-Runs that wait for a decision or stopped with a question are listed under **Needs you**. At
-most *N* runs execute at the same time (Settings → Runs at the same time); the rest queue.
+Runs whose next move is yours (the record says **You**) are listed under **Needs you**. Runs
+that wait for a limit, the budget or another run are not. Under each task the table shows the
+"what happens next" sentence, also for finished runs. At most *N* runs execute at the same time
+(Settings → Runs at the same time); the rest queue. Each queue line shows the same sentence
+and a link to what it waits for.
 
 ### A run
 
-Open a run to follow it live.
+Open a run to follow it live. At the top, the **What happens next** block says who has the next
+move, what to do, why, a link to the place to do it, and when it continues by itself (if
+known). It updates live. The raw reason (for a waiting run, the approval message) is the
+**Reason** row below.
 
 ![Live log](images/run-log.png)
 
@@ -99,8 +121,9 @@ Open a run to follow it live.
 ### Approvals
 
 An **approval** step pauses the run until a person decides. Approve or reject in the UI, with
-`factory approve <run-id>` / `factory reject <run-id>`, or — for GitHub flows — by commenting
-`/approve` or `/reject` on the issue (only people with write access count).
+`scf approve <run-id>` / `scf reject <run-id>`, or — for GitHub flows — by commenting
+`/approve` or `/reject` on the issue (only people with write access count). A waiting run shows
+a **What happens next** block with **You** as who and the approval message as the reason.
 
 ![Waiting for approval](images/run-waiting.png)
 
@@ -112,7 +135,7 @@ An **approval** step pauses the run until a person decides. Approve or reject in
 - **Retry from step…** re-runs from any earlier step.
 - **Cancel** stops a running run; you can resume it later.
 
-Runs survive restarts: if the factory stops mid-run, the run is marked *interrupted* and can be
+Runs survive restarts: if the Foundry stops mid-run, the run is marked *interrupted* and can be
 resumed (watchers do this automatically).
 
 ---
@@ -129,7 +152,7 @@ how steps connect: grey = next, green = on success, red dashed = on failure, pur
 ![YAML view](images/flow-yaml.png)
 
 - **Save to** — *this repo* (`<repo>/.claude-factory/flows/`, shared with your team through git)
-  or *global* (`~/.claude-factory/flows/`, just for you). Saving a built-in flow creates your own
+  or *global* (`~/.spaghetti-code-foundry/flows/`, just for you). Saving a built-in flow creates your own
   copy that overrides it.
 - **✨ Draft flow with Claude** — describe what you want and Claude writes the YAML.
   **Ask Claude** changes the open flow the same way.
@@ -144,15 +167,15 @@ checklist and a full example. Give it to any assistant — ChatGPT, Claude, Gemi
 local model — and describe the flow you want:
 
 ```bash
-factory flow-guide > flow-guide.md        # or copy docs/FLOW_AUTHORING.md
+scf flow-guide > flow-guide.md        # or copy docs/FLOW_AUTHORING.md
 ```
 
 1. Paste (or attach) the guide in a new chat, then write what the flow should do, e.g. *"Opus
    plans a database migration, I approve the plan, Sonnet implements it with pytest tests, up to
    3 fix rounds, Codex reviews once, then push the branch and open a PR."*
 2. Save the YAML it answers with as `<repo>/.claude-factory/flows/<name>.yaml` (or in
-   `~/.claude-factory/flows/`).
-3. Check it: `factory validate <name>` — it names the field and step for anything that is wrong;
+   `~/.spaghetti-code-foundry/flows/`).
+3. Check it: `scf validate <name>` — it names the field and step for anything that is wrong;
    paste that back to the assistant to fix it. Then open it in the editor to see the graph.
 
 **✨ Draft flow with Claude** in the editor uses the same guide, so both ways produce the same
@@ -223,7 +246,7 @@ In **agent prompts** you can use:
 **Shell commands** may only template trusted values (`{{vars.*}}`, `{{workdir}}`, `{{run.*}}`).
 Task text and step outputs could contain anything, so shell steps read them from environment
 variables instead: `$FACTORY_TASK`, `$FACTORY_OUT_<STEP_ID>`, `$FACTORY_VAR_<NAME>`,
-`$FACTORY_RUN_ID`, `$FACTORY_BRANCH`.
+`$FACTORY_RUN_ID`, `$FACTORY_BRANCH`, `$FACTORY_NEXT_<REASON>` (also as `$SCF_…`).
 
 An agent step can **continue the session** of an earlier agent step ("Continue session of"), so
 it remembers the conversation.
@@ -308,7 +331,7 @@ ChatGPT) instead of pausing when the daily or run budget is used up.
 
 ## 6. Automate with watchers
 
-A watcher checks GitHub on a schedule and starts runs by itself — as long as the factory is
+A watcher checks GitHub on a schedule and starts runs by itself — as long as the Foundry is
 running (see [Keep it running](#keep-it-running)). GitHub access uses the `gh` CLI's login.
 
 ![Watchers](images/watchers.png)
@@ -318,7 +341,7 @@ running (see [Keep it running](#keep-it-running)). GitHub access uses the `gh` C
 | Source | Starts a run when… | Default flow |
 |---|---|---|
 | **Issues** | an open issue has the trigger label | `github-issue` |
-| **Review comments** | someone comments on a factory PR (branch `factory/*`) | `pr-feedback` |
+| **Review comments** | someone comments on a Foundry PR (branch `factory/*`) | `pr-feedback` |
 | **CI failures** | the latest CI run of a workflow on the default branch failed | `ci-fix` |
 | **Schedule** | it is time for the chore (every N, or once a day at a set time) | `chore` |
 
@@ -337,15 +360,16 @@ in GitHub:
 | Label (default name) | Meaning |
 |---|---|
 | `factory:working` | A run is working on it |
-| `factory:needs-info` | The factory asked a question on the issue — reply and it continues |
+| `factory:needs-info` | The Foundry asked a question on the issue — reply and it continues |
 | `factory:waiting-approval` | Waiting for `/approve` or `/reject` on the issue |
 | `factory:done` | Finished |
-| `factory:failed` | Failed; the reason is commented on the issue. Remove the label to retry |
+| `factory:failed` | Failed; the reason is commented on the issue. Remove the label to start over, or resume the run on its page to continue at the failed step |
 
 Each watcher's card on the **Watchers** page lists the labelled issues it is *not* working on
-right now and why ("waits for #73", "needs your answer", …); the Dashboard shows the same list.
+right now under **What happens next**, with the same lines as the Dashboard. A watcher error is
+a line too; the raw error is under **Error details**.
 
-More options are set in `~/.claude-factory/config.yaml` (the form keeps them when you edit the
+More options are set in `~/.spaghetti-code-foundry/config.yaml` (the form keeps them when you edit the
 watcher). This is the watcher for the [one-label pipeline](#the-label-pipeline-one-label--plan--code--one-pull-request):
 
 ```yaml
@@ -394,7 +418,7 @@ project's build and test commands (`./gradlew`, `mvn`, `npm`, `pytest`, `go test
 `make`) and read-only git commands — so it can check its own work and, for example, regenerate
 test fixtures. Pushing is never allowed. If the build needs environment settings (such as
 `JAVA_HOME`), put them in the `agent_env` variable: `KEY=value` pairs separated by `;` or new
-lines. `PATH`, tokens and the factory's own variables can't be set this way.
+lines. `PATH`, tokens and the Foundry's own variables can't be set this way.
 
 ### The label pipeline: one label → plan + code → one pull request
 
@@ -438,9 +462,10 @@ Every plan gets a score from 0 to 100 from Opus, and Codex gives its own; the hi
 | **76–100** | security or trust (signing, secrets, auth), installing/updating/deleting software or user data, irreversible steps, privacy — or assumptions the planner couldn't verify |
 
 **Above 75 a human decides:** the plan is posted with the score and the reason, and the run waits
-(label `Factory_waiting`). Reply **`/approve`** (optionally with notes for the coder) to start
-coding, or **`/reject` followed by what to change** — it then plans again with your feedback. Only
-people with write access to the repository can approve. (The threshold is the `risk_threshold`
+(label `Factory_waiting`). The comment ends with: "The plan is risky and waits for your decision —
+reply /approve to start coding (optionally with notes), or /reject followed by what to change — it
+then plans again." Your feedback goes into the new plan. Only people with write access to the
+repository can approve. (The threshold is the `risk_threshold`
 variable, default 75.)
 
 #### Issues that are too big
@@ -450,17 +475,19 @@ issues that can each be built and tested on their own, and scores how risky it i
 without you looking (0–100: a mechanical split along existing boundaries is low; deferring or
 reinterpreting scope, or anything that needs your decision, is high).
 
-- **Split risk 50 or lower:** the factory creates the new issues by itself — with the original's
+- **Split risk 50 or lower:** the Foundry creates the new issues by itself — with the original's
   labels, `Factory_go`, and a **Depends on** section with the real issue numbers so they are built
   in order — comments the list on the original and closes it. The new issues then go through the
   questions check and are built like any other.
 - **Above 50**, or the issue has `Factory_review_plan`: the split is posted on the issue and waits
-  (`Factory_waiting`). Reply **/approve** and it creates the issues, or **/reject** + what to change.
+  (`Factory_waiting`). The comment ends with: "The issue is split into smaller ones and waits for
+  your decision — reply /approve and the Foundry creates these issues and closes this one, or
+  /reject followed by what to change."
 - **You already agreed** to a split in a comment ("split it"): it creates the issues without asking.
 
 The threshold is the `auto_split_max_risk` variable (default 50).
 
-#### Labels the factory sets
+#### Labels the Foundry sets
 
 | Label | Means | What you do |
 |---|---|---|
@@ -468,7 +495,7 @@ The threshold is the `auto_split_max_risk` variable (default 50).
 | `Factory_working` | Planning and coding are running (or paused for the usage limit) | Wait; follow it on the Runs page |
 | `Factory_waiting` | A risky plan waits for your decision | `/approve` or `/reject` + feedback on the issue |
 | `Factory_done` | Implemented, tested, reviewed and merged into `develop` (gitflow) or in the rolling pull request | Nothing — merge the daily release pull request (or the rolling one) when you like |
-| `Factory_ERROR` | It failed; the reason and the failing output are commented on the issue | Fix the cause if needed, then remove the label to retry |
+| `Factory_ERROR` | It failed; the reason and the failing output are commented on the issue | Fix the cause if needed, then remove the label to start over, or resume the run on its page to continue at the failed step |
 
 Issues with an excluded label (e.g. `geni`) are never picked up, whatever other labels they have.
 
@@ -480,20 +507,30 @@ Issues with an excluded label (e.g. `geni`) are never picked up, whatever other 
 | Answer the questions | Reply on the issue, or `/defaults` |
 | Check a plan before it is coded | Add `Factory_review_plan` before (or together with) `Factory_go` |
 | Approve / reject a risky plan | `/approve` (+ notes), or `/reject` + what to change |
-| Retry after an error | Remove `Factory_ERROR` |
-| Stop the factory from touching an issue | Remove `Factory_go`, or add an excluded label |
-| Get the work into `main` | Merge the daily release pull request `develop` → `main` (gitflow), or the rolling factory pull request |
+| Retry after an error | Remove `Factory_ERROR` to start over, or resume the run on its page to continue at the failed step |
+| Stop the Foundry from touching an issue | Remove `Factory_go`, or add an excluded label |
+| Get the work into `main` | Merge the daily release pull request `develop` → `main` (gitflow), or the rolling Foundry pull request |
 
 #### Why is nothing happening?
 
 Look at the **Dashboard**: the **Waiting** card lists every labelled issue that isn't being
-worked on right now, with the reason and a link to what it waits for (the same list is on each
-watcher's card on the **Watchers** page). The usual reasons:
+worked on right now (the same list is on each watcher's card on the **Watchers** page). Every
+line starts with a badge for who has the next move (**You**, **Foundry**, **Another story**, **A
+time limit**, **Something is wrong**), then the issue, what to do, why, "Continues: …" when it
+continues by itself, and a link to the place to do it (GitHub links open in a new tab). Lines
+where you have the next move come first, above the rest. During a restart wait the **Server**
+card says that the server waits to restart on a new version. Runs that started and then paused are listed too: a usage
+limit, the daily budget, a code area that another run uses, or an interruption. The same
+sentences are in the failure comment on the issue and in notifications, and they also end the
+Foundry's comments that ask you something (questions, a risky plan, a split, the push approval).
+The comment has the fixed sentence; the Dashboard may add the number of questions or what is being
+approved. The server gives
+them for every run and issue at `GET /api/next` (and as `next` on each run). The usual reasons:
 
 - **It needs you:** a question (`Factory_needs_info`), a risky plan (`Factory_waiting`) or an
   error (`Factory_ERROR`).
 - **It waits for another issue.** If the issue has a **Depends on** (or **Blocked by**) line or
-  section, it starts only when those issues are done — closed, or `Factory_done` (in the factory
+  section, it starts only when those issues are done — closed, or `Factory_done` (in the Foundry
   pull request). You can name them as `#72` or by title (`Story 4 — Download the update safely`).
   So you can put `Factory_go` on a whole chain at once; each story is planned and coded on top of
   the code of the one before it.
@@ -501,7 +538,7 @@ watcher's card on the **Watchers** page). The usual reasons:
 - **New issues are being checked for questions** (a few minutes, once per batch).
 - **The usage limit or the daily budget is reached.** Runs pause and continue by themselves
   later; the label stays `Factory_working`.
-- **The factory isn't running.** Watchers only run while `factory ui` / `factory serve` runs.
+- **The Foundry isn't running.** Watchers only run while `scf ui` / `scf serve` runs.
 - **It has an excluded label** such as `geni`.
 
 #### Branches: gitflow (recommended) or one rolling pull request
@@ -513,13 +550,13 @@ The pipeline can deliver in two ways; the watcher's flow decides which.
 ```mermaid
 flowchart LR
     M[main] -->|"created from main (once)"| D[develop]
-    D --> F1["feature/86-…"] -->|"tests + reviews pass →<br/>factory merges"| D
+    D --> F1["feature/86-…"] -->|"tests + reviews pass →<br/>Foundry merges"| D
     D --> F2["feature/88-…"] -->|merged| D
     D -->|"17:00: release PR, you merge"| M
 ```
 
 - Every issue gets its own branch, `feature/<issue>-<title>`, from `develop`. When its tests and
-  both Codex reviews pass, the **factory merges it into `develop` itself**, runs the tests on the
+  both Codex reviews pass, the **Foundry merges it into `develop` itself**, runs the tests on the
   merged `develop`, pushes, deletes the merged feature branch (`delete_merged_branches: no`
   keeps it) and **closes the issue** — done means merged into `develop` (`close_when_merged: no`
   leaves it open until the release reaches `main`). If `develop` moved meanwhile, it merges again; conflicts are
@@ -528,12 +565,12 @@ flowchart LR
 - **Several issues are coded at the same time** when they change different parts of the code:
   each plan names its code areas (`AREAS:`), and a run waits only while another run holds an
   overlapping area. Issues in a **Depends on** chain are still built one after the other.
-- Every day at **17:00** (`release-daily`) the factory runs the full tests and build on `develop`
+- Every day at **17:00** (`release-daily`) the Foundry runs the full tests and build on `develop`
   and opens (or updates) **one pull request `develop` → `main`** that lists and closes the day's
   issues — a draft while the checks fail. **You merge it once a day.**
 - `develop` is created from `main` the first time, and kept up to date with `main` (for example
   after a hotfix) before new work starts. `develop` must not be in *Protected branches*
-  (Settings), since the factory pushes to it; `main` stays protected.
+  (Settings), since the Foundry pushes to it; `main` stays protected.
 - **Size limit:** a plan over 15 files or about 800 lines of production code (tests and docs
   don't count) is split into smaller issues instead — automatically when the split risk is low
   (`max_files`, `max_code_lines`).
@@ -545,7 +582,7 @@ flowchart LR
 - The **pull request is opened with the first finished issue** and grows as more are finished —
   coding never waits for a merge. Merge it whenever you like; after that, work continues on a
   fresh branch from `main`.
-- Every day at **17:00** the factory runs the full tests and build on it and comments the result
+- Every day at **17:00** the Foundry runs the full tests and build on it and comments the result
   on the pull request. While they fail, the pull request is a draft.
 
 #### Older two-label pipeline
@@ -556,14 +593,18 @@ daily pull request is open. Use them if you want to see every plan before any co
 
 ### Keep it running
 
-Watchers only run while `factory ui` (or `factory serve`) runs. When a new version of
-claude-factory is built (`npm run build`), the running server restarts itself as soon as no run
-is active — no need to stop and start it. To keep the factory running in the background on macOS,
+Watchers only run while `scf ui` (or `scf serve`) runs. When a new version of
+Spaghetti Code Foundry is built (`npm run build`), the running server restarts itself as soon as no run
+is active — no need to stop and start it. To keep the Foundry running in the background on macOS,
 also after a restart of your Mac:
 
 ```bash
-factory service install     # uninstall | status
+scf service install     # uninstall | status
 ```
+
+If you installed the service before, run `scf service install` once. It replaces the old
+`com.claude-factory.server` agent with `com.spaghetti-code-foundry.server`, and puts the old one
+back if the new one can't start.
 
 ---
 
@@ -596,15 +637,18 @@ it; paused runs continue the next day. Flows can also cap one run (`limits.max_c
   `require_approval=yes` for `github-pr`).
 
 **Notifications** — macOS notifications, a Slack webhook, or your own command, for the run
-outcomes you choose.
+outcomes you choose. The message says who has to do what, for example "acme/app#7 — It failed:
+… — remove the `factory:failed` label to start over, or resume the run on its page to continue at
+the failed step." It is at most 300 characters; a long title or reason is shortened, the action
+never.
 
 **Bot identity** — by default commits and comments are made as you. Set a bot name/email and a
 token (or a GitHub App) to make them as a bot instead.
 
 **Disk** — every run keeps its workspace so you can inspect or resume it. Remove old ones here
-or with `factory clean` (branches in your repositories are kept).
+or with `scf clean` (branches in your repositories are kept).
 
-Global settings are stored in `~/.claude-factory/config.yaml`; runs in `~/.claude-factory/runs/`.
+Global settings are stored in `~/.spaghetti-code-foundry/config.yaml`; runs in `~/.spaghetti-code-foundry/runs/`.
 
 ---
 
@@ -634,9 +678,10 @@ themselves still pause runs; they continue by themselves when the limit resets.
 
 ![Dashboard](images/dashboard.png)
 
-Spend today and over 30 days, success rate, runs that need a human, the **Waiting** card (every
-labelled issue that isn't being worked on, with the reason — "needs your answer", "waits for
-#73", "waiting for /approve" — and a link), cost per day, results per flow and per repository,
+Spend today and over 30 days, success rate, **Needs a human** (the number of runs whose next
+move is yours — the same as **Needs you** on the Runs page), the **Waiting** card (every
+labelled issue that isn't being worked on: who has the next move, what to do, why, and a link;
+lines for you come first), a **Server** card when the server waits to restart, cost per day, results per flow and per repository,
 the steps where runs fail most, and eval results.
 
 ### Evals
@@ -657,7 +702,7 @@ cases:
 ```
 
 ```bash
-factory eval evals/my-suite.yaml --models sonnet,codex,ollama:qwen3-coder
+scf eval evals/my-suite.yaml --models sonnet,codex,ollama:qwen3-coder
 ```
 
 The report shows pass rate, average cost, tokens, time and fix loops per variant, and appears on
@@ -667,23 +712,40 @@ the Dashboard.
 
 ## 9. Command line
 
+The command is `scf`. `factory` still works as an alias and prints a short note.
+
 | Command | What it does |
 |---|---|
-| `factory ui [--port 4777] [--no-open]` | Web UI, queue and watchers. Restarts itself when a new build is installed and no run is active (set `FACTORY_NO_SUPERVISE=1` to turn that off) |
-| `factory serve [--port 4777]` | The same without opening a browser |
-| `factory service install \| uninstall \| status` | Run `factory serve` in the background (macOS) |
-| `factory run <flow> --task "…" [--var k=v] [--repo dir]` | Run a flow |
-| `factory resume <run-id> [--from <step>]` | Continue a run |
-| `factory approve <run-id> [--note "…"]` / `factory reject …` | Decide on a waiting run |
-| `factory flows` / `factory blocks` | List flows / library blocks |
-| `factory new <name> [--from <flow>] [--global]` | Create a flow from a template |
-| `factory validate <flow or file>` | Check a flow |
-| `factory flow-guide` | Print the flow-writing guide for AI assistants ([Let any AI write a flow](#let-any-ai-write-a-flow)) |
-| `factory watch [flow] --var github_repo=o/r [--source …] [--once]` | Run one watcher from the terminal |
-| `factory eval <suite.yaml> [--flows a,b] [--models …]` | Run an eval suite |
-| `factory clean [--older-than 7] [--purge] [--dry-run]` | Remove old run workspaces |
+| `scf ui [--port 4777] [--no-open]` | Web UI, queue and watchers. Restarts itself when a new build is installed and no run is active (set `SCF_NO_SUPERVISE=1` to turn that off) |
+| `scf serve [--port 4777]` | The same without opening a browser |
+| `scf service install \| uninstall \| status` | Run `scf serve` in the background (macOS) |
+| `scf run <flow> --task "…" [--var k=v] [--repo dir]` | Run a flow |
+| `scf resume <run-id> [--from <step>]` | Continue a run |
+| `scf approve <run-id> [--note "…"]` / `scf reject …` | Decide on a waiting run |
+| `scf flows` / `scf blocks` | List flows / library blocks |
+| `scf new <name> [--from <flow>] [--global]` | Create a flow from a template |
+| `scf validate <flow or file>` | Check a flow |
+| `scf flow-guide` | Print the flow-writing guide for AI assistants ([Let any AI write a flow](#let-any-ai-write-a-flow)) |
+| `scf watch [flow] --var github_repo=o/r [--source …] [--once]` | Run one watcher from the terminal |
+| `scf eval <suite.yaml> [--flows a,b] [--models …]` | Run an eval suite |
+| `scf clean [--older-than 7] [--purge] [--dry-run]` | Remove old run workspaces |
 
-Flows are looked up in `<repo>/.claude-factory/flows/`, then `~/.claude-factory/flows/`, then the
+### Environment variables
+
+Both names work; if both are set, `SCF_…` wins.
+
+| Variable | Old name | What it does |
+|---|---|---|
+| `SCF_HOME` | `FACTORY_HOME` | Data folder (default `~/.spaghetti-code-foundry`) |
+| `SCF_CLAUDE_BIN` | `FACTORY_CLAUDE_BIN` | Claude Code program to run |
+| `SCF_CODEX_BIN` | `FACTORY_CODEX_BIN` | Codex program to run |
+| `SCF_GH_BIN` | `FACTORY_GH_BIN` | `gh` program to run |
+| `SCF_NO_OPEN` | `FACTORY_NO_OPEN` | Set to `1` to not open a browser |
+| `SCF_NO_SUPERVISE` | `FACTORY_NO_SUPERVISE` | Set to `1` to not restart the server on a new build |
+| `SCF_NO_NOTIFY` | `FACTORY_NO_NOTIFY` | Set to `1` to turn notifications off |
+| `SCF_LOCK_DIR` | `FACTORY_LOCK_DIR` | Where lock files are kept |
+
+Flows are looked up in `<repo>/.claude-factory/flows/`, then `~/.spaghetti-code-foundry/flows/`, then the
 built-in ones.
 
 ---
@@ -691,18 +753,17 @@ built-in ones.
 ## 10. Troubleshooting
 
 **Nothing is happening to an issue.** Look at the **Waiting** card on the Dashboard — it says
-why (a question, a risky plan waiting for `/approve`, a dependency, another issue being built,
-the usage limit). See also [Why is nothing happening?](#why-is-nothing-happening).
+who has the next move (the badge at the start of the line), what to do and why. See also [Why is nothing happening?](#why-is-nothing-happening).
 
 **A plan is waiting for approval.** Its risk score is above 75, or the issue has
 `Factory_review_plan`. Read the plan on the issue and reply `/approve` (with notes if you like)
 or `/reject` with what to change.
 
-**The factory pull request is a draft.** The daily full test run or build failed on it; the
+**The Foundry pull request is a draft.** The daily full test run or build failed on it; the
 failing output is in the daily report comment. It becomes ready again when a later report passes.
 
 **A watcher shows an error.** Check that `gh auth status` works in the terminal where the
-factory runs and that you have access to the repository. **Check now** on the Watchers page
+Foundry runs and that you have access to the repository. **Check now** on the Watchers page
 retries immediately.
 
 **"codex CLI not found" or "not logged in".** Install Codex (`npm i -g @openai/codex`, or the
@@ -719,3 +780,55 @@ the step output lists the file, line and kind of secret.
 
 **Tests fail for reasons unrelated to the change.** Set the right command with the `test_cmd`
 variable, per repository in `<repo>/.claude-factory/config.yaml`.
+
+---
+
+## 11. Upgrading from claude-factory
+
+The data folder is now `~/.spaghetti-code-foundry` (or `SCF_HOME` / `FACTORY_HOME` if you set one).
+The `.claude-factory/` folder inside each repository does not change.
+
+**What happens.** On the first start of any `scf` command except help, the whole
+`~/.claude-factory` folder is copied to `~/.spaghetti-code-foundry`: config, runs, flows, blocks,
+learnings, queue, locks and evals. The copy is made next to the new folder and renamed into place
+in one step, so you never see a half-done move. Paths that point into the old folder (in run state,
+lock files, `queue.json` and `config.yaml`) are rewritten. If `config.yaml` can't be rewritten
+safely, it is kept as it was and a warning lists the values that still point to the old folder.
+
+**The backup.** `~/.claude-factory` is never changed or deleted, except for a note file
+`MOVED-TO-SPAGHETTI-CODE-FOUNDRY.txt`. Nothing there is used anymore: your settings now live in
+`~/.spaghetti-code-foundry/config.yaml`, and the old `~/.claude-factory/config.yaml` is only a copy.
+You can delete the folder once everything works.
+
+**When the move waits.** Nothing is copied when you set `SCF_HOME` / `FACTORY_HOME`, when the new
+folder already exists (it is never overwritten), while a run is running, when free space is short
+(size + 10% + 100 MiB), or when something in the old folder changed while it was copied. The move is
+tried again on later starts, and every minute by an idle `scf ui` / `scf serve`. A run counts as
+running when its `run.json` can't be read, or its status is `running` and it has no recorded `pid`
+(from the old version) or its `pid` is alive. The message names these runs. For a run that crashed,
+run `scf resume <id>` (or delete a leftover run folder without `run.json`).
+
+**Worktrees.** Runs that use a git worktree are repaired with `git worktree repair`, so a waiting
+run can be approved and resumed in the new folder. The workspaces left in the backup are no longer
+linked to your repositories. If a repair fails, everything is put back and the old folder stays in
+use. If an interrupted move left the repair unfinished, the next start finishes it.
+
+**Servers on the old folder.** A running `scf ui` or `scf serve` that still uses the old folder
+refuses changes after the move (HTTP 503) and restarts onto the new folder when it is idle. Other
+processes on the old folder refuse to start runs; restart them. Stop old `factory watch` processes
+before you upgrade: they run old code and can't join the lock the move uses.
+
+**If the new folder is missing.** When the note exists but `~/.spaghetti-code-foundry` is gone,
+`scf` refuses to run (help still works) and never copies the backup a second time by itself. Restore
+the folder, set `SCF_HOME` to the folder you want, or delete the note file to copy again.
+
+**Login service.** Run `scf service install` once, so its log and settings move to the new folder.
+`scf service status` tells you when it is still needed.
+
+**The command.** If `factory` still points at the old install, run
+`npm unlink -g claude-factory && npm link` in the repository.
+
+**The repository.** It is now `MeloMar-IT/spaghetti-code-foundry`. GitHub redirects the old
+address. In an existing clone, run
+`git remote set-url origin https://github.com/MeloMar-IT/spaghetti-code-foundry.git`.
+The folder of your clone can keep its name.

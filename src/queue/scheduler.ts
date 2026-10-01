@@ -3,7 +3,7 @@ import { dirname, resolve } from "node:path";
 import type { Config } from "../config.js";
 import type { ApprovalDecision } from "../engine/execute.js";
 import { newRunId, resumeRun, runFlow } from "../engine/runner.js";
-import { listRunIds, loadRun, readLiveLog, type RunSummary } from "../engine/state.js";
+import { listRunBriefs, listRunIds, loadRun, readLiveLog, runUpdatedAt, type RunBrief, type RunSummary } from "../engine/state.js";
 import type { Flow } from "../flow/schema.js";
 
 const MAX_LOG_LINES = 5000;
@@ -117,9 +117,16 @@ export class Scheduler {
 
   queue() {
     return {
-      pending: this.pending.map(({ runId, lockKey, repoLock, source, enqueuedAt, job }) => {
-        const blocker = [...this.active.values()].find((a) => (repoLock && a.queued.repoLock === repoLock) || (lockKey && a.queued.lockKey === lockKey));
-        return { runId, lockKey, repoLock, source, enqueuedAt, kind: job.kind, waitingFor: blocker?.queued.runId };
+      pending: this.pending.map(({ runId, lockKey, repoLock, source, enqueuedAt, job }, i) => {
+        const same = (q: QueuedJob) => (repoLock && q.repoLock === repoLock) || (lockKey && q.lockKey === lockKey);
+        // The lock owner: an active job, else an earlier job in the queue that holds the same lock.
+        const blocker = [...this.active.values()].find((a) => same(a.queued))?.queued ?? this.pending.slice(0, i).find(same);
+        const vars = job.kind === "run" ? job.vars : undefined;
+        return {
+          runId, lockKey, repoLock, source, enqueuedAt, kind: job.kind, waitingFor: blocker?.runId,
+          githubRepo: vars?.github_repo, issue: vars?.issue,
+          repo: job.kind === "run" ? job.repo : undefined, task: job.kind === "run" ? job.task : undefined,
+        };
       }),
       active: [...this.active.values()].map((a) => ({ runId: a.queued.runId, lockKey: a.queued.lockKey, repoLock: a.queued.repoLock, source: a.queued.source })),
       concurrency: this.o.config().concurrency,
@@ -147,9 +154,19 @@ export class Scheduler {
       .filter((s): s is RunSummary => !!s);
   }
 
+  /** A brief of every run, newest first (cheap: files are read again only when they changed). */
+  briefs(): RunBrief[] {
+    return listRunBriefs(this.o.runsDir).map((b) => {
+      const live = this.active.get(b.runId)?.summary;
+      if (live) return { ...b, status: live.status };
+      // An interrupted run ended when its run.json was last written: a time that stays the same.
+      return b.status === "running" && !this.active.has(b.runId) ? { ...b, status: "failed" as const, finishedAt: b.finishedAt ?? b.updatedAt } : b;
+    });
+  }
+
   /** A "running" run.json with no live process was interrupted (e.g. the server died). */
   private markStale(s: RunSummary | undefined): RunSummary | undefined {
-    if (s && s.status === "running" && !this.active.has(s.runId)) return { ...s, status: "failed", reason: "interrupted — resume it to continue" };
+    if (s && s.status === "running" && !this.active.has(s.runId)) return { ...s, status: "failed", reason: "interrupted — resume it to continue", finishedAt: s.finishedAt ?? runUpdatedAt(s.runDir) ?? s.startedAt };
     return s;
   }
 
@@ -228,7 +245,7 @@ export class Scheduler {
     const j = q.job;
     const promise =
       j.kind === "run"
-        ? runFlow(j.flow, { ...common, runId: q.runId, task: j.task, repo: j.repo, vars: j.vars })
+        ? runFlow(j.flow, { ...common, runId: q.runId, task: j.task, repo: j.repo, vars: j.vars, source: q.source })
         : resumeRun({ ...common, runId: j.runId, from: j.from, decision: j.decision });
     a.done = promise
       .then((summary) => {
