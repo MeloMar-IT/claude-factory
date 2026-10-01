@@ -165,6 +165,9 @@ steps:
     expect(item.next.text).toBe(one.next.text);
     const all = (await (await json("GET", "/api/next")).json()) as { runs: (Next & { runId: string })[]; server: unknown[] };
     expect(all.runs.find((r) => r.runId === runId)!.text).toBe(one.next.text);
+    expect(one.next).toMatchObject({ status: "waiting for you — approval", help: expect.any(String) });
+    expect(item.next).toMatchObject({ status: "waiting for you — approval", help: expect.any(String) });
+    expect(all.runs.find((r) => r.runId === runId)).toMatchObject({ status: "waiting for you — approval" });
     expect(all.server).toEqual([]);
     expect(list.every((r) => r.next)).toBe(true);
   });
@@ -181,7 +184,7 @@ steps:
     const all = (await (await json("GET", "/api/next")).json()) as { runs: { runId: string; kind: string; where: { url: string } }[] };
     expect(all.runs.find((r) => r.runId === b.runId)).toMatchObject({ kind: "one_at_a_time", where: { url: `#/runs/${a.runId}` } });
     const queue = (await (await json("GET", "/api/queue")).json()) as { pending: { runId: string; next: unknown }[] };
-    expect(queue.pending.find((p) => p.runId === b.runId)!.next).toMatchObject({ kind: "one_at_a_time", where: { url: `#/runs/${a.runId}` } });
+    expect(queue.pending.find((p) => p.runId === b.runId)!.next).toMatchObject({ kind: "one_at_a_time", status: "waiting for another run", where: { url: `#/runs/${a.runId}` } });
 
     const res = await fetch(`${base}/api/runs/${b.runId}/events`);
     const reader = res.body!.getReader();
@@ -241,6 +244,8 @@ steps:
       const list = (await (await json("GET", "/api/watchers")).json()) as { status: { next?: { kind: string; who: string; where: { url: string } }; holds?: { next: { kind: string } }[] } }[];
       expect(list[0]!.status.next).toMatchObject({ kind: "watcher_error", who: "Something is wrong", where: { url: "#/watchers" } });
       expect(list[0]!.status.holds![0]!.next.kind).toBe("questions");
+      expect(list[0]!.status.next).toMatchObject({ status: "watcher error" });
+      expect(list[0]!.status.holds![0]!.next).toMatchObject({ status: "waiting for you — questions" });
       expect(list[1]!.status.next).toBeUndefined();
       expect("next" in withError).toBe(false);
     } finally {

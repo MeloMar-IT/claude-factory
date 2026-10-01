@@ -3,16 +3,17 @@ import { spentToday, type RunSummary } from "../engine/state.js";
 import { loadFlow } from "../flow/load.js";
 import { canWrite, commentsAfter, ensureLabel, gh, ghJson, isBot, issueComments, setLabels, type Comment, type Issue } from "../github.js";
 import { countQuestions, LIMIT_RETRY_MS, nextStep, runNextStep, type NextData, type BlockerInfo, type NextKind, type NextStep } from "../next-step.js";
+import { LABEL_WORDS } from "../words.js";
 import { dependencies, openDependencies } from "./deps.js";
 import type { Scheduler } from "./scheduler.js";
 
 /** Status labels the watcher puts on issues. Remove one to have the issue picked up again. */
 export const STATUS_LABELS = {
-  working: { name: "factory:working", color: "1d4ed8", description: "Spaghetti Code Foundry is working on this" },
-  done: { name: "factory:done", color: "15803d", description: "Spaghetti Code Foundry finished this" },
-  needsInfo: { name: "factory:needs-info", color: "d97706", description: "Spaghetti Code Foundry needs more information — reply to continue" },
-  waiting: { name: "factory:waiting-approval", color: "7c3aed", description: "Spaghetti Code Foundry waits for /approve or /reject" },
-  failed: { name: "factory:failed", color: "b91c1c", description: "Spaghetti Code Foundry run failed — remove this label to retry" },
+  working: { name: "factory:working", color: "1d4ed8", description: LABEL_WORDS.working },
+  done: { name: "factory:done", color: "15803d", description: LABEL_WORDS.done },
+  needsInfo: { name: "factory:needs-info", color: "d97706", description: LABEL_WORDS.needsInfo },
+  waiting: { name: "factory:waiting-approval", color: "7c3aed", description: LABEL_WORDS.waiting },
+  failed: { name: "factory:failed", color: "b91c1c", description: LABEL_WORDS.failed },
 } as const;
 type LabelKey = keyof typeof STATUS_LABELS;
 type LabelNames = Record<LabelKey, string>;
@@ -73,7 +74,7 @@ export interface Hold {
   title?: string;
   /** The record's one sentence. */
   reason: string;
-  /** Link to what it waits for (e.g. the daily pull request). */
+  /** Link to what it waits for (e.g. the release pull request). */
   url?: string;
   next: NextStep;
 }
@@ -175,8 +176,15 @@ export class Watcher {
       throw new Error(`cannot access ${this.repo} with gh: ${e.message.split("\n")[0]}`);
     });
     if (this.cfg.source === "issues") {
-      await ensureLabel(this.repo, this.cfg.label, "c2410c", "Let Spaghetti Code Foundry work on this issue");
+      const review = this.cfg.vars.review_plan_label ?? "";
+      const same = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase(); // GitHub label names ignore case
+      const both = same(review, this.cfg.label); // one label starts the work and asks for a plan check
+      await ensureLabel(this.repo, this.cfg.label, "c2410c", both ? LABEL_WORDS.triggerReview : LABEL_WORDS.trigger);
       for (const [k, l] of Object.entries(STATUS_LABELS)) await ensureLabel(this.repo, this.L[k as LabelKey], l.color, l.description);
+      if (review.trim() && !both) {
+        if (this.allStatus.some((s) => same(s, review))) this.act(`label ${review} is the review label and a status label — it keeps the status description`);
+        else await ensureLabel(this.repo, review, "0e7490", LABEL_WORDS.review);
+      }
     }
     loadFlow(this.flowName(), this.d.repo); // fail early on a missing flow
     this.setupDone = true;
