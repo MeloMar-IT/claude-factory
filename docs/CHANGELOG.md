@@ -4,6 +4,7 @@ Changes that are merged but not yet in a release go under **Unreleased**. Newest
 
 ## Unreleased
 
+- Setting `cost_limits: false` (Settings → Enforce cost limits): costs are still reported, but no run, step or daily budget stops anything.
 - A server waiting to restart on a new version stops starting new runs, so it restarts once the active ones are done.
 - Dependencies named by a shortened title ("Story 7 — …" for "Website Story 7 — …") are found.
 - Gitflow: an issue is closed as soon as it is merged into `develop`.

@@ -163,8 +163,8 @@ async function drive(
     return finish(summary, opts, config, { outcome: "failed", reason: (e as Error).message, next: summary.state.next, lastOutput: "" });
   }
 
-  const runCap = summary.flowDef.limits.max_cost_usd;
-  const dailyCap = config.daily_budget_usd;
+  const runCap = config.cost_limits ? summary.flowDef.limits.max_cost_usd : undefined;
+  const dailyCap = config.cost_limits ? config.daily_budget_usd : undefined;
   const engine: Engine = {
     summary,
     config,
@@ -260,9 +260,9 @@ async function loop(engine: Engine, scope: Scope, startAt: string | null, runsDi
     const here = () => ({ next: summary.state.next, lastOutput });
     if (engine.signal?.aborted) return { outcome: "cancelled", reason: "cancelled by user", ...here() };
 
-    const runCap = summary.flowDef.limits.max_cost_usd;
+    const runCap = config.cost_limits ? summary.flowDef.limits.max_cost_usd : undefined;
     const overRun = runCap !== undefined && summary.totalCostUsd >= runCap;
-    const overDay = config.daily_budget_usd !== undefined && spentToday(runsDir) >= config.daily_budget_usd;
+    const overDay = config.cost_limits && config.daily_budget_usd !== undefined && spentToday(runsDir) >= config.daily_budget_usd;
     // Shell and approval steps cost nothing, so they still run (e.g. posting what was already paid for).
     const costsMoney = step.type !== "shell" && step.type !== "approval";
     if (costsMoney && (overRun || overDay) && !engine.budgetFallback) {

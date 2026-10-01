@@ -113,6 +113,12 @@ export const ConfigSchema = z
     /** Extra or overridden providers; anthropic, openai, ollama and lmstudio are built in. */
     providers: z.record(z.string().regex(/^[a-z][\w-]*$/), ProviderSchema).default({}),
     router: RouterSchema,
+    /**
+     * false: costs are still recorded and reported, but nothing stops on money — no run limit
+     * (`limits.max_cost_usd`), no step limit (`max_budget_usd`), no daily budget. For fixed-price
+     * subscriptions. Usage limits reported by Claude/Codex themselves still pause runs.
+     */
+    cost_limits: z.boolean().default(true),
     /** Stop starting new work once today's spend reaches this. */
     daily_budget_usd: z.number().positive().optional(),
     /** Max runs executing at the same time (across all repos). */

@@ -179,6 +179,25 @@ steps:
     expect(s.history).toHaveLength(2);
   });
 
+  it("with cost limits off, records costs but never stops on money (fixed-price subscriptions)", async () => {
+    const config = baseConfig({ cost_limits: false, daily_budget_usd: 0.01 });
+    const s = await start(`
+name: t
+workspace: inplace
+defaults: {max_budget_usd: 0.5}
+limits: {max_cost_usd: 0.015}
+steps:
+  - {id: a, type: claude, prompt: one}
+  - {id: b, type: claude, prompt: two}
+  - {id: c, type: claude, prompt: three}
+`, { config });
+    expect(s.status).toBe("succeeded");
+    expect(s.history).toHaveLength(3);
+    expect(s.totalCostUsd).toBeCloseTo(0.03); // still recorded
+    // Claude Code is not given a budget cap either.
+    expect(s.history[0]!.output).not.toContain("--max-budget-usd");
+  });
+
   it("stops (resumably) when the daily budget is spent", async () => {
     const config = baseConfig({ daily_budget_usd: 0.01 });
     const s = await start(`

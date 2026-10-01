@@ -67,7 +67,7 @@ export async function renderDashboard(main) {
   mount(main,
     h("div", { class: "toolbar" }, h("h1", {}, "Dashboard"), h("span", { class: "muted" }, "last 30 days")),
     h("div", { class: "tiles" },
-      tile("Spent today", usd(info.spentToday), budget ? `of ${usd(budget)} daily budget` : "no daily budget set"),
+      tile("Spent today", usd(info.spentToday), info.costLimits === false ? "estimate at API prices · no limits enforced" : budget ? `of ${usd(budget)} daily budget` : "no daily budget set"),
       tile("Spent (30 days)", usd(t.costUsd), `${t.runs} runs`),
       tile("Success rate", pct(t.succeeded, t.runs), `${t.succeeded} succeeded · ${t.failed} failed`),
       tile("Needs a human", String(t.stopped + t.waiting), `${t.waiting} waiting for approval · ${t.stopped} stopped`)),

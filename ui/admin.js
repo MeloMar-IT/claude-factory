@@ -189,6 +189,7 @@ function diskSection(section) {
 export async function renderSettings(main) {
   const [c, info] = await Promise.all([api.config(), api.info()]);
   const budget = input(c.daily_budget_usd ?? "", { type: "number", step: "0.5", placeholder: "no limit" });
+  const limits = check(c.cost_limits !== false, "Enforce cost limits (run, step and daily budgets)");
   const conc = input(String(c.concurrency), { type: "number", min: 1 });
   const protectedB = input(c.protected_branches.join(", "), { class: "mono" });
   const macos = check(c.notify.macos, "macOS notifications");
@@ -210,6 +211,7 @@ export async function renderSettings(main) {
     const next = {
       ...c,
       daily_budget_usd: num(budget),
+      cost_limits: limits.el.checked,
       concurrency: Number(conc.value) || 1,
       protected_branches: protectedB.value.split(",").map((s) => s.trim()).filter(Boolean),
       secret_scan: secrets.el.checked,
@@ -232,6 +234,8 @@ export async function renderSettings(main) {
     h("div", { class: "toolbar" }, h("h1", {}, "Settings"), h("span", { class: "muted mono" }, info.configPath), h("span", { class: "spacer" }), h("button", { class: "primary", onClick: save }, "Save")),
     err,
     section("Budget & capacity",
+      limits.row,
+      h("p", { class: "muted", style: { margin: "4px 0 10px", fontSize: "12.5px" } }, "Off: costs are still recorded and shown (Dashboard, runs), but no run is ever stopped because of money — for fixed-price subscriptions. Claude's and Codex's own usage limits still pause runs."),
       h("div", { class: "grid" },
         f("Daily budget ($)", budget, `Spent today: $${info.spentToday.toFixed(2)}. When reached, runs pause (stopped) and resume the next day.`),
         f("Runs at the same time", conc))),

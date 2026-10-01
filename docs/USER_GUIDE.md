@@ -625,6 +625,11 @@ them depends on how the agents are logged in:
 
 Budgets use these amounts either way, so they also protect your subscription limits.
 
+**Fixed-price subscriptions:** turn off **Enforce cost limits** in Settings (`cost_limits: false`).
+Costs are still recorded and shown everywhere, but nothing is ever stopped because of money — no
+run limit, no step limit, no daily budget. The usage limits that Claude and Codex report
+themselves still pause runs; they continue by themselves when the limit resets.
+
 ### Dashboard
 
 ![Dashboard](images/dashboard.png)
