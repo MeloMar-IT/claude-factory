@@ -58,6 +58,9 @@ describe("github-issue flow (fake gh + claude)", { timeout: 30_000 }, () => {
     expect(branches).toMatch(/factory\/issue-7-/);
     const msg = gh.remoteGit("log", "-1", "--format=%s", branches.match(/factory\/\S+/)![0]);
     expect(msg.trim()).toBe("Resolve #7");
+    const body = gh.remoteGit("log", "-1", "--format=%B", branches.match(/factory\/\S+/)![0]);
+    expect(body).toContain(`Automated by Spaghetti Code Foundry (run ${s.runId})`);
+    expect(body).not.toContain("claude-factory");
   });
 
   it("asks for more info on the ticket and stops when the plan is unclear", async () => {
@@ -117,6 +120,7 @@ describe("github-pr flow (fake gh + claude)", () => {
     expect(log).toContain("Pull request: https://github.com/owner/repo/pull/99");
     const branch = gh.remoteGit("branch", "--list").match(/factory\/\S+/)![0];
     expect(gh.remoteGit("log", "-2", "--format=%s", branch).trim().split("\n")).toEqual(["Fix CI", "Resolve #7"]);
+    expect(gh.remoteGit("log", "-1", "--format=%b", branch).trim()).toBe(`Automated by Spaghetti Code Foundry (run ${r.runId})`);
     expect(readFileSync(learningsFile({ github_repo: "acme/app" }, ""), "utf8")).toContain("CI runs tests that expect 2");
   });
 });
@@ -138,6 +142,15 @@ describe("generated ticket flows", () => {
     expect(text("github-auto")).toContain("They are labelled \\`claude-factory\\` and will be picked up automatically.");
   });
 
+  it("commit messages and Jira/Linear comments say the new name", () => {
+    const all = ["chore", "ci-fix", "github-issue", "github-pr", "github-auto", "jira-ticket", "linear-ticket", "cross-review"];
+    for (const f of all) {
+      expect(text(f), f).not.toMatch(/Automated by claude-factory|claude-factory plan:|claude-factory finished|\(claude-factory run/);
+    }
+    expect(text("cross-review")).toContain('-m "factory: $(printf');
+    expect(text("cross-review")).toContain("reviewed by Codex (Spaghetti Code Foundry run $FACTORY_RUN_ID)");
+  });
+
   it("match the blocks they are built from", () => {
     const pairs: [string, string, string[]][] = [
       ["plan", "ask_for_info", flows],
@@ -145,6 +158,12 @@ describe("generated ticket flows", () => {
       ["push-result", "push_result", flows],
       ["request-approval", "request_approval", ["github-pr"]],
       ["triage", "split_ticket", ["github-auto"]],
+      ["commit", "commit", ["github-issue", "github-pr", "github-auto", "chore", "ci-fix", "jira-ticket", "linear-ticket"]],
+      ["ci", "push_ci_fix", ["github-pr", "github-auto", "chore", "ci-fix"]],
+      ["jira-push-plan", "jira_push_plan", ["jira-ticket"]],
+      ["jira-push-result", "jira_push_result", ["jira-ticket"]],
+      ["linear-push-plan", "linear_push_plan", ["linear-ticket"]],
+      ["linear-push-result", "linear_push_result", ["linear-ticket"]],
     ];
     const runOf = (steps: { id: string }[], id: string) => (steps.find((s) => s.id === id) as { run?: string } | undefined)?.run;
     for (const [block, step, inFlows] of pairs) {

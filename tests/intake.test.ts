@@ -126,7 +126,10 @@ describe("jira-ticket and linear-ticket flows", () => {
     expect(comments).toHaveLength(2);
     expect(comments[0]!.auth).toBe(`Basic ${Buffer.from("me@x:tok").toString("base64")}`);
     const text = (c: (typeof comments)[0]) => c.body.body.content.map((p: any) => p.content.map((t: any) => t.text).join("")).join("\n");
-    expect(text(comments[0]!)).toContain("claude-factory plan");
+    expect(text(comments[0]!)).toContain("🤖 Spaghetti Code Foundry plan:");
+    expect(text(comments[0]!)).not.toContain("claude-factory plan");
+    expect(text(comments[1]!)).toContain("✅ Spaghetti Code Foundry finished: branch ");
+    expect(text(comments[1]!)).not.toContain("claude-factory finished");
     expect(text(comments[1]!)).toContain("added feature.txt");
     expect(gh.remoteGit("branch", "--list")).toMatch(/factory\//);
   });
@@ -141,6 +144,8 @@ describe("jira-ticket and linear-ticket flows", () => {
     expect(mutations).toHaveLength(2);
     expect(mutations[0]!.body.variables.issueId).toBe("uuid-9");
     expect(mutations[0]!.auth).toBe("lin_key");
+    expect(mutations[0]!.body.variables.body).toContain("🤖 Spaghetti Code Foundry plan:");
+    expect(mutations[1]!.body.variables.body).toMatch(/^✅ Spaghetti Code Foundry finished: branch `[^`]+`\n/);
     expect(mutations[1]!.body.variables.body).toContain("added feature.txt");
   });
 

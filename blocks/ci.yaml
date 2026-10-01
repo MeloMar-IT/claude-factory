@@ -40,6 +40,6 @@ steps:
     run: |
       git add -A
       git diff --cached --quiet && { echo "fix_ci changed nothing"; exit 1; }
-      git commit -q -m "Fix CI" -m "Automated by claude-factory (run $FACTORY_RUN_ID)"
+      git commit -q -m "Fix CI" -m "Automated by Spaghetti Code Foundry (run $FACTORY_RUN_ID)"
       git push -q && git log --oneline -1
     on_success: wait_ci

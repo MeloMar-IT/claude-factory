@@ -4,6 +4,7 @@ Changes that are merged but not yet in a release go under **Unreleased**. Newest
 
 ## Unreleased
 
+- Commits from the ticket, chore and ci-fix flows end with "Automated by Spaghetti Code Foundry (run …)", commits from the cross-review flow end with "Written by Claude, reviewed by Codex (Spaghetti Code Foundry run …)", and the plan and result comments on Jira and Linear say "Spaghetti Code Foundry". The subject lines ("Resolve #N", "Fix CI", "factory: …") stay as they are.
 - Comments from the ticket flows (`github-issue`, `github-pr`, `github-auto`) say "Spaghetti Code Foundry": questions, plan, approval request, result and split. The hidden `<!-- claude-factory run=… -->` marker and the `claude-factory` label stay.
 - The web UI, the app's own messages (CLI help and banner, notifications, the push-protection message, label descriptions, the failure comment on issues) and the docs say "Spaghetti Code Foundry". Label names, folders, branch names and the hidden `<!-- claude-factory` marker stay as they are.
 

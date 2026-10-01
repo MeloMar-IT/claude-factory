@@ -8,7 +8,7 @@ steps:
     type: shell
     run: |
       case "$FACTORY_VAR_TICKET" in *[!A-Za-z0-9-]*|'') echo "set var ticket to an issue key like PROJ-123"; exit 1;; esac
-      text=$(printf "🤖 claude-factory plan:\n\n%s\n" "$(printf "%s\n" "$FACTORY_OUT_PLAN" | sed -E "/^(PLAN_STATUS|ROUTE):/d")")
+      text=$(printf "🤖 Spaghetti Code Foundry plan:\n\n%s\n" "$(printf "%s\n" "$FACTORY_OUT_PLAN" | sed -E "/^(PLAN_STATUS|ROUTE):/d")")
       # Jira wants Atlassian Document Format: one paragraph per line.
       jq -n --arg t "$text" '{body: {type: "doc", version: 1, content: [$t | split("\n")[] | {type: "paragraph", content: (if . == "" then [] else [{type: "text", text: .}] end)}]}}' \
       | curl -sfS -u "$JIRA_EMAIL:$JIRA_API_TOKEN" -H "Content-Type: application/json" -X POST --data @- \

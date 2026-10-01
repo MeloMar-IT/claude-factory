@@ -197,7 +197,7 @@ steps:
       git add -A
       if git diff --cached --quiet; then echo "nothing to commit"; exit 1; fi
       if [ -n "$FACTORY_VAR_ISSUE" ]; then msg="Resolve #$FACTORY_VAR_ISSUE"; else msg="factory: $(printf '%s' "$FACTORY_TASK" | head -1)"; fi
-      git commit -q -m "$msg" -m "Automated by claude-factory (run $FACTORY_RUN_ID)"
+      git commit -q -m "$msg" -m "Automated by Spaghetti Code Foundry (run $FACTORY_RUN_ID)"
       git log --oneline -1
   - id: approval_gate
     type: shell
@@ -285,7 +285,7 @@ steps:
     run: |
       git add -A
       git diff --cached --quiet && { echo "fix_ci changed nothing"; exit 1; }
-      git commit -q -m "Fix CI" -m "Automated by claude-factory (run $FACTORY_RUN_ID)"
+      git commit -q -m "Fix CI" -m "Automated by Spaghetti Code Foundry (run $FACTORY_RUN_ID)"
       git push -q && git log --oneline -1
     on_success: wait_ci
   - id: push_result
