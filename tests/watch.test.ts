@@ -8,6 +8,7 @@ import { BOT_MARKER, BOT_MARKERS, commentsAfter, isBot } from "../src/github.js"
 import { loadRun, saveRun } from "../src/engine/state.js";
 import { Scheduler } from "../src/queue/scheduler.js";
 import { failureComment, parseInterval, Watcher } from "../src/queue/watcher.js";
+import { watcherProblem } from "../src/server/next.js";
 import { LABEL_WORDS } from "../src/words.js";
 import { claudeBin, fakeGithub } from "./helpers/fake-github.js";
 
@@ -354,6 +355,30 @@ describe("watcher", () => {
     await w.tick();
     expect(w.status.lastError).toBeUndefined();
     expect(w.status.errorSince).toBeUndefined();
+  });
+
+  it("a failed gh call keeps its first output line, and a connection problem says so", async () => {
+    process.env.FAKE_GH_FAIL = "issue list";
+    process.env.FAKE_GH_FAIL_TEXT = "error connecting to api.github.com\ncheck your internet connection";
+    const w = watcher();
+    await w.tick();
+    expect(w.status.lastError).toMatch(/Command failed: .*issue list.* — error connecting to api\.github\.com$/);
+    expect(w.status.lastError).not.toContain("\n");
+    const p = watcherProblem(w.cfg, w.status);
+    expect(p?.why).toMatch(/^The watcher for acme\/app can't reach GitHub/);
+    expect(p?.action).toBe("Check the network and `gh auth status`");
+
+    process.env.FAKE_GH_FAIL_TEXT = "HTTP 404: Not Found";
+    await w.tick();
+    expect(watcherProblem(w.cfg, w.status)?.why).toBe("The watcher for acme/app cannot reach the repository: a call to GitHub failed");
+  });
+
+  it("a failed repo check holds the first output line", async () => {
+    process.env.FAKE_GH_FAIL = "repo view";
+    const w = watcher();
+    await w.tick();
+    expect(w.status.lastError).toMatch(/^cannot access acme\/app with gh: Command failed:/);
+    expect(w.status.lastError).toContain("boom");
   });
 
   it("a failed issue names both ways to retry", async () => {

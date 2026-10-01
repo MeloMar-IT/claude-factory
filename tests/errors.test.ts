@@ -1,9 +1,21 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { explainError, type ErrorAbout } from "../src/errors.js";
+import { errorLine, explainError, type ErrorAbout } from "../src/errors.js";
 
 type Row = [string, string, ErrorAbout, string, boolean?];
 const WHY_GENERAL = "the error is not one the Foundry can explain";
+
+const CONNECTION = ["The watcher can't reach GitHub", "watcher", "GitHub did not answer or did not let it in"] as const;
+
+describe("errorLine", () => {
+  it("keeps the first output line of a failed command", () => {
+    expect(errorLine("Command failed: gh x\nboom\nmore")).toBe("Command failed: gh x — boom");
+    expect(errorLine("Command failed: gh x")).toBe("Command failed: gh x");
+    expect(errorLine("one\ntwo")).toBe("one");
+    expect(errorLine(undefined)).toBe("");
+    expect(errorLine("x".repeat(400))).toHaveLength(300);
+  });
+});
 
 const rows: Row[] = [
   ['step "run_tests" failed: exit code 1', "The step run_tests failed", "run", "its command ended with an error"],
@@ -21,7 +33,14 @@ const rows: Row[] = [
   ['step "approve" failed: rejected', "The step approve failed", "run", "a person rejected it"],
   ['step "review" failed: codex CLI not found — install it with: npm i -g @openai/codex', "The step review failed", "run", "Codex is not installed on this computer"],
   ['step "review" failed: codex exited with code 1. 401 Unauthorized — run `codex login`', "The step review failed", "run", "Codex is not logged in"],
-  ["cannot access acme/app with gh: Command failed: gh repo view acme/app --json nameWithOwner", "The watcher cannot reach the repository", "watcher", "GitHub did not let it in or could not find it"],
+  ["cannot access acme/app with gh: Command failed: gh repo view acme/app --json nameWithOwner", ...CONNECTION],
+  ["Command failed: gh issue list — error connecting to api.github.com", ...CONNECTION],
+  ['Command failed: gh issue list — Post "https://api.github.com/graphql": dial tcp: lookup api.github.com: no such host', ...CONNECTION],
+  ["Command failed: gh issue list — HTTP 502: Bad Gateway (https://api.github.com/graphql)", ...CONNECTION],
+  ["getaddrinfo ENOTFOUND api.github.com", ...CONNECTION],
+  ["connect ECONNREFUSED 127.0.0.1:443", ...CONNECTION],
+  ["tidying closed issues: Command failed: gh issue list — net/http: TLS handshake timeout", ...CONNECTION],
+  ["Command failed: gh issue list — HTTP 404: Not Found", "The watcher cannot reach the repository", "watcher", "a call to GitHub failed"],
   ["Command failed: gh issue list --repo acme/app", "The watcher cannot reach the repository", "watcher", "a call to GitHub failed"],
   ["Command failed: gh issue list --repo acme/app", "The run failed", "run", WHY_GENERAL],
   ["tidying closed issues: Command failed: gh issue list", "The watcher cannot reach the repository", "watcher", "a call to GitHub failed"],

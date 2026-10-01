@@ -359,6 +359,35 @@ steps:
     }
   });
 
+  it("GET /api/health lists the problems of the server and the last check per repository", async () => {
+    type H = { ok: boolean; summary: string; problems: { kind: string; why: string }[]; repos: { repo: string; lastOk?: string }[] };
+    const lastOk = "2026-10-01T08:00:00.000Z";
+    const cfg = { id: "a", github_repo: "acme/app", source: "issues", flow: "f", label: "l", every: "5m", max_per_tick: 1, enabled: true, vars: {} };
+    const status = { id: "a", lastActions: [], lastError: "cannot access acme/app with gh: boom", lastOk };
+    const original = { statuses: ctx.watchers.statuses, tracked: ctx.watchers.tracked };
+    ctx.restart = { why: "new_version", since: new Date().toISOString() };
+    ctx.watchers.statuses = (() => [{ ...cfg, status }]) as never;
+    ctx.watchers.tracked = (() => [{ watcher: cfg, status, issues: [] }]) as never;
+    try {
+      const res = await json("GET", "/api/health");
+      expect(res.status).toBe(200);
+      const h = (await res.json()) as H;
+      expect(h.ok).toBe(false);
+      expect(h.summary).toMatch(/^\d+ problems?$/);
+      expect(h.problems.find((p) => p.kind === "restart")?.why).toBe("A new version is waiting");
+      expect(h.problems.find((p) => p.kind === "watcher_error")?.why).toContain("The watcher for acme/app can't reach GitHub");
+      expect(h.repos).toEqual([{ repo: "acme/app", lastOk }]);
+    } finally {
+      ctx.restart = undefined;
+      ctx.watchers.statuses = original.statuses;
+      ctx.watchers.tracked = original.tracked;
+    }
+    const after = (await (await json("GET", "/api/health")).json()) as H;
+    expect(after.problems.some((p) => p.kind === "restart" || p.kind === "watcher_error")).toBe(false);
+    expect((await json("POST", "/api/health", {})).status).toBe(404);
+    expect(((await (await json("GET", "/api/next")).json()) as { server: unknown[] }).server).toBeDefined();
+  });
+
   it("watchers carry their records", async () => {
     const { nextStep } = await import("../src/next-step.js");
     const { toHold } = await import("../src/queue/watcher.js");
@@ -370,7 +399,7 @@ steps:
     try {
       const list = (await (await json("GET", "/api/watchers")).json()) as { status: { next?: { kind: string; who: string; where: { url: string } }; holds?: { next: { kind: string } }[] } }[];
       expect(list[0]!.status.next).toMatchObject({ kind: "watcher_error", who: "Something is wrong", where: { url: "#/watchers" } });
-      expect(list[0]!.status.next).toMatchObject({ why: expect.stringContaining("The watcher cannot reach the repository") });
+      expect(list[0]!.status.next).toMatchObject({ why: expect.stringContaining("The watcher for acme/app can't reach GitHub") });
       expect((list[0]!.status as { lastError?: string }).lastError).toBe("cannot access acme/app with gh: boom");
       expect(list[0]!.status.holds![0]!.next.kind).toBe("questions");
       expect(list[0]!.status.next).toMatchObject({ status: "watcher error" });
@@ -406,10 +435,17 @@ steps:
       expect(r.status).toBe(200);
       return r.text();
     };
-    const [next, dashboard, admin, runs, api, css] = await Promise.all(["/next.js", "/dashboard.js", "/admin.js", "/runs.js", "/api.js", "/style.css"].map(text));
+    const [next, dashboard, admin, runs, api, css, health, index, app] = await Promise.all(["/next.js", "/dashboard.js", "/admin.js", "/runs.js", "/api.js", "/style.css", "/health.js", "/", "/app.js"].map(text));
     expect(next).toContain("What happens next");
-    for (const js of [dashboard, admin, runs]) expect(js).toContain("./next.js");
+    for (const js of [dashboard, admin, runs, health]) expect(js).toContain("./next.js");
     expect(api).toContain("/api/next");
+    expect(api).toContain("/api/health");
+    expect(index).toContain('id="health"');
+    expect(app).toContain("startHealth(");
+    // "+ Blank flow" uses pushState, which fires no hashchange: it reloads the line itself.
+    expect(app).toMatch(/pushState\(null, "", "#\/new"\);[\s\S]{0,80}loadHealth\(/);
+    expect(dashboard).not.toContain("api.next(");
+    expect(dashboard).not.toContain('"Server"');
     for (const w of ["Waiting for approval", "waiting for a free slot", "the run on the same ticket", "the coding run on", "Task / reason"]) expect(runs).not.toContain(w);
     expect(runs).not.toMatch(/status bad[^\n]*s\.reason|s\.reason[^\n]*status bad/);
     expect(runs).toContain("Details");
@@ -422,7 +458,7 @@ steps:
     expect(admin).not.toMatch(/errors[^\n]*lastError/);
     expect(admin).toContain("Error details");
     // The notification hint in Settings says "something waits for you"; that is not a reason text.
-    for (const js of [dashboard, (admin ?? "").replace("when something waits for you.", ""), runs, api]) expect(js).not.toMatch(/nothing to do|waits for|a free slot|same ticket/i);
+    for (const js of [dashboard, (admin ?? "").replace("when something waits for you.", ""), runs, api, health]) expect(js).not.toMatch(/nothing to do|waits for|a free slot|same ticket/i);
     expect(css).not.toContain(".card.waiting");
     expect(runs).not.toContain("STATUS_LABEL");
     expect(runs).not.toContain('"Next step"');

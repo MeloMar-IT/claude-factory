@@ -39,6 +39,7 @@ export const api = {
   providers: () => req("GET", "/api/providers"),
   testModel: (spec) => req("POST", "/api/providers/test", { spec }),
   next: () => req("GET", "/api/next"),
+  health: () => req("GET", "/api/health"),
   yourTurn: () => req("GET", "/api/your-turn"),
   since: (from) => req("GET", `/api/since?since=${enc(from)}`),
   dismissTurn: (key) => req("POST", "/api/your-turn/dismiss", { key }),

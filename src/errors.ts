@@ -47,10 +47,21 @@ const ROWS: Row[] = [
   { re: /^invalid interval\b/, only: "watcher", make: () => ({ what: "The watcher cannot start", why: "its check interval is not a valid time", todo: "Change the check interval of the watcher to a time like 5m" }) },
   { re: /^interval must be\b/, only: "watcher", make: () => ({ what: "The watcher cannot start", why: "its check interval is outside what is allowed", todo: "Change the check interval of the watcher to a time like 5m" }) },
   { re: /the check took longer than/, only: "watcher", make: () => ({ what: "The watcher did not finish its check", why: "it took too long and was given up", todo: "Press Check now on the Watchers page to try again" }) },
-  { re: /^cannot access /, only: "watcher", make: () => ({ what: "The watcher cannot reach the repository", why: "GitHub did not let it in or could not find it", todo: "Check the repository name and that gh is logged in" }) },
+  { re: /^cannot access |could not resolve host|error connecting|dial tcp|timeout|ENOTFOUND|ECONNREFUSED|HTTP 5\d\d/i, only: "watcher", make: () => ({ what: "The watcher can't reach GitHub", why: "GitHub did not answer or did not let it in", todo: "Check the network and `gh auth status`" }) },
   { re: /Command failed: gh\b/, only: "watcher", make: () => ({ what: "The watcher cannot reach the repository", why: "a call to GitHub failed", todo: "Check that gh is logged in and the repository is there" }) },
   { re: /^internal error\b/, make: () => ({ what: "The run failed", why: "the Foundry hit an error of its own", todo: RUN_PAGE_LOG }) },
 ];
+
+/**
+ * The one line of an error that is stored for a watcher. A failed command also keeps the first
+ * line gh printed ("first — second"); any other error keeps its first line. At most 300 characters.
+ */
+export function errorLine(raw: string | undefined): string {
+  const lines = (raw ?? "").split("\n").map((l) => l.trim()).filter(Boolean);
+  const first = lines[0] ?? "";
+  const text = /Command failed: /.test(first) && lines[1] ? `${first} — ${lines[1]}` : first;
+  return text.slice(0, 300);
+}
 
 /** Pure. Never throws; `undefined` and "" give the "no reason" text. */
 export function explainError(raw: string | undefined, about: ErrorAbout = "run"): Explained {
