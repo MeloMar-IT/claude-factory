@@ -39,6 +39,9 @@ describe("github-auto (triage routes)", () => {
     const log = gh.ghLog();
     expect(log).toContain("created issue: issue create --repo acme/app --title Add model --body Part of #7");
     expect(log).toContain("--label claude-factory");
+    expect(log).toContain("🤖 **Spaghetti Code Foundry** split this ticket into smaller ones:");
+    expect(log).toContain("They are labelled `claude-factory` and will be picked up automatically.");
+    expect(log).toContain(`<!-- claude-factory run=${s.runId} -->`);
     expect(log).toContain("https://github.com/owner/repo/issues/102");
   });
 
@@ -48,6 +51,7 @@ describe("github-auto (triage routes)", () => {
     expect(s.status).toBe("stopped");
     expect(s.state.next).toBe("pull_ticket");
     expect(gh.ghLog()).toContain("Which endpoint?");
+    expect(gh.ghLog()).toContain("🤖 **Spaghetti Code Foundry** needs more information");
     expect(gh.ghLog()).not.toContain("ROUTE:");
   });
 });
