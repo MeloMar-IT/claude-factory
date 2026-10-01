@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -167,6 +167,57 @@ steps:
     expect(all.runs.find((r) => r.runId === runId)!.text).toBe(one.next.text);
     expect(all.server).toEqual([]);
     expect(list.every((r) => r.next)).toBe(true);
+  });
+
+  it("lists a run that waits for approval on Your turn, and Dismiss and Show again work", async () => {
+    const flow = `name: gated3
+workspace: inplace
+steps:
+  - {id: gate, type: approval, message: "ok?"}
+  - {id: after, type: shell, run: echo after}
+`;
+    type Item = { key: string; next: { kind: string; where: { url: string } }; since: string; dismissable: boolean };
+    type Turn = { count: number; dismissed: number; groups: { items: Item[] }[]; empty?: string };
+    const turn = async () => (await (await json("GET", "/api/your-turn")).json()) as Turn;
+    const { runId } = (await (await json("POST", "/api/runs", { yaml: flow, task: "t" })).json()) as { runId: string };
+    expect(((await (await json("GET", `/api/runs/${runId}`)).json()) as { source?: string }).source).toBe("ui");
+    await waitFor(runId, "waiting");
+    const mine = (t: Turn) => t.groups.flatMap((g) => g.items).find((i) => i.key.endsWith(`|approval|${runId}`));
+    const item = mine(await turn())!;
+    expect(item.next).toMatchObject({ kind: "approval", where: { url: `#/runs/${runId}` } });
+    expect(Number.isNaN(Date.parse(item.since))).toBe(false);
+
+    const dismiss = (key?: string) => json("POST", "/api/your-turn/dismiss", key === undefined ? {} : { key });
+    expect((await dismiss()).status).toBe(400);
+    expect((await dismiss("no such key")).status).toBe(404);
+    expect((await fetch(base + "/api/your-turn/dismiss", { method: "POST", headers: { "content-type": "text/plain" }, body: "x" })).status).toBe(415);
+    const res = await dismiss(item.key);
+    expect(res.status).toBe(200);
+    const after = (await res.json()) as Turn;
+    expect(mine(after)).toBeUndefined();
+    expect(after.dismissed).toBeGreaterThanOrEqual(1);
+    expect(mine(await turn())).toBeUndefined();
+    const home = join(tmp, "home");
+    expect(existsSync(join(home, "your-turn.json"))).toBe(true);
+    expect(readdirSync(home).filter((f) => f.endsWith(".tmp"))).toEqual([]);
+
+    expect((await json("POST", "/api/your-turn/restore", {})).status).toBe(200);
+    expect(mine(await turn())).toBeDefined();
+    await json("POST", `/api/runs/${runId}/approve`, {});
+    await waitFor(runId, "succeeded");
+    expect(mine(await turn())).toBeUndefined();
+  });
+
+  it("serves the Your turn page", async () => {
+    const text = (p: string) => fetch(base + p).then((r) => r.text());
+    const html = await text("/");
+    expect(html).toContain('data-nav="your-turn"');
+    expect(html).toContain('id="turn-badge"');
+    expect(html).toContain("<title>Spaghetti Code Foundry</title>");
+    expect((await fetch(base + "/turn.js")).status).toBe(200);
+    const app = await text("/app.js");
+    for (const s of ["renderYourTurn", "startHash(", 'section === "your-turn"']) expect(app).toContain(s);
+    expect(await text("/api.js")).toContain("/api/your-turn");
   });
 
   it("follows a queued run on the event stream and lists it before it has a run file", async () => {

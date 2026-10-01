@@ -36,6 +36,7 @@ top-right corner is the repository runs work on by default.
 
 | Page | What it is for |
 |---|---|
+| **Your turn** | Only what waits for you, one button each; the app opens here when something waits |
 | **Flows** | Your flows and the built-in ones: edit, create, run |
 | **Library** | Reusable blocks of steps to drop into flows |
 | **Runs** | Everything that ran or is running; the ones that need you on top |
@@ -72,6 +73,18 @@ When a run finishes, its branch stays in your repository. Review it, merge it, o
 ---
 
 ## 3. Follow, approve and resume runs
+
+### Your turn
+
+**Your turn** lists only what waits for you, one button each: questions to answer, approvals, failed or stopped work, a release pull request to merge, and a watcher that has an error. It never lists work that is running, queued, paused by a limit or waiting for another story, and never evaluation runs.
+
+- **Order:** the item that holds back the most stories comes first, then the one that waits longest. Items are grouped by repository.
+- **Each item:** what it is, why it waits, the action, and since when. The button opens the place to do it (GitHub in a new tab, or the run page).
+- **Runs you started yourself** (UI or `scf run`) count when they wait for approval, at any age, or when they failed or stopped in the last 7 days. Failed release, CI-fix and review runs started by a watcher show the same way. Runs of older versions have no record of who started them and are treated like watcher runs.
+- **Dismiss** hides an item. It stays hidden until its situation changes (a new question, a new approval, a new failure). **Show again** at the bottom brings all dismissed items back. Watcher errors cannot be dismissed. Dismissals are kept in `your-turn.json` in the data folder.
+- **No refresh needed:** the page updates every 5 seconds. When you come back from a GitHub link, the watcher checks GitHub at once. An answer you give elsewhere shows at the next watcher check.
+- **Empty:** it says "Nothing needs you." and, when it can, how many stories are being built and when the next release pull request is expected.
+- **Badge:** the number of items shows in the navigation and in the tab title, for example "(3) Foundry". When something waits, the app opens on this page.
 
 ### The runs list
 

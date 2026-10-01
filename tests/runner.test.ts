@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -214,5 +214,49 @@ steps:
     const s = await run(`name: t\nsteps:\n  - {id: a, type: shell, run: echo}`);
     expect(s.status).toBe("failed");
     expect(s.reason).toMatch(/needs a git repository/);
+  });
+});
+
+describe("run source and briefs", () => {
+  const yaml = "name: t\nworkspace: inplace\nsteps:\n  - {id: a, type: shell, run: 'test -f ok'}\n";
+  const runJson = (dir: string) => JSON.parse(readFileSync(join(dir, "run.json"), "utf8")) as { source?: string; status: string };
+
+  it("saves who started the run, keeps it on resume, and leaves it out when unknown", async () => {
+    const ui = await runFlow(parseFlow(yaml), { task: "t", repo, runsDir: join(tmp, "runs"), claudeBin, source: "ui" });
+    expect(ui.status).toBe("failed");
+    expect(runJson(ui.runDir).source).toBe("ui");
+    writeFileSync(join(repo, "ok"), "");
+    const { resumeRun } = await import("../src/engine/runner.js");
+    expect((await resumeRun({ runId: ui.runId, runsDir: join(tmp, "runs"), claudeBin })).status).toBe("succeeded");
+    expect(runJson(ui.runDir).source).toBe("ui");
+    const none = await runFlow(parseFlow(yaml), { task: "t", repo, runsDir: join(tmp, "runs"), claudeBin });
+    expect("source" in runJson(none.runDir)).toBe(false);
+  });
+
+  it("an interrupted run ends when run.json was last written, not when it started", async () => {
+    const { Scheduler } = await import("../src/queue/scheduler.js");
+    const { ConfigSchema } = await import("../src/config.js");
+    const runsDir = join(tmp, "runs");
+    const s = await runFlow(parseFlow(yaml), { task: "t", repo, runsDir, claudeBin, runId: "20260101-000000-cccc" });
+    const file = join(s.runDir, "run.json");
+    writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, "utf8")), status: "running", reason: undefined, finishedAt: undefined, startedAt: "2020-01-01T00:00:00.000Z" }));
+    const written = new Date(Date.now() - 86_400_000);
+    utimesSync(file, written, written);
+    const sched = new Scheduler({ runsDir, config: () => ConfigSchema.parse({}) });
+    expect(sched.briefs()[0]).toMatchObject({ status: "failed", finishedAt: written.toISOString() });
+    expect(sched.get(s.runId)).toMatchObject({ status: "failed", finishedAt: written.toISOString() });
+  });
+
+  it("lists briefs newest first, sees a rewritten run, and skips a broken run.json", async () => {
+    const { listRunBriefs } = await import("../src/engine/state.js");
+    const runsDir = join(tmp, "runs");
+    const a = await runFlow(parseFlow(yaml), { task: "t", repo, runsDir, claudeBin, runId: "20260101-000000-aaaa", source: "cli" });
+    const b = await runFlow(parseFlow(yaml), { task: "t", repo, runsDir, claudeBin, runId: "20260102-000000-bbbb" });
+    expect(listRunBriefs(runsDir).map((x) => [x.runId, x.status, x.source])).toEqual([[b.runId, "failed", undefined], [a.runId, "failed", "cli"]]);
+    const file = join(a.runDir, "run.json");
+    writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, "utf8")), status: "succeeded", reason: "now a longer text so the size changes" }));
+    expect(listRunBriefs(runsDir).find((x) => x.runId === a.runId)!.status).toBe("succeeded");
+    writeFileSync(file, "{ broken");
+    expect(listRunBriefs(runsDir).map((x) => x.runId)).toEqual([b.runId]);
   });
 });

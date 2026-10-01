@@ -435,3 +435,15 @@ export function releaseAtFor(watchers: WatcherConfig[], run: RunSummary, runs: R
   }
   return undefined;
 }
+
+/**
+ * The enabled schedule watchers that would release the work of a run, judged by the delivery steps
+ * its flow has (not the steps it ran, so it also works for a run that is still going).
+ */
+export function releaseWatchersFor<W extends WatcherConfig>(watchers: W[], run: RunSummary): W[] {
+  const ids = new Set((run.flowDef?.steps ?? []).map((s) => s.id));
+  const repo = run.vars?.github_repo;
+  if (!repo) return [];
+  return RELEASE_PAIRS.filter((p) => p.needs.every((id) => ids.has(id)))
+    .flatMap((p) => watchers.filter((w) => w.enabled && w.source === "schedule" && !!w.at && w.flow === p.flow && w.github_repo === repo));
+}

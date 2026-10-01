@@ -66,6 +66,10 @@ export interface WatcherStatus {
   lastActions: string[];
   /** Why issues with the trigger label are not being started right now (rebuilt every check). */
   holds?: Hold[];
+  /** Since when the checks fail (kept while they keep failing). */
+  errorSince?: string;
+  /** The pull request that pauses new work (pause_while_pr_open). */
+  pausedBy?: { number: number; url?: string; title?: string; createdAt?: string };
 }
 
 export interface Hold {
@@ -76,7 +80,13 @@ export interface Hold {
   /** Link to what it waits for (e.g. the daily pull request). */
   url?: string;
   next: NextStep;
+  /** A time from GitHub (comment, pull request); the same after a restart. */
+  since?: string;
+  /** When this server first saw the hold; starts again after a restart. */
+  seen?: string;
 }
+
+const holdKey = (h: Hold) => `${h.issue ?? ""}|${h.next.kind}|${h.next.runId ?? ""}`;
 
 /** A hold carries its record; reason and url come from it. */
 export function toHold(next: NextStep): Hold {
@@ -192,8 +202,10 @@ export class Watcher {
       else if (this.cfg.source === "ci-failures") await this.tickCi();
       else await this.tickSchedule();
       this.status.lastError = undefined;
+      this.status.errorSince = undefined;
     } catch (e) {
       this.status.lastError = (e as Error).message.split("\n")[0];
+      this.status.errorSince ??= new Date().toISOString();
       this.d.log(`[${this.cfg.id}] ! ${this.status.lastError}`);
     } finally {
       this.status.lastTick = new Date().toISOString();
@@ -312,12 +324,12 @@ export class Watcher {
   }
 
   /** An open PR whose head branch starts with pause_while_pr_open (then start nothing new). */
-  private async pausingPr(): Promise<{ text: string; number: number; url?: string } | undefined> {
+  private async pausingPr(): Promise<{ text: string; number: number; url?: string; title?: string; createdAt?: string } | undefined> {
     const prefix = this.cfg.pause_while_pr_open;
     if (!prefix) return undefined;
-    const prs = await ghJson<{ number: number; headRefName: string; state: string; url?: string }[]>(["pr", "list", "--repo", this.repo, "--state", "open", "--limit", "100", "--json", "number,headRefName,state,url"]);
+    const prs = await ghJson<{ number: number; headRefName: string; state: string; url?: string; title?: string; createdAt?: string }[]>(["pr", "list", "--repo", this.repo, "--state", "open", "--limit", "100", "--json", "number,headRefName,state,url,title,createdAt"]);
     const pr = prs.find((p) => p.state === "OPEN" && p.headRefName.startsWith(prefix));
-    return pr ? { text: `PR #${pr.number} (${pr.headRefName})`, number: pr.number, url: pr.url } : undefined;
+    return pr ? { text: `PR #${pr.number} (${pr.headRefName})`, number: pr.number, url: pr.url, title: pr.title, createdAt: pr.createdAt } : undefined;
   }
 
   private startNew(issue: Issue) {
@@ -401,7 +413,7 @@ export class Watcher {
         const comments = await issueComments(this.repo, n);
         const answers = commentsAfter(comments, isBot);
         if (!answers.length) {
-          holds.push(this.held("questions", issue, { questions: questionCount(comments) }));
+          holds.push({ ...this.held("questions", issue, { questions: questionCount(comments) }), since: [...comments].reverse().find(isBot)?.createdAt });
           continue;
         }
         answeredEarly = true;
@@ -496,7 +508,14 @@ export class Watcher {
     if (toCheck.length) await this.precheck(toCheck, holds, budgetLeft);
     await this.tidyClosed(runs).catch((e) => this.d.log(`[${this.cfg.id}] tidying closed issues: ${(e as Error).message}`));
     if (paused && !holds.some((x) => x.next.kind === "release")) holds.unshift(this.held("release", undefined, { pr: paused }));
+    const before = new Map((this.status.holds ?? []).map((h) => [holdKey(h), h.seen]));
+    const now = new Date().toISOString();
+    for (const h of holds) {
+      if (!h.since && h.next.kind === "release") h.since = paused?.createdAt;
+      h.seen = before.get(holdKey(h)) ?? now;
+    }
     this.status.holds = holds;
+    this.status.pausedBy = paused ? { number: paused.number, url: paused.url, title: paused.title, createdAt: paused.createdAt } : undefined;
     this.tracked = tracked;
   }
 

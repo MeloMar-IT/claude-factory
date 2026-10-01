@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Flow, Step } from "../flow/schema.js";
 
@@ -60,6 +60,54 @@ export interface RunSummary {
   resumes?: number;
   /** Process that last started or resumed the run. */
   pid?: number;
+  /** Who started the run, e.g. "ui", "cli" or "watcher <id> issue #7". Absent on runs of older versions. */
+  source?: string;
+}
+
+/** The few fields of a run that are cheap to keep for every run. */
+export interface RunBrief {
+  runId: string;
+  flow: string;
+  status: RunStatus;
+  startedAt: string;
+  finishedAt?: string;
+  source?: string;
+  runDir: string;
+  /** When run.json was last written. */
+  updatedAt: string;
+}
+
+/** When run.json was last written (undefined when it cannot be read). */
+export function runUpdatedAt(runDir: string): string | undefined {
+  try {
+    return new Date(statSync(runFile(runDir)).mtimeMs).toISOString();
+  } catch {
+    return undefined;
+  }
+}
+
+const briefCache = new Map<string, { mtimeMs: number; size: number; brief: RunBrief }>();
+
+/** A brief of every run, newest first. A run.json is read again only when its time or size changed; broken files are skipped. */
+export function listRunBriefs(runsDir: string): RunBrief[] {
+  const out: RunBrief[] = [];
+  for (const id of listRunIds(runsDir)) {
+    const file = runFile(join(runsDir, id));
+    try {
+      const st = statSync(file);
+      let hit = briefCache.get(file);
+      if (!hit || hit.mtimeMs !== st.mtimeMs || hit.size !== st.size) {
+        const s = JSON.parse(readFileSync(file, "utf8")) as RunSummary;
+        if (!s || typeof s.runId !== "string" || typeof s.status !== "string") continue;
+        hit = { mtimeMs: st.mtimeMs, size: st.size, brief: { runId: s.runId, flow: s.flow, status: s.status, startedAt: s.startedAt, finishedAt: s.finishedAt, source: s.source, runDir: s.runDir, updatedAt: new Date(st.mtimeMs).toISOString() } };
+        briefCache.set(file, hit);
+      }
+      out.push(hit.brief);
+    } catch {
+      continue;
+    }
+  }
+  return out;
 }
 
 export const runFile = (runDir: string) => join(runDir, "run.json");
