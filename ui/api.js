@@ -38,6 +38,7 @@ export const api = {
   tickWatcher: (id) => req("POST", `/api/watchers/${enc(id)}/tick`, {}),
   providers: () => req("GET", "/api/providers"),
   testModel: (spec) => req("POST", "/api/providers/test", { spec }),
+  next: () => req("GET", "/api/next"),
   stats: () => req("GET", "/api/stats"),
   evals: () => req("GET", "/api/evals"),
   clean: (opts) => req("POST", "/api/clean", opts),

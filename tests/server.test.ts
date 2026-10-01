@@ -180,6 +180,8 @@ steps:
     const b = (await (await json("POST", "/api/runs", { yaml: slow, task: "b", vars })).json()) as { runId: string };
     const all = (await (await json("GET", "/api/next")).json()) as { runs: { runId: string; kind: string; where: { url: string } }[] };
     expect(all.runs.find((r) => r.runId === b.runId)).toMatchObject({ kind: "one_at_a_time", where: { url: `#/runs/${a.runId}` } });
+    const queue = (await (await json("GET", "/api/queue")).json()) as { pending: { runId: string; next: unknown }[] };
+    expect(queue.pending.find((p) => p.runId === b.runId)!.next).toMatchObject({ kind: "one_at_a_time", where: { url: `#/runs/${a.runId}` } });
 
     const res = await fetch(`${base}/api/runs/${b.runId}/events`);
     const reader = res.body!.getReader();
@@ -225,6 +227,48 @@ steps:
     } finally {
       ctx.restart = undefined;
     }
+  });
+
+  it("watchers carry their records", async () => {
+    const { nextStep } = await import("../src/next-step.js");
+    const { toHold } = await import("../src/queue/watcher.js");
+    const withError = { id: "a", lastActions: [], lastError: "gh down", holds: [toHold(nextStep("questions", { repo: "acme/app", issue: 3, title: "three" }, { watched: true, questions: 2 }))] };
+    const clean = { id: "b", lastActions: [] };
+    const cfg = { source: "issues", flow: "f", label: "l", every: "5m", max_per_tick: 1, enabled: true, vars: {} };
+    const original = ctx.watchers.statuses;
+    ctx.watchers.statuses = (() => [{ ...cfg, id: "a", github_repo: "acme/app", status: withError }, { ...cfg, id: "b", github_repo: "acme/app", status: clean }]) as never;
+    try {
+      const list = (await (await json("GET", "/api/watchers")).json()) as { status: { next?: { kind: string; who: string; where: { url: string } }; holds?: { next: { kind: string } }[] } }[];
+      expect(list[0]!.status.next).toMatchObject({ kind: "watcher_error", who: "Something is wrong", where: { url: "#/watchers" } });
+      expect(list[0]!.status.holds![0]!.next.kind).toBe("questions");
+      expect(list[1]!.status.next).toBeUndefined();
+      expect("next" in withError).toBe(false);
+    } finally {
+      ctx.watchers.statuses = original;
+    }
+  });
+
+  it("the UI shows the record and has no reason wording of its own", async () => {
+    const text = async (p: string) => {
+      const r = await fetch(base + p);
+      expect(r.status).toBe(200);
+      return r.text();
+    };
+    const [next, dashboard, admin, runs, api, css] = await Promise.all(["/next.js", "/dashboard.js", "/admin.js", "/runs.js", "/api.js", "/style.css"].map(text));
+    expect(next).toContain("What happens next");
+    for (const js of [dashboard, admin, runs]) expect(js).toContain("./next.js");
+    expect(api).toContain("/api/next");
+    for (const w of ["Waiting for approval", "waiting for a free slot", "the run on the same ticket", "the coding run on", "Task / reason"]) expect(runs).not.toContain(w);
+    expect(runs).not.toMatch(/status bad[^\n]*s\.reason|s\.reason[^\n]*status bad/);
+    expect(runs).toContain("Reason");
+    expect(runs).toContain("s.reason");
+    expect(runs).toContain("nextBlock(");
+    for (const w of ["waiting for approval", "why issues aren't", "x.reason", "holdList"]) expect(dashboard).not.toContain(w);
+    for (const w of ["holdList", "Waiting:"]) expect(admin).not.toContain(w);
+    expect(admin).not.toMatch(/errors[^\n]*lastError/);
+    expect(admin).toContain("Error details");
+    for (const js of [dashboard, admin, runs, api]) expect(js).not.toMatch(/nothing to do|waits for|a free slot|same ticket/i);
+    expect(css).not.toContain(".card.waiting");
   });
 
   it("builds records from the watchers", async () => {

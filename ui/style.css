@@ -218,7 +218,6 @@ button.block-card:not(:disabled):hover { border-color: var(--accent); background
 
 /* ── run page ── */
 .tabs button.on { background: var(--panel-2); font-weight: 600; }
-.card.waiting { border-color: #7c3aed; background: color-mix(in srgb, #7c3aed 6%, var(--panel)); }
 .pill.queued { background: var(--panel-2); color: var(--muted); }
 .transcript { display: grid; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--border); }
 .tx-text { white-space: pre-wrap; font-size: 13.5px; }
@@ -287,7 +286,16 @@ pre.diff .file { font-weight: 700; display: block; }
 
 /* Why issues are waiting (Dashboard, Admin watcher cards) */
 .holds { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 4px; font-size: 13px; }
-.holds li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px; }
+.holds li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; }
 .holds .hold-title { font-weight: 500; }
 .holds .hold-link { margin-left: 8px; font-size: 12.5px; }
 .hold-group + .hold-group { margin-top: 12px; }
+.holds .hold-action, .next-parts .hold-action { font-weight: 550; }
+.next-parts { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; }
+.hold-rest { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+.card.next-step { margin-bottom: 12px; }
+.card.next-step.who-you { border-color: #7c3aed; background: color-mix(in srgb, #7c3aed 6%, var(--panel)); }
+.card.next-step.who-something-is-wrong { border-color: var(--fail); }
+.pill.who-you { background: #ede9fe; color: #6d28d9; }
+.pill.who-something-is-wrong { background: var(--fail-soft); color: var(--fail); }
+.table .task div { overflow: hidden; text-overflow: ellipsis; font-size: 12.5px; }

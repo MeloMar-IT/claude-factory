@@ -3,7 +3,8 @@ import { join } from "node:path";
 import { stepLogFile } from "../engine/execute.js";
 import type { RunSummary } from "../engine/state.js";
 import { nextStep, releaseAtFor, runNextStep, trackingWatcher, type NextStep } from "../next-step.js";
-import { labelNames } from "../queue/watcher.js";
+import { labelNames, type WatcherStatus } from "../queue/watcher.js";
+import type { WatcherConfig } from "../config.js";
 import { supersededRuns } from "../stats.js";
 import { send } from "./http.js";
 import type { ApiContext, Route } from "./server.js";
@@ -62,6 +63,34 @@ export function nextFor(ctx: ApiContext, runs?: RunSummary[]): (run: RunSummary)
   };
 }
 
+type Queue = ReturnType<ApiContext["scheduler"]["queue"]>;
+type PendingJob = Queue["pending"][number];
+
+/** The record of a queued job that has no run yet. */
+function jobNext(p: PendingJob): NextStep {
+  const issue = p.issue && /^\d+$/.test(p.issue) ? Number(p.issue) : undefined;
+  return nextStep(p.waitingFor ? "one_at_a_time" : "queued", { repo: p.githubRepo ?? p.repo, issue, title: (p.task ?? "").split("\n")[0], runId: p.runId }, { blockingRun: p.waitingFor });
+}
+
+const watcherError = (repo: string, reason: string): NextStep => nextStep("watcher_error", { repo }, { reason });
+
+/** GET /api/queue: the queue, each pending job with its record as `next`. */
+export function queueWithNext(ctx: ApiContext): Omit<Queue, "pending"> & { pending: (PendingJob & { next: NextStep })[] } {
+  const q = ctx.scheduler.queue();
+  const next = nextFor(ctx);
+  return { ...q, pending: q.pending.map((p) => {
+    const run = ctx.scheduler.get(p.runId);
+    return { ...p, next: run ? next(run) : jobNext(p) };
+  }) };
+}
+
+/** GET /api/watchers: a watcher with an error carries its record as `status.next`. */
+export function watchersWithNext(ctx: ApiContext): (WatcherConfig & { status?: WatcherStatus & { next?: NextStep } })[] {
+  return ctx.watchers.statuses().map((w) => (w.status?.lastError
+    ? { ...w, status: { ...w.status, next: watcherError(w.github_repo, w.status.lastError) } }
+    : w));
+}
+
 /** Records for the server, the watchers, every tracked issue and every run. */
 export function allNext(ctx: ApiContext): { server: NextStep[]; watchers: NextStep[]; issues: NextStep[]; runs: NextStep[] } {
   const list = ctx.scheduler.list(Infinity); // every record, not just the newest runs
@@ -74,7 +103,7 @@ export function allNext(ctx: ApiContext): { server: NextStep[]; watchers: NextSt
 
   const watchers: NextStep[] = [];
   for (const t of tracked) {
-    if (t.status.lastError) watchers.push(nextStep("watcher_error", { repo: t.watcher.github_repo }, { reason: t.status.lastError }));
+    if (t.status.lastError) watchers.push(watcherError(t.watcher.github_repo, t.status.lastError));
     for (const h of t.status.holds ?? []) if (!h.issue) watchers.push(h.next);
   }
 
@@ -106,8 +135,7 @@ export function allNext(ctx: ApiContext): { server: NextStep[]; watchers: NextSt
   const runs = list.map(next);
   for (const p of q.pending) {
     if (byRun.has(p.runId) || p.kind !== "run") continue;
-    const issue = p.issue && /^\d+$/.test(p.issue) ? Number(p.issue) : undefined;
-    runs.push(nextStep(p.waitingFor ? "one_at_a_time" : "queued", { repo: p.githubRepo ?? p.repo, issue, title: (p.task ?? "").split("\n")[0], runId: p.runId }, { blockingRun: p.waitingFor }));
+    runs.push(jobNext(p));
   }
 
   return { server, watchers, issues: [...picked.values()].map((p) => p.rec), runs };

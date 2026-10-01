@@ -1,6 +1,6 @@
 import { api } from "./api.js";
 import { h, modal, mount, timeAgo, toast } from "./dom.js";
-import { holdList } from "./dashboard.js";
+import { nextList, watcherNext } from "./next.js";
 
 const f = (label, el, hint) => h("label", { class: "field" }, h("span", {}, label), el, hint ? h("small", {}, hint) : null);
 const input = (value, attrs = {}) => h("input", { value: value ?? "", ...attrs });
@@ -148,8 +148,8 @@ export async function renderWatchers(main) {
           w.pause_while_pr_open ? ` · pauses while a ${w.pause_while_pr_open}* PR is open` : "",
           st?.lastTick ? ` · last check ${timeAgo(st.lastTick)}` : "",
           st?.nextTick ? ` · next ${new Date(st.nextTick).toLocaleTimeString()}` : ""),
-        st?.lastError ? h("div", { class: "errors", style: { margin: 0 } }, st.lastError) : null,
-        w.enabled && st?.holds?.length ? h("div", {}, h("div", { class: "muted", style: { fontSize: "12.5px", marginTop: "6px" } }, "Waiting:"), holdList(st.holds, w.github_repo)) : null,
+        w.enabled && watcherNext(w).length ? h("div", {}, h("div", { class: "muted", style: { fontSize: "12.5px", marginTop: "6px" } }, "What happens next:"), nextList(watcherNext(w))) : null,
+        st?.lastError ? h("details", {}, h("summary", {}, "Error details"), h("pre", { class: "mono" }, st.lastError)) : null,
         st?.lastActions?.length ? h("details", {}, h("summary", {}, `Recent activity (${st.lastActions.length})`), h("pre", { class: "mono" }, st.lastActions.join("\n"))) : null);
     })) : h("div", { class: "empty" },
       h("p", {}, "No watchers yet. A watcher checks a GitHub repo on a schedule and runs a flow: for labelled issues, review comments, red CI on the default branch, or a recurring chore."),
