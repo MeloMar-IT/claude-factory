@@ -43,7 +43,7 @@ function writeStore(dismissed: Store) {
 }
 
 /** Run ids in the eval reports. Runs of older versions have no `source`, so this is how their origin is known. */
-function evalRunIds(): Set<string> {
+export function evalRunIds(): Set<string> {
   const ids = new Set<string>();
   const dir = evalsDir();
   try {

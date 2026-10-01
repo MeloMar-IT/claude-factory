@@ -80,7 +80,7 @@ export interface RunBrief {
 /** When run.json was last written (undefined when it cannot be read). */
 export function runUpdatedAt(runDir: string): string | undefined {
   try {
-    return new Date(statSync(runFile(runDir)).mtimeMs).toISOString();
+    return new Date(Math.round(statSync(runFile(runDir)).mtimeMs)).toISOString();
   } catch {
     return undefined;
   }
@@ -99,7 +99,7 @@ export function listRunBriefs(runsDir: string): RunBrief[] {
       if (!hit || hit.mtimeMs !== st.mtimeMs || hit.size !== st.size) {
         const s = JSON.parse(readFileSync(file, "utf8")) as RunSummary;
         if (!s || typeof s.runId !== "string" || typeof s.status !== "string") continue;
-        hit = { mtimeMs: st.mtimeMs, size: st.size, brief: { runId: s.runId, flow: s.flow, status: s.status, startedAt: s.startedAt, finishedAt: s.finishedAt, source: s.source, runDir: s.runDir, updatedAt: new Date(st.mtimeMs).toISOString() } };
+        hit = { mtimeMs: st.mtimeMs, size: st.size, brief: { runId: s.runId, flow: s.flow, status: s.status, startedAt: s.startedAt, finishedAt: s.finishedAt, source: s.source, runDir: s.runDir, updatedAt: new Date(Math.round(st.mtimeMs)).toISOString() } };
         briefCache.set(file, hit);
       }
       out.push(hit.brief);

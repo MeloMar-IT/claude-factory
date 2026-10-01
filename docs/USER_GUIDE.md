@@ -86,6 +86,20 @@ When a run finishes, its branch stays in your repository. Review it, merge it, o
 - **Empty:** it says "Nothing needs you." and, when it can, how many stories are being built and when the next release pull request is expected.
 - **Badge:** the number of items shows in the navigation and in the tab title, for example "(3) Foundry". When something waits, the app opens on this page.
 
+### Since you last looked
+
+When you open the app after a break of 30 minutes or more, a strip under the header sums up what changed since your last visit. Each line has links.
+
+- **Stories done:** the run succeeded and committed the story.
+- **Merged into develop:** the run pushed the story to `develop`. This counts even if a later step failed. A story shows under one of these two lines, from its newest run.
+- **Releases to main:** a release pull request or the rolling Foundry pull request was merged. Other pull requests do not count.
+- **Failed:** runs that failed. A run that a newer run of the same issue replaced, or that was interrupted, is left out.
+- **Newly waiting for you:** items that started to wait for you since your last visit. The line links to **Your turn**.
+- **Only the newest five** of each line are listed, followed by "+N more".
+- **Per browser:** the time of your last visit is kept in this browser and shared by its tabs. **Dismiss** hides the strip in all tabs. Nothing shows when nothing changed.
+- **Notes:** if GitHub could not be read, or a limit was reached (20 repositories, 200 merged pull requests, 2000 finished runs), the strip says so. If that leaves it empty, it stays hidden and tries again after 5 minutes.
+- Flows that have no step named `commit` or `push_develop` never show stories as done or merged.
+
 ### The runs list
 
 ![Runs](images/runs.png)

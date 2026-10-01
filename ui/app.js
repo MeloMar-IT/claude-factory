@@ -8,6 +8,7 @@ import { renderSettings, renderWatchers } from "./admin.js";
 import { refreshModelLists, renderModels } from "./models.js";
 import { renderDashboard } from "./dashboard.js";
 import { renderRunDetail, renderRunsList } from "./runs.js";
+import { startSince } from "./since.js";
 import { renderYourTurn, startBadge, startHash } from "./turn.js";
 
 const sidebar = document.getElementById("sidebar");
@@ -400,3 +401,4 @@ void refreshModelLists();
 const to = startHash(location.hash, await startBadge());
 if (to) history.replaceState(null, "", to);
 route();
+startSince(document.getElementById("since"));
