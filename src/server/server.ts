@@ -12,6 +12,7 @@ import { flowRoutes } from "./api-flows.js";
 import { runRoutes } from "./api-runs.js";
 import { HttpError, send, serveStatic } from "./http.js";
 import { areaWait, nextRoutes, type RestartState } from "./next.js";
+import { boardRoutes } from "./board.js";
 import { yourTurnRoutes } from "./your-turn.js";
 
 const UI_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../../ui");
@@ -40,7 +41,7 @@ export interface ApiContext {
 /** A route handler: returns true when it handled the request. */
 export type Route = (ctx: ApiContext, req: IncomingMessage, res: ServerResponse, seg: string[], method: string) => Promise<boolean>;
 
-const ROUTES: Route[] = [adminRoutes, flowRoutes, runRoutes, nextRoutes, yourTurnRoutes];
+const ROUTES: Route[] = [adminRoutes, flowRoutes, runRoutes, nextRoutes, yourTurnRoutes, boardRoutes];
 
 export async function startServer(opts: ServerOptions): Promise<{ url: string; close: () => void; ctx: ApiContext }> {
   const log = opts.log ?? (() => {});

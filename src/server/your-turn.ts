@@ -6,7 +6,7 @@ import { FACTORY_HOME } from "../flow/load.js";
 import { releaseWatchersFor, trackingWatcher, type NextStep } from "../next-step.js";
 import { buildTurn, runOrigin, soonestAt, type ReleaseTime, type TurnSource, type YourTurn } from "../your-turn.js";
 import { HttpError, readJson, send, str } from "./http.js";
-import { collectNext, runSince, type Entry } from "./next.js";
+import { collectNext, knownRuns, runSince, type Entry } from "./next.js";
 import type { ApiContext, Route } from "./server.js";
 
 const DAY = 86_400_000;
@@ -43,7 +43,7 @@ function writeStore(dismissed: Store) {
 }
 
 /** Run ids in the eval reports. Runs of older versions have no `source`, so this is how their origin is known. */
-function evalRunIds(): Set<string> {
+export function evalRunIds(): Set<string> {
   const ids = new Set<string>();
   const dir = evalsDir();
   try {
@@ -66,15 +66,8 @@ const keyOf =(n: NextStep) => `${n.repo}#${n.issue ?? ""}|${n.kind}|${n.runId ??
 /** Every current item (dismissed ones too) and the page. */
 export function turnFor(ctx: ApiContext, now = new Date()) {
   const cfg = ctx.config();
-  const list = ctx.scheduler.list(200);
+  const list = knownRuns(ctx);
   const tracked = ctx.watchers.tracked();
-  const loaded = new Set(list.map((r) => r.runId));
-  for (const t of tracked) {
-    for (const i of t.issues) {
-      const run = i.runId && !loaded.has(i.runId) ? ctx.scheduler.get(i.runId) : undefined;
-      if (run) list.push(run), loaded.add(run.runId);
-    }
-  }
   const c = collectNext(ctx, list);
 
   const fromEntry = (e: Entry): TurnSource => {

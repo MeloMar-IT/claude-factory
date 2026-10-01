@@ -42,6 +42,7 @@ export const api = {
   yourTurn: () => req("GET", "/api/your-turn"),
   dismissTurn: (key) => req("POST", "/api/your-turn/dismiss", { key }),
   restoreTurn: () => req("POST", "/api/your-turn/restore", {}),
+  board: () => req("GET", "/api/board"),
   stats: () => req("GET", "/api/stats"),
   evals: () => req("GET", "/api/evals"),
   clean: (opts) => req("POST", "/api/clean", opts),

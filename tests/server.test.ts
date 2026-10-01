@@ -223,6 +223,26 @@ steps:
     expect(await text("/api.js")).toContain("/api/your-turn");
   });
 
+  it("serves the board of stories, GET only", async () => {
+    type Board = { repos: { repo: string; columns: { id: string; cards: { issue: number; runId?: string }[] }[] }[] };
+    const { runId } = (await (await json("POST", "/api/runs", { yaml: FLOW, task: "t", vars: { github_repo: "acme/app", issue: "77" } })).json()) as { runId: string };
+    await waitFor(runId, "succeeded");
+    const res = await json("GET", "/api/board");
+    expect(res.status).toBe(200);
+    const board = (await res.json()) as Board;
+    const cards = board.repos.find((r) => r.repo === "acme/app")!.columns.flatMap((c) => c.cards);
+    expect(cards.find((c) => c.issue === 77)).toMatchObject({ issue: 77, runId });
+    expect((await json("POST", "/api/board", {})).status).toBe(404);
+  });
+
+  it("serves the Board page", async () => {
+    const text = (p: string) => fetch(base + p).then((r) => r.text());
+    expect(await text("/")).toContain('data-nav="board"');
+    expect((await fetch(base + "/board.js")).status).toBe(200);
+    expect(await text("/app.js")).toContain('section === "board"');
+    expect(await text("/api.js")).toContain("/api/board");
+  });
+
   it("follows a queued run on the event stream and lists it before it has a run file", async () => {
     const slow = `name: slow
 workspace: inplace
