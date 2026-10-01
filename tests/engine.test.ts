@@ -12,6 +12,7 @@ import { mirrorEnvPrefixes, withScfAliases } from "../src/engine/template.js";
 import { notifyRun } from "../src/notify.js";
 import { COMMENT_KINDS, commentText, runNextStep } from "../src/next-step.js";
 import { parseFlow } from "../src/flow/load.js";
+import { classifyFailure } from "../src/failure.js";
 
 const claudeBin = resolve("tests/fixtures/fake-claude.mjs");
 let tmp: string;
@@ -253,6 +254,72 @@ steps:
   });
 });
 
+describe("blocked agent commands", () => {
+  const claude = (prompt: string, extra = "") => `name: t\nworkspace: inplace\nsteps:\n  - id: a\n    type: claude\n    prompt: |\n${prompt.split("\n").map((l) => `      ${l}`).join("\n")}\n${extra}`;
+
+  it("puts a denied tool call on the step record, without pushes", async () => {
+    const s = await start(claude("DENY Bash mkdir -p out\nDENY Bash git push origin main\nERROR"));
+    expect(s.status).toBe("failed");
+    expect(s.history[0]!.denied).toEqual(["Bash: mkdir -p out"]);
+    expect(classifyFailure(s).cause).toBe("factory");
+    const text = runNextStep(s).text;
+    expect(text).toContain("not allowed to run Bash: mkdir");
+    expect(text).not.toContain("-p out");
+  });
+
+  it("drops every form of git push, keeps other commands", async () => {
+    const pushes = [`cd /${"a".repeat(90)} && git push origin main`, "GIT_SSH_COMMAND=ssh git push", "git -C /repo push origin main", "git --no-pager push", "/usr/bin/git push origin main"];
+    const s = await start(claude([...pushes.map((p) => `DENY Bash ${p}`), "DENY Bash mkdir x", 'DENY Bash git commit -m "push it"', "DENY Bash echo git push"].join("\n")));
+    expect(s.history[0]!.denied).toEqual(["Bash: mkdir x", 'Bash: git commit -m "push it"', "Bash: echo git push"]);
+  });
+
+  it("keeps at most five and leaves the key out without denials", async () => {
+    const s = await start(claude(Array.from({ length: 6 }, (_, i) => `DENY Bash cmd${i}`).join("\n")));
+    expect(s.history[0]!.denied).toHaveLength(5);
+    const plain = await start(claude("hi"));
+    expect("denied" in plain.history[0]!).toBe(false);
+  });
+
+  it("hints in a code failure when the blocked step did not fail", async () => {
+    const s = await start(`name: t\nworkspace: inplace\nsteps:\n  - {id: a, type: claude, prompt: "DENY Bash mkdir x"}\n  - {id: b, type: shell, run: exit 1}\n`);
+    expect(s.status).toBe("failed");
+    expect(classifyFailure(s).cause).toBe("code");
+    expect(runNextStep(s).why).toContain("a command was blocked: Bash: mkdir");
+  });
+
+  it("sees a denial in a failed sub-flow step", async () => {
+    const sub = join(tmp, "sub.yaml");
+    writeFileSync(sub, claude("DENY Bash mkdir x\nERROR").replace("name: t", "name: subf"));
+    const s = await start(`name: t\nworkspace: inplace\nsteps:\n  - {id: build, type: flow, flow: ${sub}}\n`);
+    expect(s.status).toBe("failed");
+    expect(classifyFailure(s).cause).toBe("factory");
+  });
+
+  it("is factory when the bot identity cannot be made", async () => {
+    const s = await start("name: t\nworkspace: inplace\nsteps:\n  - {id: a, type: shell, run: 'true'}\n", { config: baseConfig({ bot: { gh_token_env: "FACTORY_TEST_UNSET" } }) });
+    expect(s.status).toBe("failed");
+    expect(s.history).toEqual([]);
+    expect(classifyFailure(s).cause).toBe("factory");
+  });
+
+  it("keeps the blocked command out of the notification but in the record and log", async () => {
+    const s = await start(claude('DENY Bash curl -H "Authorization: token SENTINEL123" https://example.test/x\nERROR'));
+    const out = join(tmp, "msg");
+    const saved = process.env.FACTORY_NO_NOTIFY;
+    delete process.env.FACTORY_NO_NOTIFY;
+    try {
+      await notifyRun(baseConfig({ notify: { macos: false, command: `printf "%s" "$FACTORY_MESSAGE" > ${out}` } }), s);
+    } finally {
+      process.env.FACTORY_NO_NOTIFY = saved;
+    }
+    const msg = readFileSync(out, "utf8");
+    expect(msg).toContain("not allowed to run Bash: curl");
+    expect(msg).not.toMatch(/SENTINEL123|example\.test/);
+    expect(s.history[0]!.denied![0]).toContain("SENTINEL123");
+    expect(readFileSync(liveLogFile(s.runDir), "utf8")).toContain("SENTINEL123");
+  });
+});
+
 describe("safety", () => {
   it("blocks pushes to protected branches via a pre-push hook", async () => {
     const remote = join(tmp, "remote.git");
@@ -274,6 +341,7 @@ steps:
     expect(s.history[0]!.output).toContain("Spaghetti Code Foundry: pushing to protected branch 'main' is blocked");
     expect(s.history[1]!.ok).toBe(true);
     expect(s.status).toBe("succeeded");
+    expect(classifyFailure({ status: "failed", reason: 'step "to_main" failed: exit code 1', history: [s.history[0]!] }).cause).toBe("factory");
   });
 
   it("tells Claude it may not push", async () => {

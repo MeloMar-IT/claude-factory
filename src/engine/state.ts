@@ -19,6 +19,8 @@ export interface StepRecord {
   tokens?: { input: number; output: number };
   /** The agent hit a usage/rate limit and no fallback model could take over. */
   limited?: boolean;
+  /** Tool calls Claude Code refused (at most 5), e.g. "Bash: mkdir out". */
+  denied?: string[];
   startedAt: string;
   durationMs: number;
   logFile: string;

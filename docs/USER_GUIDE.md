@@ -139,6 +139,25 @@ a **What happens next** block with **You** as who and the approval message as th
 Runs survive restarts: if the Foundry stops mid-run, the run is marked *interrupted* and can be
 resumed (watchers do this automatically).
 
+**When the Foundry itself failed.** Some failures are not a bug in the code. The run page, the
+Runs list, the watcher card, the Dashboard and the notification then say "The Foundry failed, not
+the code", what went wrong and the fix. The causes and fixes:
+
+- A command the agent was not allowed to run: allow it in the flow (the step's allowed tools or
+  permission mode), then resume. The sentence shows only the tool and program, e.g. `Bash: curl`;
+  the run page's log has the whole command.
+- A push to a protected branch was blocked: change **Protected branches** in Settings or the
+  flow's branch, then resume.
+- A marker the Foundry could not read (no `PLAN_STATUS` line, no questions to ask, no `SUBTASK`
+  lines): resume the run to try the step again.
+- An internal error, an unknown step, or a run that failed before any step ran (workspace, bot
+  identity, GitHub App token): fix the setting, or restart or update the Foundry, then resume.
+- An interrupted run: resume it (a watcher does this by itself).
+
+A failed test, guard or review, too many visits of a step and a push blocked by the secret scan
+are code failures and keep the usual text. If a command was blocked earlier in such a run, the
+sentence adds a hint to allow it in the flow if it was needed.
+
 ### Words the Foundry uses
 
 One glossary decides the words. The app, the comments on GitHub and the labels all use them.
@@ -163,7 +182,7 @@ One glossary decides the words. The app, the comments on GitHub and the labels a
 | working | The Foundry is working on it right now. Nothing to do — you can follow it on the run page. |
 | interrupted | The run was cut off, for example by a restart of the server. A watched issue resumes by itself at the next check, any other run you resume on its page. |
 | cancelled | Someone cancelled the run. A watched issue resumes by itself at the next check, any other run you resume on its page if you still want it. |
-| failed | A step failed and the run could not go on. Fix the cause if needed, then start over or resume the run at the failed step. |
+| failed | A step failed and the run could not go on. Fix the cause if needed, then start over or resume the run at the failed step. When the Foundry itself failed: The Foundry itself failed, not the code: a blocked command, a marker it could not read or a broken setting. Follow the suggested fix, then start over or resume the run. |
 | watcher error | The watcher could not do its check, so its issues do not move. Look at the error on the Watchers page and fix the cause, it then tries again at the next check. |
 | watcher silent | The watcher has not finished a check for a long time, so its issues do not move. Press Check now on the Watchers page. |
 | closed on GitHub, run still busy | The issue was closed on GitHub, but its run is still working or waits for approval and nothing was changed. Cancel the run on its page if the work is no longer wanted. |
@@ -404,7 +423,7 @@ in GitHub:
 | `factory:needs-info` | Waiting for you — questions: reply on the issue, or reply `/defaults` |
 | `factory:waiting-approval` | Waiting for you — approval: reply `/approve` or `/reject` on the issue |
 | `factory:done` | Done — nothing to do |
-| `factory:failed` | Failed; the reason is commented on the issue. Remove the label to start over, or resume the run on its page to continue at the failed step |
+| `factory:failed` | Failed; the reason is commented on the issue. Remove the label to start over, or resume the run on its page to continue at the failed step. If the Foundry itself failed, the comment says so and names the fix |
 
 The descriptions on GitHub say the same in short. They are set when the labels are created and
 refreshed at every server start. The trigger label and the review label (`vars.review_plan_label`)
@@ -549,7 +568,7 @@ The threshold is the `auto_split_max_risk` variable (default 50).
 | `Factory_working` | Working, or paused — usage limit: planning and coding are running or paused | Wait; follow it on the Runs page |
 | `Factory_waiting` | Waiting for you — risky plan / split: it waits for your decision | `/approve` or `/reject` + feedback on the issue |
 | `Factory_done` | Done: implemented, tested, reviewed and merged into `develop` (gitflow) or in the rolling pull request | Nothing — merge the release pull request (or the rolling one) when you like |
-| `Factory_ERROR` | It failed; the reason and the failing output are commented on the issue | Fix the cause if needed, then remove the label to start over, or resume the run on its page to continue at the failed step |
+| `Factory_ERROR` | It failed; the reason and the failing output are commented on the issue | Fix the cause if needed, then remove the label to start over, or resume the run on its page to continue at the failed step. If the Foundry itself failed, the comment says so and names the fix |
 
 Issues with an excluded label (e.g. `geni`) are never picked up, whatever other labels they have.
 
@@ -837,8 +856,15 @@ coding model (`qwen3-coder`, `gpt-oss`) and use **Try a model** on the Models pa
 **A run stopped with "daily budget reached".** It continues automatically the next day, or when
 you raise the budget and resume it.
 
-**A push was refused.** Either the branch is protected, or the secret scan found something —
-the step output lists the file, line and kind of secret.
+**The Foundry failed, not the code.** The run says so when an agent command was blocked, a
+marker could not be read, a push hit a protected branch or a setting is broken. Do what the
+sentence says (e.g. allow the command in the flow), then resume the run. The label stays the
+failed label.
+
+**A push was refused.** Either the branch is protected, or the secret scan found something.
+A protected branch is a setting to change (**Protected branches** in Settings, or the flow's
+branch); the run then says the Foundry failed. A secret-scan finding is in the code: the step
+output lists the file, line and kind of secret.
 
 **Tests fail for reasons unrelated to the change.** Set the right command with the `test_cmd`
 variable, per repository in `<repo>/.claude-factory/config.yaml`.

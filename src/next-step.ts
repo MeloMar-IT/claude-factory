@@ -1,5 +1,6 @@
 import type { WatcherConfig } from "./config.js";
 import type { RunSummary } from "./engine/state.js";
+import { classifyFailure, type FailureCause } from "./failure.js";
 import { statusHelp, statusName } from "./words.js";
 
 /** Why something waits (or what it does now). One kind per waiting reason. */
@@ -37,6 +38,8 @@ export interface NextStep {
   text: string;
   /** Dependency: what it waits for. */
   blockers?: BlockerInfo[];
+  /** Why a failed or interrupted run did not finish. */
+  cause?: FailureCause;
 }
 
 export interface BlockerInfo {
@@ -79,6 +82,11 @@ export interface NextData {
   runWaits?: boolean;
   /** `watcher_stale`: ISO time of the last finished check. */
   lastCheck?: string;
+  /** `failed`: why the run did not finish; the factory wording is used for "factory". */
+  cause?: FailureCause;
+  /** `failed`: what went wrong, and the suggested fix. */
+  what?: string;
+  fix?: string;
 }
 
 export interface NextBase {
@@ -279,7 +287,21 @@ export function nextStep(kind: NextKind, base: NextBase = {}, d: NextData = {}):
     case "failed": {
       who = "Something is wrong";
       const r = clean(d.reason);
+      if (d.cause === "factory") {
+        const what = clean(d.what) || r;
+        why = `The Foundry failed, not the code${what ? `: ${what}` : ""}`;
+        const lbl = d.failedLabel ?? "factory:failed";
+        const retry = d.watched ? `remove the \`${lbl}\` label to start over, or resume the run on its page` : "resume the run on its page";
+        const fix = clean(d.fix);
+        say = fix ? `${fix}, then ${retry}` : retry;
+        action = say.charAt(0).toUpperCase() + say.slice(1);
+        if (!d.watched) w = runWhere ?? where;
+        break;
+      }
+      // A blocked command is only a hint for a code failure.
+      const hint = [clean(d.what), clean(d.fix)].filter(Boolean).join(", ");
       why = r ? `It failed: ${r}` : "It failed";
+      if (hint) why += ` (${hint})`;
       if (d.watched) {
         const lbl = d.failedLabel ?? "factory:failed";
         action = `Remove the \`${lbl}\` label to start over, or resume the run on its page to continue at the failed step`;
@@ -362,12 +384,13 @@ export function nextStep(kind: NextKind, base: NextBase = {}, d: NextData = {}):
       break;
   }
 
-  const facts = { releaseAt: kind === "release" && !d.pr ? d.releaseAt : undefined, blockers: (d.blockers ?? []).map((b) => b.issue) };
+  const facts = { releaseAt: kind === "release" && !d.pr ? d.releaseAt : undefined, blockers: (d.blockers ?? []).map((b) => b.issue), factory: kind === "failed" && d.cause === "factory" };
   return {
     kind, status: statusName(kind, facts), help: statusHelp(kind, facts), who, why, action, where: w, until,
     repo: base.repo ?? "", user: "", issue, title: base.title ?? "", runId: base.runId,
     text: sentence(why.replace(/[.!?]+$/, ""), say.replace(/[.!?]+$/, "")),
     ...(kind === "dependency" ? { blockers: d.blockers ?? [] } : {}),
+    ...(d.cause ? { cause: d.cause } : {}),
   };
 }
 
@@ -431,9 +454,11 @@ export function runNextStep(run: RunSummary, o: RunNextOptions = {}): NextStep {
       if (step?.startsWith("wait_")) return make("release");
       return make("stopped");
     }
-    default:
-      if (/interrupted/.test(reason)) return make("interrupted");
-      return make("failed");
+    default: {
+      const f = classifyFailure(run);
+      if (/interrupted/.test(reason)) return make("interrupted", { cause: f.cause });
+      return make("failed", f);
+    }
   }
 }
 

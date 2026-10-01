@@ -6,6 +6,8 @@ export interface WordFacts {
   releaseAt?: string;
   /** Issue numbers a dependency waits for. */
   blockers?: number[];
+  /** The Foundry itself failed, not the code. */
+  factory?: boolean;
 }
 
 interface Words {
@@ -47,7 +49,12 @@ const GLOSSARY: Record<NextKind, Words> = {
   running: { status: "working", help: "The Foundry is working on it right now. Nothing to do — you can follow it on the run page." },
   interrupted: { status: "interrupted", help: "The run was cut off, for example by a restart of the server. A watched issue resumes by itself at the next check, any other run you resume on its page." },
   cancelled: { status: "cancelled", help: "Someone cancelled the run. A watched issue resumes by itself at the next check, any other run you resume on its page if you still want it." },
-  failed: { status: "failed", help: "A step failed and the run could not go on. Fix the cause if needed, then start over or resume the run at the failed step." },
+  failed: {
+    status: "failed",
+    help: (f) => (f.factory
+      ? "The Foundry itself failed, not the code: a blocked command, a marker it could not read or a broken setting. Follow the suggested fix, then start over or resume the run."
+      : "A step failed and the run could not go on. Fix the cause if needed, then start over or resume the run at the failed step."),
+  },
   watcher_error: { status: "watcher error", help: "The watcher could not do its check, so its issues do not move. Look at the error on the Watchers page and fix the cause, it then tries again at the next check." },
   watcher_stale: { status: "watcher silent", help: "The watcher has not finished a check for a long time, so its issues do not move. Press Check now on the Watchers page." },
   closed_elsewhere: { status: "closed on GitHub, run still busy", help: "The issue was closed on GitHub, but its run is still working or waits for approval and nothing was changed. Cancel the run on its page if the work is no longer wanted." },

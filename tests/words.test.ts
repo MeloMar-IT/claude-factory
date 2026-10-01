@@ -48,14 +48,20 @@ describe("glossary", () => {
   });
 
   it("has two sentences of help for every kind", () => {
-    for (const facts of [{}, { blockers: [87, 88] }, { blockers: [] }, { releaseAt: "17:00" }] as WordFacts[]) {
+    for (const facts of [{}, { blockers: [87, 88] }, { blockers: [] }, { releaseAt: "17:00" }, { factory: true }] as WordFacts[]) {
       for (const k of KINDS) expect(statusHelp(k, facts), k).toMatch(/^[^.!?]+[.!?] [^.!?]+[.!?]$/);
     }
   });
 
+  it("has its own help for a failure of the Foundry", () => {
+    expect(statusHelp("failed")).toMatch(/^A step failed/);
+    expect(statusHelp("failed", { factory: true })).toMatch(/^The Foundry itself failed, not the code/);
+    expect(statusName("failed", { factory: true })).toBe("failed");
+  });
+
   it("uses no banned word", () => {
     for (const k of KINDS) {
-      for (const t of [statusName(k, { blockers: [88] }), statusHelp(k, { blockers: [88] }), statusName(k, { releaseAt: "17:00" }), statusHelp(k, { releaseAt: "17:00" })]) {
+      for (const t of [statusName(k, { blockers: [88] }), statusHelp(k, { blockers: [88] }), statusName(k, { releaseAt: "17:00" }), statusHelp(k, { releaseAt: "17:00" }), statusHelp(k, { factory: true })]) {
         for (const w of BANNED) expect(t.toLowerCase(), `${k}: ${t}`).not.toContain(w);
         if (/split risk/i.test(t)) expect(t).toContain(EXPLAIN);
       }
@@ -69,7 +75,7 @@ describe("user guide", () => {
     expect(guide).toContain("Words the Foundry uses");
     expect(guide).toContain(EXPLAIN);
     for (const k of KINDS) {
-      const all: WordFacts[] = k === "release" ? [{}, { releaseAt: "17:00" }] : [{ blockers: [88] }];
+      const all: WordFacts[] = k === "release" ? [{}, { releaseAt: "17:00" }] : k === "failed" ? [{}, { factory: true }] : [{ blockers: [88] }];
       for (const f of all) {
         expect(guide, statusName(k, f)).toContain(`| ${statusName(k, f)} |`);
         expect(guide, statusHelp(k, f)).toContain(statusHelp(k, f));
