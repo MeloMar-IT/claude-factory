@@ -23,7 +23,7 @@
 }
 
 @media (prefers-color-scheme: dark) {
-  .pill.stopped { background: #3b2f12; color: #fbbf24; }
+  .pill.who-a-time-limit { background: #3b2f12; color: #fbbf24; }
   :root {
     --bg: #141412;
     --panel: #1c1c1a;
@@ -105,11 +105,10 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent-soft
 .muted { color: var(--muted); }
 .pill { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; padding: 1px 8px; border-radius: 99px; background: var(--panel-2); color: var(--muted); font-weight: 550; white-space: nowrap; }
 .pill.claude { background: var(--accent-soft); color: var(--claude); }
-.pill.ok, .pill.succeeded { background: var(--ok-soft); color: var(--ok); }
-.pill.fail, .pill.failed { background: var(--fail-soft); color: var(--fail); }
-.pill.running { background: var(--run-soft); color: var(--run); }
-.pill.stopped { background: #fef3c7; color: #92400e; }
-.pill.cancelled { background: var(--panel-2); color: var(--muted); }
+.pill.ok, .pill.kind-done, .pill.state-active { background: var(--ok-soft); color: var(--ok); }
+.pill.fail, .pill.state-error { background: var(--fail-soft); color: var(--fail); }
+.pill.kind-running { background: var(--run-soft); color: var(--run); }
+.pill.who-a-time-limit { background: #fef3c7; color: #92400e; }
 
 /* ── editor ── */
 .toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
@@ -218,7 +217,6 @@ button.block-card:not(:disabled):hover { border-color: var(--accent); background
 
 /* ── run page ── */
 .tabs button.on { background: var(--panel-2); font-weight: 600; }
-.pill.queued { background: var(--panel-2); color: var(--muted); }
 .transcript { display: grid; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--border); }
 .tx-text { white-space: pre-wrap; font-size: 13.5px; }
 .tx-tool { border: 1px solid var(--border); border-radius: 8px; background: var(--panel-2); }
@@ -308,3 +306,12 @@ a.btn.primary:hover { filter: brightness(1.06); }
 .turn-item:first-of-type { border-top: none; }
 .turn-item .turn-main { flex: 1 1 320px; display: grid; gap: 2px; min-width: 0; }
 .turn-item .turn-side { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+
+/* Status names with a "?" (ui/next.js) */
+.help { display: contents; }
+.help-mark { width: 18px; height: 18px; padding: 0; justify-content: center; flex: none; border-radius: 50%; font-size: 11.5px; font-weight: 600; color: var(--muted); }
+.help-mark[aria-expanded="true"] { background: var(--panel-2); color: var(--text); }
+td > .help > .help-mark { margin-left: 6px; }
+.help-text { display: block; flex-basis: 100%; order: 99; max-width: 60ch; margin: 4px 0 2px; padding: 6px 10px; border-radius: 8px; background: var(--panel-2); color: var(--text); font: 400 12.5px/1.45 var(--sans); white-space: normal; cursor: default; }
+.help-text[hidden] { display: none; }
+.meta dd .muted { font-family: var(--sans); word-break: normal; }

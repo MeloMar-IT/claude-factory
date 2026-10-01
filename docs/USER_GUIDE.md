@@ -96,12 +96,21 @@ that wait for a limit, the budget or another run are not. Under each task the ta
 (Settings → Runs at the same time); the rest queue. Each queue line shows the same sentence
 and a link to what it waits for.
 
+The Status column shows the plain status name (see "Words the Foundry uses"). Press the **?**
+next to it to read what it means and what happens next, and press it again to close it. It
+works with a mouse, the keyboard (Tab, then Enter or Space) and touch. Pressing it does not
+open the run.
+
 ### A run
 
 Open a run to follow it live. At the top, the **What happens next** block says who has the next
 move, what to do, why, a link to the place to do it, and when it continues by itself (if
 known). It updates live. The raw reason (for a waiting run, the approval message) is the
 **Reason** row below.
+
+The status next to the flow name has the same **?**. The **Current step** (while the run
+works) or **Resumes at step** (when it is stopped) row names the step and says what it does:
+its description, or the kind of step when the flow gives none.
 
 ![Live log](images/run-log.png)
 
@@ -141,6 +150,7 @@ resumed (watchers do this automatically).
 ### Words the Foundry uses
 
 One glossary decides the words. The app, the comments on GitHub and the labels all use them.
+Every status in the app has a **?** that shows the two sentences from this table.
 
 | Status | What it means and what happens next |
 |---|---|
@@ -172,6 +182,12 @@ Other words:
 
 - **release pull request** — the pull request that brings finished work to `main`.
 - **split risk** — how risky it is to create the smaller issues without you looking, 0–100.
+
+A watcher's own state on the Watchers page has a **?** too:
+
+- **active** — The watcher checks GitHub on its schedule and starts runs. Nothing to do — it works by itself.
+- **disabled** — The watcher is switched off, so it checks nothing and starts nothing. Enable it on the Watchers page when you want it to work again.
+- An error shows as **watcher error** (see the table).
 
 Every record from `GET /api/next` has these as `status` and `help`. Text the Foundry quotes
 (an error message, a step's approval message, a label or code-area name) is shown as it is.
@@ -558,9 +574,11 @@ Issues with an excluded label (e.g. `geni`) are never picked up, whatever other 
 Look at the **Dashboard**: the **Waiting** card lists every labelled issue that isn't being
 worked on right now (the same list is on each watcher's card on the **Watchers** page). Every
 line starts with a badge for who has the next move (**You**, **Foundry**, **Another story**, **A
-time limit**, **Something is wrong**), then the issue, what to do, why, "Continues: …" when it
+time limit**, **Something is wrong**), then the status name with its **?** (press it for what
+it means and what happens next), then the issue, what to do, why, "Continues: …" when it
 continues by itself, and a link to the place to do it (GitHub links open in a new tab). Lines
-where you have the next move come first, above the rest. During a restart wait the **Server**
+where you have the next move come first, above the rest. The state of the watcher itself
+(**active**, **disabled** or **watcher error**) has a **?** too. During a restart wait the **Server**
 card says that the server waits to restart on a new version. Runs that started and then paused are listed too: a usage
 limit, the daily budget, a code area that another run uses, or an interruption. The same
 sentences are in the failure comment on the issue and in notifications, and they also end the

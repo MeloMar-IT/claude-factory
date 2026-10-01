@@ -83,7 +83,7 @@ function itemView(item, { onDismiss, onLeave }) {
         h("b", {}, item.what)),
       h("div", {}, h("span", { class: "hold-action" }, n.action)),
       h("div", { class: "muted" }, n.why),
-      item.unblocks > 0 ? h("div", { class: "muted" }, `Holds back ${stories(item.unblocks)}`) : null,
+      item.unblocks > 0 ? h("div", { class: "muted" }, `${stories(item.unblocks)} ${item.unblocks === 1 ? "waits" : "wait"} for this`) : null,
       since ? h("div", { class: "muted", title: new Date(item.since).toLocaleString() }, since) : null),
     h("div", { class: "turn-side" },
       action,

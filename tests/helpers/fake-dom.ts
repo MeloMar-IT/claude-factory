@@ -10,14 +10,25 @@ export class FakeElement extends FakeNode {
   style: Record<string, string> = {};
   hidden = false;
   listeners: Record<string, Listener[]> = {};
+  parent?: FakeElement;
   private text?: string;
   constructor(public tag: string) {
     super();
   }
   setAttribute(k: string, v: string) { this.attrs[k] = v; }
   addEventListener(type: string, fn: Listener) { (this.listeners[type] ??= []).push(fn); }
-  append(...nodes: (FakeNode | string)[]) { this.children.push(...nodes); }
-  replaceChildren(...nodes: (FakeNode | string)[]) { this.text = undefined; this.children = [...nodes]; }
+  private adopt(nodes: (FakeNode | string)[]) { for (const n of nodes) if (n instanceof FakeElement) n.parent = this; }
+  append(...nodes: (FakeNode | string)[]) { this.adopt(nodes); this.children.push(...nodes); }
+  replaceChildren(...nodes: (FakeNode | string)[]) { this.adopt(nodes); this.text = undefined; this.children = [...nodes]; }
+  /** A click as a browser sends it: the listeners of this element, then of each parent, until one calls stopPropagation. */
+  click(): void {
+    let stopped = false;
+    const event = { target: this as FakeElement, currentTarget: this as FakeElement, stopPropagation: () => { stopped = true; } };
+    for (let el: FakeElement | undefined = this; el && !stopped; el = el.parent) {
+      event.currentTarget = el;
+      for (const fn of el.listeners.click ?? []) fn(event);
+    }
+  }
   get textContent(): string {
     if (this.text !== undefined) return this.text;
     return this.children.map((c) => (typeof c === "string" ? c : c instanceof FakeElement ? c.textContent : "")).join("");

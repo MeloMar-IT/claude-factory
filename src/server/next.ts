@@ -6,6 +6,7 @@ import { nextStep, releaseAtFor, runNextStep, trackingWatcher, type NextStep } f
 import { labelNames, type Hold, type WatcherStatus } from "../queue/watcher.js";
 import type { WatcherConfig } from "../config.js";
 import { supersededRuns } from "../stats.js";
+import { watcherState, type WatcherState } from "../words.js";
 import { send } from "./http.js";
 import type { ApiContext, Route } from "./server.js";
 
@@ -84,11 +85,14 @@ export function queueWithNext(ctx: ApiContext): Omit<Queue, "pending"> & { pendi
   }) };
 }
 
-/** GET /api/watchers: a watcher with an error carries its record as `status.next`. */
-export function watchersWithNext(ctx: ApiContext): (WatcherConfig & { status?: WatcherStatus & { next?: NextStep } })[] {
-  return ctx.watchers.statuses().map((w) => (w.status?.lastError
-    ? { ...w, status: { ...w.status, next: watcherError(w.github_repo, w.status.lastError) } }
-    : w));
+/** GET /api/watchers: each watcher carries its own `state` (words for active, error, disabled); one with an error also has its record as `status.next`. */
+export function watchersWithNext(ctx: ApiContext): (WatcherConfig & { state: WatcherState; status?: WatcherStatus & { next?: NextStep } })[] {
+  return ctx.watchers.statuses().map((w) => {
+    const state = watcherState(!w.enabled ? "disabled" : w.status?.lastError ? "error" : "active");
+    return w.status?.lastError
+      ? { ...w, state, status: { ...w.status, next: watcherError(w.github_repo, w.status.lastError) } }
+      : { ...w, state };
+  });
 }
 
 /** A record and what the Your turn page needs to know about it. */

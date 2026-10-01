@@ -122,3 +122,174 @@ describe("the changed UI modules", () => {
     expect(typeof runs.renderRunDetail).toBe("function");
   });
 });
+
+describe("the \"?\" and the status names", () => {
+  const text = (els: unknown[]) => (els.filter(Boolean) as FakeElement[]).map((e) => e.textContent).join(" ");
+  const run = (over: Record<string, unknown> = {}) => ({ runId: "r9", flow: "f", status: "waiting", history: [], totalCostUsd: 0, startedAt: "2026-10-01T10:00:00Z", next: you(), ...over });
+  let runs: any;
+  let admin: any;
+  beforeAll(async () => {
+    runs = await import("../ui/runs.js" as string);
+    admin = await import("../ui/admin.js" as string);
+  });
+
+  it("helpMark is a real button that opens and closes its note", () => {
+    const m = ui.helpMark("One. Two.") as FakeElement;
+    expect(m.attrs.class).toBe("help");
+    const btn = m.all("button")[0]!;
+    const note = m.children.find((c) => c instanceof FakeElement && c.attrs.class === "help-text") as FakeElement;
+    expect(btn.attrs).toMatchObject({ type: "button", class: "help-mark", "aria-expanded": "false" });
+    expect(btn.attrs["aria-label"]).toBeTruthy();
+    expect(btn.textContent).toBe("?");
+    expect(btn.attrs.tabindex).toBeUndefined();
+    expect(btn.attrs.disabled).toBeUndefined();
+    expect(note.attrs.role).toBe("note");
+    expect(Object.keys(btn.listeners)).toEqual(["click"]);
+    expect(Object.keys(m.listeners)).toEqual(["click"]);
+    expect(Object.keys(note.listeners)).toEqual([]);
+    expect(note.hidden).toBe(true);
+    btn.click();
+    expect(note.hidden).toBe(false);
+    expect(btn.attrs["aria-expanded"]).toBe("true");
+    btn.click();
+    expect(note.hidden).toBe(true);
+    expect(btn.attrs["aria-expanded"]).toBe("false");
+    expect(ui.helpMark("")).toBeNull();
+    expect(ui.helpMark(undefined)).toBeNull();
+  });
+
+  it("pressing the ? does not open the run, a normal cell does", () => {
+    const loc = { hash: "" };
+    (globalThis as any).location = loc;
+    try {
+      const row = runs.runRow(run()) as FakeElement;
+      row.all("button")[0]!.click();
+      expect(loc.hash).toBe("");
+      const note = row.all("span").find((s) => s.attrs.class === "help-text")!;
+      expect(note.hidden).toBe(false);
+      note.click();
+      expect(loc.hash).toBe("");
+      row.all("td")[1]!.click();
+      expect(loc.hash).toBe("#/runs/r9");
+    } finally {
+      delete (globalThis as any).location;
+    }
+  });
+
+  it("a ? inside a clickable parent does not reach the parent", () => {
+    const spy: unknown[] = [];
+    const root = (globalThis as any).document.createElement("div") as FakeElement;
+    const list = ui.nextList([you()]) as FakeElement;
+    root.addEventListener("click", () => spy.push(1));
+    root.append(list);
+    list.all("button")[0]!.click();
+    expect(spy).toEqual([]);
+    list.all("li")[0]!.click();
+    expect(spy).toHaveLength(1);
+  });
+
+  it("nextStatus shows the status and help of the record", () => {
+    const n = { ...you(), status: "S from server", help: "One. Two." };
+    const [pill, help] = ui.nextStatus(n) as FakeElement[];
+    expect(pill!.textContent).toBe("S from server");
+    expect(help!.all("span").find((s) => s.attrs.role === "note")!.textContent).toBe("One. Two.");
+    expect(pill!.attrs.class).toContain("who-you");
+    expect(pill!.attrs.class).toContain("kind-approval");
+  });
+
+  it("nextStatus uses the record's words for every kind and spins only while working", async () => {
+    const { KINDS } = await import("../src/words.js");
+    for (const kind of KINDS) {
+      const n = nextStep(kind, { repo: "o/r", runId: "x" }, { blockers: [{ issue: 1, title: "t" }] as never });
+      const [pill, help] = ui.nextStatus(n) as FakeElement[];
+      expect(pill!.textContent).toBe(n.status);
+      expect(help!.all("span").find((s) => s.attrs.role === "note")!.textContent).toBe(n.help);
+      expect(pill!.all("span").length > 0).toBe(kind === "running");
+    }
+  });
+
+  it("statusMark takes any object with status and help", () => {
+    const [pill, help] = ui.statusMark({ status: "active", help: "A. B." }, "state-active");
+    expect(pill.attrs.class).toBe("pill state-active");
+    expect(help).not.toBeNull();
+    expect(ui.statusMark({ status: "active" }, "state-active")[1]).toBeNull();
+  });
+
+  it("nextParts is flat, has the status and can leave it out", () => {
+    const n = you();
+    const parts = ui.nextParts(n) as unknown[];
+    for (const p of parts) if (p) expect(p instanceof FakeElement).toBe(true);
+    expect(text(parts)).toContain(n.status);
+    expect(text(parts)).toContain(n.help);
+    const bare = text(ui.nextParts(n, { status: false }));
+    expect(bare).not.toContain(n.status);
+    expect(bare).not.toContain(n.help);
+    expect(ui.nextBlock(n).textContent).not.toContain(n.help);
+    expect((ui.nextList([you(), found()]) as FakeElement).all("button")).toHaveLength(2);
+  });
+
+  it("runRow shows the plain status, not the run state", () => {
+    const stopped = runs.runRow(run({ status: "stopped", next: nextStep("usage_limit", { repo: "o/r", runId: "r9" }) })) as FakeElement;
+    const first = stopped.all("td")[0]!;
+    expect(first.textContent).toContain("paused — usage limit");
+    expect(first.textContent).not.toContain("stopped");
+    expect(first.all("button")).toHaveLength(1);
+    const waiting = runs.runRow(run()) as FakeElement;
+    expect(waiting.textContent).toContain("waiting for you — approval");
+    expect(waiting.textContent).not.toContain("waiting for approval");
+    const none = runs.runRow(run({ next: undefined })) as FakeElement;
+    expect(none.all("td")[0]!.textContent).toBe("");
+  });
+
+  it("queueRow shows the status with a ? and removes on request", () => {
+    const calls: number[] = [];
+    const p = { runId: "q1", kind: "run", next: nextStep("one_at_a_time", { repo: "o/r", runId: "q1" }) };
+    const row = runs.queueRow(p, () => calls.push(1)) as FakeElement;
+    expect(row.textContent).toContain("waiting for another run");
+    const buttons = row.all("button");
+    expect(buttons[0]!.textContent).toBe("?");
+    buttons.find((b) => b.textContent === "Remove")!.click();
+    expect(calls).toEqual([1]);
+  });
+
+  it("stepRow always says what the step is", async () => {
+    const { STEP_TYPES } = await import("../ui/step-types.js" as string);
+    const dd = (s: unknown) => (runs.stepRow(s) as FakeElement[])[1]!.textContent;
+    const dt = (s: unknown) => (runs.stepRow(s) as FakeElement[])[0]!.textContent;
+    const flowDef = (step: unknown) => ({ steps: [step] });
+    const described = { status: "running", state: { next: "a" }, flowDef: flowDef({ id: "a", type: "shell", description: "Builds it" }) };
+    expect(dt(described)).toBe("Current step");
+    expect(dd(described)).toBe("a — Builds it");
+    const failed = { status: "failed", state: { next: "b" }, flowDef: flowDef({ id: "b", type: "shell" }) };
+    expect(dt(failed)).toBe("Resumes at step");
+    expect(dd(failed)).toBe("b — Shell");
+    for (const [type, v] of Object.entries(STEP_TYPES) as [string, { label: string }][]) {
+      const out = dd({ status: "failed", state: { next: "c" }, flowDef: flowDef({ id: "c", type }) });
+      expect(out.endsWith(v.label)).toBe(true);
+      expect(out).toContain(" — ");
+    }
+    for (const s of [{ status: "failed", state: { next: "z" } }, { status: "failed", state: { next: "z" }, flowDef: flowDef({ id: "c", type: "shell" }) }]) {
+      expect(dd(s)).toBe("z — what this step does is not saved with this run");
+    }
+    expect(runs.stepRow({ status: "succeeded", state: { next: "a" } })).toBeNull();
+    expect(runs.stepRow({ status: "failed" })).toBeNull();
+  });
+
+  it("watcherStateMark takes its words from the state", () => {
+    const w = { state: { name: "disabled", status: "disabled", help: "A. B." } };
+    const [pill, help] = admin.watcherStateMark(w) as FakeElement[];
+    expect(pill!.textContent).toBe("disabled");
+    expect(pill!.attrs.class).toBe("pill state-disabled");
+    expect(help!.textContent).toContain("A. B.");
+    expect(admin.watcherStateMark({})).toBeNull();
+  });
+
+  it("watcherConfig drops what the API adds, so the config accepts it again", async () => {
+    const { WatcherSchema } = await import("../src/config.js");
+    const base = WatcherSchema.parse({ id: "w", github_repo: "o/r" });
+    const item = { ...base, state: { name: "active", status: "active", help: "A. B." }, status: { id: "w", lastActions: [] } };
+    expect(WatcherSchema.parse(admin.watcherConfig(item))).toEqual(base);
+    expect(() => WatcherSchema.parse(item)).toThrow();
+    expect(admin.watcherConfig()).toEqual({});
+  });
+});
