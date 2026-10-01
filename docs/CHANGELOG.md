@@ -4,6 +4,7 @@ Changes that are merged but not yet in a release go under **Unreleased**. Newest
 
 ## Unreleased
 
+- Dependencies named by a shortened title ("Story 7 — …" for "Website Story 7 — …") are found.
 - Gitflow: an issue is closed as soon as it is merged into `develop`.
 - Gitflow: a feature branch is deleted on GitHub once it is merged into `develop`.
 - Fix: a split is no longer skipped when a comment merely mentions the split marker; issues that depended on a split issue now wait for its parts.
