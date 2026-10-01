@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { createServer } from "node:http";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -387,7 +388,8 @@ steps:
     for (const w of ["holdList", "Waiting:"]) expect(admin).not.toContain(w);
     expect(admin).not.toMatch(/errors[^\n]*lastError/);
     expect(admin).toContain("Error details");
-    for (const js of [dashboard, admin, runs, api]) expect(js).not.toMatch(/nothing to do|waits for|a free slot|same ticket/i);
+    // The notification hint in Settings says "something waits for you"; that is not a reason text.
+    for (const js of [dashboard, (admin ?? "").replace("when something waits for you.", ""), runs, api]) expect(js).not.toMatch(/nothing to do|waits for|a free slot|same ticket/i);
     expect(css).not.toContain(".card.waiting");
     expect(runs).not.toContain("STATUS_LABEL");
     expect(runs).not.toContain('"Next step"');
@@ -450,9 +452,91 @@ steps:
     expect(info.dailyBudget).toBe(5);
   });
 
+  it("saves the notification settings and checks the times", async () => {
+    const cfg = (await (await json("GET", "/api/config")).json()) as Record<string, unknown>;
+    const notify = { macos: false, successes: true, throttle_minutes: 1, quiet_hours: { from: "22:00", to: "07:00" }, daily_summary_at: "09:00" };
+    const saved = (await (await json("PUT", "/api/config", { ...cfg, notify })).json()) as { notify: typeof notify };
+    expect(saved.notify).toMatchObject(notify);
+    expect((await json("PUT", "/api/config", { ...cfg, notify: { daily_summary_at: "25:00" } })).status).toBe(400);
+    expect((await json("PUT", "/api/config", { ...cfg, notify: { throttle_minutes: 0 } })).status).toBe(400);
+    await json("PUT", "/api/config", { ...cfg, notify: { macos: false } });
+  });
+
+  it("tells whether a click can open the item (macOS only)", async () => {
+    const info = (await (await json("GET", "/api/info")).json()) as Record<string, unknown>;
+    if (process.platform === "darwin") expect(typeof info.clickThrough).toBe("boolean");
+    else expect("clickThrough" in info).toBe(false);
+  });
+
   it("drafts a flow via claude", async () => {
     // The fake claude echoes the prompt; not valid YAML, so we expect a validation error, not a crash.
     const r = (await (await json("POST", "/api/generate", { request: "tests then fix" })).json()) as { error?: string };
     expect(r.error).toBeTruthy();
+  });
+});
+
+describe("turn notifier wiring", () => {
+  const start = async (home: string, runsDir: string, p: number) => {
+    const { startServer } = await import("../src/server/server.js");
+    return startServer({ repo: home, runsDir, port: p, watchers: false });
+  };
+
+  it("starts with the server, posts once to the webhook and stops on close", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "factory-wire-"));
+    const savedHome = process.env.FACTORY_HOME;
+    const savedNo = process.env.FACTORY_NO_NOTIFY;
+    const posts: string[] = [];
+    const hook = createServer((req, res) => {
+      let b = "";
+      req.on("data", (c) => (b += c));
+      req.on("end", () => (posts.push(b), res.end("ok")));
+    });
+    await new Promise<void>((r) => hook.listen(0, "127.0.0.1", r));
+    try {
+      const home = join(dir, "home");
+      process.env.FACTORY_HOME = home;
+      delete process.env.FACTORY_NO_NOTIFY;
+      mkdirSync(home, { recursive: true });
+      writeFileSync(join(home, "config.yaml"), `notify:\n  macos: false\n  slack_webhook: http://127.0.0.1:${(hook.address() as { port: number }).port}/hook\n`);
+      const runDir = join(dir, "runs", "r9");
+      mkdirSync(runDir, { recursive: true });
+      const now = new Date().toISOString();
+      writeFileSync(join(runDir, "run.json"), JSON.stringify({
+        runId: "r9", flow: "t", flowDef: { steps: [] }, task: "t", vars: {}, repo: dir, status: "failed", reason: "boom", runDir, startedAt: now, finishedAt: now,
+        source: "cli", history: [], state: { next: null, steps: {}, visits: {} }, totalCostUsd: 0,
+      }));
+      const server = await start(dir, join(dir, "runs"), 20000 + Math.floor(Math.random() * 20000));
+      try {
+        expect(server.notifier?.running).toBe(true);
+        await server.notifier!.check();
+        expect(posts).toHaveLength(1);
+        expect(JSON.parse(posts[0]!).text).toContain("/#/runs/r9");
+      } finally {
+        server.close();
+      }
+      expect(server.notifier!.running).toBe(false);
+    } finally {
+      process.env.FACTORY_HOME = savedHome;
+      if (savedNo !== undefined) process.env.FACTORY_NO_NOTIFY = savedNo;
+      hook.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("is not started with FACTORY_NO_NOTIFY=1", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "factory-wire-"));
+    const savedHome = process.env.FACTORY_HOME;
+    const savedNo = process.env.FACTORY_NO_NOTIFY;
+    try {
+      process.env.FACTORY_HOME = join(dir, "home");
+      process.env.FACTORY_NO_NOTIFY = "1";
+      const server = await start(dir, join(dir, "runs"), 20000 + Math.floor(Math.random() * 20000));
+      server.close();
+      expect(server.notifier).toBeUndefined();
+    } finally {
+      process.env.FACTORY_HOME = savedHome;
+      process.env.FACTORY_NO_NOTIFY = savedNo;
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

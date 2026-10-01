@@ -85,6 +85,7 @@ When a run finishes, its branch stays in your repository. Review it, merge it, o
 - **No refresh needed:** the page updates every 5 seconds. When you come back from a GitHub link, the watcher checks GitHub at once. An answer you give elsewhere shows at the next watcher check.
 - **Empty:** it says "Nothing needs you." and, when it can, how many stories are being built and when the next release pull request is expected.
 - **Badge:** the number of items shows in the navigation and in the tab title, for example "(3) Foundry". When something waits, the app opens on this page.
+- **Notifications:** new items can also reach you as a macOS or Slack message; see **Notifications** under Settings.
 
 ### Since you last looked
 
@@ -728,11 +729,34 @@ it; paused runs continue the next day. Flows can also cap one run (`limits.max_c
 - **Approval steps** in flows let you decide before anything irreversible happens (e.g.
   `require_approval=yes` for `github-pr`).
 
-**Notifications** — macOS notifications, a Slack webhook, or your own command, for the run
-outcomes you choose. The message says who has to do what, for example "acme/app#7 — It failed:
-… — remove the `factory:failed` label to start over, or resume the run on its page to continue at
-the failed step." It is at most 300 characters; a long title or reason is shortened, the action
-never.
+**Notifications** — macOS notifications and a Slack webhook tell you only when something new
+lands in **Your turn** (a question, a risky plan or split, a release pull request, a failure, a
+watcher error). Nothing is sent for progress. A run that succeeds is told only if you switch on
+"Also notify when a run succeeds" (off by default; runs that finished before you switched it on are
+not told).
+
+- **Message:** it says who has to do what, for example "acme/app#7 — It failed: … — remove the
+  `factory:failed` label to start over, or resume the run on its page to continue at the failed
+  step." It is at most 300 characters; a long title or reason is shortened, the action never.
+- **Grouped and throttled:** at most one notification every N minutes (default 5, at least 1).
+  Items that appear in that time come as one message, for example "3 things need you". Each item
+  is told once; it is told again only when its situation changes.
+- **Quiet hours:** set "from" and "to" (this machine's clock, may cross midnight). Nothing is
+  sent in that time; what is still waiting afterwards is sent then.
+- **Daily summary** (optional): set a time. Once a day you get a short message, for example
+  "Done since yesterday: 3 stories, 2 other runs. Waiting for you: 1. Expected today: 2 stories
+  being built, release pull request around 17:00." It follows the throttle and quiet hours, and
+  is skipped when there is nothing to say.
+- **Click:** on macOS a click opens the item, if `terminal-notifier` is installed
+  (`brew install terminal-notifier`, allow it in the macOS notification settings). It must be on
+  the `PATH` the server runs with; run `scf service install` again after installing it. Without
+  it the notification shows but a click does nothing. Settings says which case applies. Slack
+  messages always carry an "Open" link.
+- **Command:** your own command still runs for every finished run, as before, for the outcomes
+  you tick ("Run the command when a run is:"), with `FACTORY_STATUS`, `FACTORY_RUN_ID`,
+  `FACTORY_FLOW` and `FACTORY_MESSAGE` set.
+- **Who sends:** the server (`scf ui` / `scf serve`) sends the macOS and Slack messages, also for
+  runs started with `scf run`. Without a running server only the command runs.
 
 **Bot identity** — by default commits and comments are made as you. Set a bot name/email and a
 token (or a GitHub App) to make them as a bot instead.

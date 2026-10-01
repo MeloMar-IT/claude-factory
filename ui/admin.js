@@ -10,6 +10,21 @@ const check = (checked, label) => {
 };
 const num = (el) => (el.value.trim() === "" ? undefined : Number(el.value));
 
+/** The `notify` setting from the raw values of the Settings controls (strings for text, booleans for checkboxes). */
+export function notifyFrom(v) {
+  const t = (x) => String(x ?? "").trim();
+  return {
+    macos: !!v.macos,
+    slack_webhook: t(v.slack) || undefined,
+    command: t(v.command) || undefined,
+    on: v.on,
+    successes: !!v.successes,
+    throttle_minutes: t(v.throttle) === "" ? 5 : Number(v.throttle),
+    quiet_hours: t(v.quietFrom) && t(v.quietTo) ? { from: t(v.quietFrom), to: t(v.quietTo) } : undefined,
+    daily_summary_at: t(v.summaryAt) || undefined,
+  };
+}
+
 async function saveConfig(mutate, okMsg) {
   const config = await api.config();
   mutate(config);
@@ -203,6 +218,11 @@ export async function renderSettings(main) {
   const macos = check(c.notify.macos, "macOS notifications");
   const slack = input(c.notify.slack_webhook ?? "", { class: "mono", placeholder: "https://hooks.slack.com/services/…" });
   const cmd = input(c.notify.command ?? "", { class: "mono", placeholder: 'e.g. say "$FACTORY_STATUS"' });
+  const successes = check(c.notify.successes, "Also notify when a run succeeds");
+  const throttle = input(c.notify.throttle_minutes ?? 5, { type: "number", min: 1 });
+  const quietFrom = input(c.notify.quiet_hours?.from ?? "", { type: "time" });
+  const quietTo = input(c.notify.quiet_hours?.to ?? "", { type: "time" });
+  const summaryAt = input(c.notify.daily_summary_at ?? "", { type: "time" });
   const on = ["succeeded", "failed", "stopped", "waiting", "cancelled"].map((s) => [s, check(c.notify.on.includes(s), s)]);
   const botName = input(c.bot.name ?? "", { placeholder: "claude-factory[bot]" });
   const botEmail = input(c.bot.email ?? "", { class: "mono" });
@@ -223,7 +243,10 @@ export async function renderSettings(main) {
       concurrency: Number(conc.value) || 1,
       protected_branches: protectedB.value.split(",").map((s) => s.trim()).filter(Boolean),
       secret_scan: secrets.el.checked,
-      notify: { macos: macos.el.checked, slack_webhook: slack.value.trim() || undefined, command: cmd.value.trim() || undefined, on: on.filter(([, x]) => x.el.checked).map(([s]) => s) },
+      notify: notifyFrom({
+        macos: macos.el.checked, slack: slack.value, command: cmd.value, on: on.filter(([, x]) => x.el.checked).map(([s]) => s),
+        successes: successes.el.checked, throttle: throttle.value, quietFrom: quietFrom.value, quietTo: quietTo.value, summaryAt: summaryAt.value,
+      }),
       bot: { name: botName.value.trim() || undefined, email: botEmail.value.trim() || undefined, gh_token_env: botToken.value.trim() || undefined },
       github_app: appId.value.trim() ? { app_id: appId.value.trim(), installation_id: instId.value.trim(), private_key_path: keyPath.value.trim() } : undefined,
       sandbox: { claude: sbxClaude.el.checked || undefined, docker_image: sbxImage.value.trim() || undefined },
@@ -254,8 +277,17 @@ export async function renderSettings(main) {
       f("Docker image for sandboxed shell steps", sbxImage, "Steps marked “Run in Docker” (like tests) run in this image with only the workspace mounted.")),
     section("Notifications",
       macos.row,
+      h("p", { class: "muted", style: { margin: "4px 0 10px", fontSize: "12.5px" } },
+        "Tells you only when something waits for you. ",
+        info.clickThrough === true ? "A click opens the item." : info.clickThrough === false ? "Install terminal-notifier (brew install terminal-notifier) and restart to open the item with a click." : ""),
+      successes.row,
+      h("div", { class: "grid" },
+        f("At most one notification every … minutes", throttle),
+        f("Quiet hours from", quietFrom, "Leave both empty for no quiet hours."),
+        f("Quiet hours to", quietTo),
+        f("Daily summary at", summaryAt, "Empty: no summary.")),
       h("div", { class: "grid" }, f("Slack webhook", slack), f("Command", cmd, "Runs with $FACTORY_STATUS, $FACTORY_RUN_ID, $FACTORY_MESSAGE.")),
-      h("div", { class: "row" }, h("span", { class: "muted" }, "Notify when a run is:"), on.map(([, x]) => x.row))),
+      h("div", { class: "row" }, h("span", { class: "muted" }, "Run the command when a run is:"), on.map(([, x]) => x.row))),
     section("Bot identity",
       h("p", { class: "muted", style: { margin: 0 } }, "By default commits and comments are made as you (your git config and gh login)."),
       h("div", { class: "grid" }, f("Commit author name", botName), f("Commit author email", botEmail), f("Env var with the bot's GitHub token", botToken, "Used as GH_TOKEN for gh and git pushes."))),
