@@ -66,6 +66,10 @@ code, pre, .mono { font-family: var(--mono); font-size: 12.5px; }
 .top nav a.active { background: var(--panel-2); color: var(--text); }
 .repo { margin-left: auto; color: var(--muted); font-family: var(--mono); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+.user { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12.5px; white-space: nowrap; }
+.signed-out .top nav, .signed-out .repo, .signed-out aside, .signed-out .since { display: none; }
+.signed-out .layout { grid-template-columns: 1fr; }
+.auth-card { max-width: 380px; margin: 60px auto; }
 .layout { display: grid; grid-template-columns: 260px 1fr; min-height: calc(100vh - 52px); }
 aside { border-right: 1px solid var(--border); padding: 16px 12px; background: var(--panel); }
 main { padding: 20px 24px 80px; min-width: 0; }

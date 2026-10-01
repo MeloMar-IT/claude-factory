@@ -3,6 +3,8 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpath
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { findSession } from "../src/auth/sessions.js";
+import { createUser, startSession } from "../src/auth/users.js";
 import { ConfigSchema, WatcherSchema } from "../src/config.js";
 import { resumeRun, runFlow } from "../src/engine/runner.js";
 import { loadRun } from "../src/engine/state.js";
@@ -84,6 +86,25 @@ describe("account files in the move", () => {
     }
     expect(readFileSync(join(to, "queue.json"), "utf8")).toContain(to);
     expect(readFileSync(join(to, "runs", "r9", "users.json"), "utf8")).toContain(to);
+  });
+
+  it("a moved sessions.json still finds its session", async () => {
+    const saved = process.env.FACTORY_HOME;
+    try {
+      process.env.FACTORY_HOME = from;
+      const user = await createUser({ name: "Ann", email: "ann@example.com", password: "test-password-12345", role: "admin" });
+      const started = startSession(user.id, user.passwordHash)!;
+      const bytes = readFileSync(join(from, "sessions.json"));
+      expect(findSession(started.token)).toBeDefined();
+      expect(migrate().status).toBe("migrated");
+      process.env.FACTORY_HOME = to;
+      expect(findSession(started.token)?.userId).toBe(user.id);
+      expect(readFileSync(join(to, "sessions.json"))).toEqual(bytes);
+      expect(statSync(join(to, "sessions.json")).mode & 0o777).toBe(0o600);
+    } finally {
+      if (saved === undefined) delete process.env.FACTORY_HOME;
+      else process.env.FACTORY_HOME = saved;
+    }
   });
 });
 

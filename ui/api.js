@@ -1,10 +1,16 @@
+let csrf = "";
+/** The CSRF token of the signed-in session; sent with every call that is not a GET. */
+export const setCsrf = (t) => {
+  csrf = t || "";
+};
+
 async function req(method, url, body) {
-  const r = await fetch(url, {
-    method,
-    headers: body ? { "content-type": "application/json" } : {},
-    body: body ? JSON.stringify(body) : undefined,
-  });
+  const headers = body ? { "content-type": "application/json" } : {};
+  if (method !== "GET" && csrf) headers["x-csrf-token"] = csrf;
+  const r = await fetch(url, { method, headers, body: body ? JSON.stringify(body) : undefined });
   const data = await r.json().catch(() => ({}));
+  // the session ended (expired, revoked, password changed): start again at the sign-in page
+  if (r.status === 401 && !url.startsWith("/api/session")) location.reload();
   if (!r.ok) throw new Error(data.error || `${r.status} ${r.statusText}`);
   return data;
 }
@@ -12,6 +18,10 @@ async function req(method, url, body) {
 const enc = encodeURIComponent;
 
 export const api = {
+  session: () => req("GET", "/api/session"),
+  signIn: (email, password) => req("POST", "/api/session", { email, password }),
+  signOut: () => req("DELETE", "/api/session"),
+  setup: (name, email, password) => req("POST", "/api/setup", { name, email, password }),
   info: () => req("GET", "/api/info"),
   flows: () => req("GET", "/api/flows"),
   flow: (name) => req("GET", `/api/flows/${enc(name)}`),

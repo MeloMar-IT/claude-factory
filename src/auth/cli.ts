@@ -1,5 +1,5 @@
 import { createInterface } from "node:readline";
-import { checkEmail, checkName, checkPassword, createUser, findUserByEmail, listUsers, setPassword, setStatus, type User } from "./users.js";
+import { checkEmail, checkName, checkPassword, createUser, findUserByEmail, hasAdmin, listUsers, setPassword, setStatus, type User } from "./users.js";
 
 /** Everything the commands need from the terminal; tests pass a fake. */
 export interface UserIo {
@@ -165,5 +165,14 @@ export async function userCommand(args: { positionals: string[]; values: Record<
     }
     default:
       throw new Error(USER_USAGE);
+  }
+}
+
+/** The hint `scf serve` prints while there is no admin account; undefined when there is one (or the file cannot be read). */
+export function adminHint(): string | undefined {
+  try {
+    return hasAdmin() ? undefined : "no admin account yet — open the UI to create one, or run: scf user create --admin";
+  } catch {
+    return undefined;
   }
 }
