@@ -72,6 +72,7 @@ vars:
   max_files: "15"
   max_code_lines: "800"
   delete_merged_branches: yes
+  close_when_merged: yes
 steps:
   - id: pull_ticket
     type: shell
@@ -860,6 +861,9 @@ steps:
         echo; echo "_It goes to \`$FACTORY_VAR_MAIN_BRANCH\` with the daily release pull request._"
         echo; echo "<!-- claude-factory run=$FACTORY_RUN_ID -->"; } \
         | gh issue comment "$FACTORY_VAR_ISSUE" --repo "$FACTORY_VAR_GITHUB_REPO" --body-file -
+      if [ "$FACTORY_VAR_CLOSE_WHEN_MERGED" != no ]; then
+        gh issue close "$FACTORY_VAR_ISSUE" --repo "$FACTORY_VAR_GITHUB_REPO" --reason completed >/dev/null 2>&1 && echo "closed #$FACTORY_VAR_ISSUE"
+      fi
     on_success: end
   - id: baseline_failed
     type: shell

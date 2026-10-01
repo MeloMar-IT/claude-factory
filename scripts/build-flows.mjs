@@ -1169,6 +1169,14 @@ write("issue-plan", {
     .replace("implemented this on branch \\`$branch\\` (commit", "implemented this on \\`$branch\\` and merged it into \\`$FACTORY_VAR_DEVELOP_BRANCH\\` (commit")
     .replace("_It is in the Foundry pull request: $FACTORY_OUT_OPEN_PR — merge it whenever you like._", "_It goes to \\`$FACTORY_VAR_MAIN_BRANCH\\` with the daily release pull request._")
     .replace("git show --stat --format= HEAD | tail -40", 'git diff --stat "$(cat "{{run.dir}}/develop-before")" HEAD | tail -40');
+  // Gitflow: "done" means merged into develop — close the issue now (GitHub only closes issues by
+  // itself when work reaches the default branch).
+  gitflowReport.run += [
+    "",
+    'if [ "$FACTORY_VAR_CLOSE_WHEN_MERGED" != no ]; then',
+    '  gh issue close "$FACTORY_VAR_ISSUE" --repo "$FACTORY_VAR_GITHUB_REPO" --reason completed >/dev/null 2>&1 && echo "closed #$FACTORY_VAR_ISSUE"',
+    "fi",
+  ].join("\n");
   const gitflowSteps = [
     byId("pull_ticket"),
     featureBranch,
@@ -1225,7 +1233,7 @@ write("issue-plan", {
       develop_branch: "develop", main_branch: "main", feature_prefix: "feature/",
       forbidden_paths: "", docs_required: "", union_merge_files: "", agent_env: "",
       risk_threshold: "75", review_plan_label: "Factory_review_plan", auto_split_max_risk: "50", trigger_label: "",
-      max_files: "15", max_code_lines: "800", delete_merged_branches: "yes",
+      max_files: "15", max_code_lines: "800", delete_merged_branches: "yes", close_when_merged: "yes",
     },
     steps: gitflowSteps,
   });
