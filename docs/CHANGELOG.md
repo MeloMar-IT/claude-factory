@@ -4,6 +4,7 @@ Changes that are merged but not yet in a release go under **Unreleased**. Newest
 
 ## Unreleased
 
+- Gitflow: an issue is closed as soon as it is merged into `develop`.
 - Gitflow: a feature branch is deleted on GitHub once it is merged into `develop`.
 - Fix: a split is no longer skipped when a comment merely mentions the split marker; issues that depended on a split issue now wait for its parts.
 - Coding agents may run the project's build and tests; `agent_env` passes settings such as `JAVA_HOME`.

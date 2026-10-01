@@ -520,8 +520,9 @@ flowchart LR
 
 - Every issue gets its own branch, `feature/<issue>-<title>`, from `develop`. When its tests and
   both Codex reviews pass, the **factory merges it into `develop` itself**, runs the tests on the
-  merged `develop`, pushes, and deletes the merged feature branch (`delete_merged_branches: no`
-  keeps it). If `develop` moved meanwhile, it merges again; conflicts are
+  merged `develop`, pushes, deletes the merged feature branch (`delete_merged_branches: no`
+  keeps it) and **closes the issue** — done means merged into `develop` (`close_when_merged: no`
+  leaves it open until the release reaches `main`). If `develop` moved meanwhile, it merges again; conflicts are
   resolved by an agent (keeping both changes), then tested again. The changelog never conflicts:
   both sides' entries are kept (`union_merge_files`).
 - **Several issues are coded at the same time** when they change different parts of the code:

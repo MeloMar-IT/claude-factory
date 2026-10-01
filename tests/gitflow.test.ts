@@ -49,6 +49,7 @@ describe("gitflow pipeline", () => {
     await new Promise((r) => setTimeout(r, 300));
   };
   const runOf = (issue: string) => scheduler.list().find((s) => s.flow === "issue-gitflow" && s.vars.issue === issue);
+  const log0 = () => gh.ghLog();
 
   it("codes an issue on its own feature branch and merges it into develop (created from main)", async () => {
     issues(5);
@@ -67,6 +68,7 @@ describe("gitflow pipeline", () => {
     // Merged into develop, so the feature branch is deleted on the remote.
     expect(run.history.find((h) => h.id === "push_develop")!.output).toContain("deleted the merged branch feature/5-add-a-feature");
     expect(gh.remoteGit("branch", "--list", "feature/*").trim()).toBe("");
+    expect(log0()).toMatch(/gh issue close 5 --repo acme\/app --reason completed/); // done = merged into develop
     const log = gh.ghLog();
     expect(log).toContain("merged it into `develop`");
     expect(log).toContain("with the daily release pull request");
