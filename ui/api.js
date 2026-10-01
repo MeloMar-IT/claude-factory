@@ -40,6 +40,7 @@ export const api = {
   testModel: (spec) => req("POST", "/api/providers/test", { spec }),
   next: () => req("GET", "/api/next"),
   yourTurn: () => req("GET", "/api/your-turn"),
+  since: (from) => req("GET", `/api/since?since=${enc(from)}`),
   dismissTurn: (key) => req("POST", "/api/your-turn/dismiss", { key }),
   restoreTurn: () => req("POST", "/api/your-turn/restore", {}),
   stats: () => req("GET", "/api/stats"),

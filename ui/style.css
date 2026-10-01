@@ -308,3 +308,9 @@ a.btn.primary:hover { filter: brightness(1.06); }
 .turn-item:first-of-type { border-top: none; }
 .turn-item .turn-main { flex: 1 1 320px; display: grid; gap: 2px; min-width: 0; }
 .turn-item .turn-side { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+
+.since { padding: 10px 20px; border-bottom: 1px solid var(--border); background: var(--accent-soft); display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 24px; }
+.since[hidden] { display: none; }
+.since .since-body { display: contents; }
+.since-group { display: grid; gap: 2px; }
+.since-note { flex-basis: 100%; font-size: 12.5px; }

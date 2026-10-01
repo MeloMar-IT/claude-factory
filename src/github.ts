@@ -8,16 +8,18 @@ export const BOT_MARKER = "<!-- claude-factory";
 /** Markers that identify our own comments: the one we write, and the new product name's. */
 export const BOT_MARKERS = [BOT_MARKER, "<!-- spaghetti-code-foundry"] as const;
 
-export async function gh(args: string[], env?: NodeJS.ProcessEnv): Promise<string> {
+/** `timeoutMs` kills the process and rejects; without it gh may take as long as it likes. */
+export async function gh(args: string[], env?: NodeJS.ProcessEnv, timeoutMs?: number): Promise<string> {
   const { stdout } = await exec(process.env.FACTORY_GH_BIN ?? "gh", args, {
     maxBuffer: 20_000_000,
     env: env ? { ...process.env, ...env } : process.env,
+    timeout: timeoutMs,
   });
   return stdout;
 }
 
-export async function ghJson<T>(args: string[], env?: NodeJS.ProcessEnv): Promise<T> {
-  const out = (await gh(args, env)).trim();
+export async function ghJson<T>(args: string[], env?: NodeJS.ProcessEnv, timeoutMs?: number): Promise<T> {
+  const out = (await gh(args, env, timeoutMs)).trim();
   return (out ? JSON.parse(out) : []) as T;
 }
 

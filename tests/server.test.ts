@@ -223,6 +223,52 @@ steps:
     expect(await text("/api.js")).toContain("/api/your-turn");
   });
 
+  it("answers GET /api/since: a failed run shows once, a done story shows, a bad time is refused", async () => {
+    const { fakeGithub } = await import("./helpers/fake-github.js");
+    const gh = fakeGithub(); // the repositories of runs are asked for release pull requests
+    try {
+      const hour = () => encodeURIComponent(new Date(Date.now() - 3_600_000).toISOString());
+      type Since = { total: number; complete: boolean; notes: string[]; groups: { id: string; items: { where: { url: string }; issue?: number }[] }[] };
+      const since = async (q = hour()) => (await (await json("GET", `/api/since?since=${q}`)).json()) as Since;
+      expect((await json("GET", "/api/since")).status).toBe(400);
+      expect((await json("GET", "/api/since?since=x")).status).toBe(400);
+
+      const bad = `name: boom
+workspace: inplace
+steps:
+  - {id: boom, type: shell, run: "exit 1"}
+`;
+      const { runId } = (await (await json("POST", "/api/runs", { yaml: bad, task: "t" })).json()) as { runId: string };
+      await waitFor(runId, "failed");
+      const s = await since();
+      expect(s.groups.find((g) => g.id === "failed")!.items.map((i) => i.where.url)).toContain(`#/runs/${runId}`);
+      expect(s.groups.find((g) => g.id === "waiting")?.items.map((i) => i.where.url) ?? []).not.toContain(`#/runs/${runId}`);
+      expect(s).toMatchObject({ complete: true, notes: [] });
+
+      const ok = `name: shipped
+workspace: inplace
+steps:
+  - {id: commit, type: shell, run: "echo done"}
+`;
+      const vars = { github_repo: "acme/since-test", issue: "42" };
+      const done = (await (await json("POST", "/api/runs", { yaml: ok, task: "s", vars })).json()) as { runId: string };
+      await waitFor(done.runId, "succeeded");
+      expect((await since()).groups.find((g) => g.id === "done")!.items.map((i) => i.issue)).toEqual([42]);
+
+      expect((await since(encodeURIComponent(new Date(Date.now() + 60_000).toISOString()))).total).toBe(0);
+    } finally {
+      gh.restore();
+    }
+  });
+
+  it("serves the Since you last looked strip", async () => {
+    const text = (p: string) => fetch(base + p).then((r) => r.text());
+    expect((await fetch(base + "/since.js")).status).toBe(200);
+    expect(await text("/")).toContain('id="since"');
+    expect(await text("/app.js")).toContain("startSince(");
+    expect(await text("/api.js")).toContain("/api/since");
+  });
+
   it("follows a queued run on the event stream and lists it before it has a run file", async () => {
     const slow = `name: slow
 workspace: inplace
