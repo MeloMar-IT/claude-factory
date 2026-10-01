@@ -60,6 +60,8 @@ export interface RunSummary {
   resumes?: number;
   /** Process that last started or resumed the run. */
   pid?: number;
+  /** When the top-level step in `state.next` started; only while that step runs. */
+  stepStartedAt?: string;
 }
 
 export const runFile = (runDir: string) => join(runDir, "run.json");

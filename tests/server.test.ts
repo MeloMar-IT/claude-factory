@@ -325,3 +325,207 @@ steps:
     expect(r.error).toBeTruthy();
   });
 });
+
+describe("expected times", () => {
+  type Timing = { progress: string; stepId: string; estimate?: string; slow?: boolean; leftMs?: number };
+  type Rec = { runId: string; status: string; next: { timing?: Timing; until?: string; afterRun?: string } };
+  const start = async (yaml: string, body: Record<string, unknown> = {}) =>
+    ((await (await json("POST", "/api/runs", { yaml, task: "t", ...body })).json()) as { runId: string }).runId;
+  const get = async (id: string) => (await (await json("GET", `/api/runs/${id}`)).json()) as Rec;
+  const until = async <T>(read: () => Promise<T>, ok: (v: T) => boolean) => {
+    for (let i = 0; i < 150; i++) {
+      const v = await read();
+      if (ok(v)) return v;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    throw new Error("timed out");
+  };
+  const finished = (id: string) => until(() => get(id), (r) => r.status === "succeeded");
+  const nap = "sleep \"${FACTORY_VAR_NAP:-0.2}\"";
+  const timed = (extra = "", last = nap) => `name: timed
+workspace: inplace
+steps:
+  - {id: a, type: shell, run: "sleep 0.2"}
+  - {id: b, type: shell, run: '${last}'}
+${extra}`;
+
+  it("shows progress without history", async () => {
+    const id = await start(`name: fresh_flow
+workspace: inplace
+steps:
+  - {id: a, type: shell, run: "true"}
+  - {id: b, type: shell, run: "sleep 5"}
+`);
+    const r = await until(() => get(id), (x) => x.next.timing?.stepId === "b");
+    expect(r.next.timing!.progress).toBe("Step 2 of 2");
+    expect(r.next.timing!.estimate).toBeUndefined();
+    await json("POST", `/api/runs/${id}/cancel`);
+  });
+
+  it("estimates from history, on every endpoint", async () => {
+    const { forgetHistory } = await import("../src/server/next.js");
+    for (let i = 0; i < 3; i++) await finished(await start(timed()));
+    forgetHistory(ctx);
+    const id = await start(timed(), { vars: { nap: "5" } });
+    const r = await until(() => get(id), (x) => x.next.timing?.stepId === "b");
+    expect(r.next.timing!.estimate).toMatch(/^Estimate: about 1 min left \(usually about 1 min in total\)$/);
+    expect(r.next.timing!.slow).toBeUndefined();
+
+    const listed = async () => ((await (await json("GET", "/api/runs")).json()) as Rec[]).find((x) => x.runId === id)!;
+    const viaNext = async () => ((await (await json("GET", "/api/next")).json()) as { runs: { runId: string; timing?: Timing }[] }).runs.find((x) => x.runId === id)!;
+    for (const t of [(await listed()).next.timing, (await viaNext()).timing]) {
+      expect(t!.progress).toBe(r.next.timing!.progress);
+      expect(t!.estimate).toBe(r.next.timing!.estimate);
+    }
+    // The request order does not matter.
+    forgetHistory(ctx);
+    const first = (await listed()).next.timing!.estimate;
+    forgetHistory(ctx);
+    expect((await get(id)).next.timing!.estimate).toBe(first);
+    forgetHistory(ctx);
+    expect((await get(id)).next.timing!.estimate).toBe(first);
+    expect((await listed()).next.timing!.estimate).toBe(first);
+
+    const res = await fetch(`${base}/api/runs/${id}/events`);
+    const reader = res.body!.getReader();
+    let text = "";
+    const stop = Date.now() + 10_000;
+    while (!text.includes('"estimate":"Estimate:') && Date.now() < stop) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      text += new TextDecoder().decode(value);
+    }
+    await reader.cancel();
+    expect(text).toContain('"estimate":"Estimate:');
+    await json("POST", `/api/runs/${id}/cancel`);
+
+    // Another step list is another history.
+    const other = await start(timed(`  - {id: c, type: shell, run: "sleep 5"}`, "true"));
+    const o = await until(() => get(other), (x) => x.next.timing?.stepId === "c");
+    expect(o.next.timing!.progress).toBe("Step 3 of 3");
+    expect(o.next.timing!.estimate).toBeUndefined();
+    await json("POST", `/api/runs/${other}/cancel`);
+  });
+
+  it("sees a new sample as soon as a run succeeds, without forgetting by hand", async () => {
+    const flow = (nap: string) => `name: crossing
+workspace: inplace
+steps:
+  - {id: a, type: shell, run: "sleep 0.2"}
+  - {id: b, type: shell, run: "sleep ${nap}"}
+`;
+    for (let i = 0; i < 2; i++) await finished(await start(flow("0.2")));
+    const third = await start(flow("1"));
+    const mid = await until(() => get(third), (x) => x.next.timing?.stepId === "b");
+    expect(mid.next.timing!.estimate).toBeUndefined(); // two samples, now cached
+    await finished(third);
+    const fourth = await start(flow("5"));
+    const r = await until(() => get(fourth), (x) => x.next.timing?.stepId === "b");
+    expect(r.next.timing!.estimate).toMatch(/^Estimate:/);
+    await json("POST", `/api/runs/${fourth}/cancel`);
+  });
+
+  it("tells a queued run how long the run in front still needs", async () => {
+    const { forgetHistory } = await import("../src/server/next.js");
+    const vars = { github_repo: "acme/app", issue: "77" };
+    for (let i = 0; i < 3; i++) await finished(await start(timed(), { vars }));
+    forgetHistory(ctx);
+    const a = await start(timed(), { vars: { ...vars, nap: "5" } });
+    const b = await start(timed(), { vars: { ...vars, nap: "5" } });
+    await until(() => get(a), (x) => x.next.timing?.leftMs !== undefined);
+    const queue = (await (await json("GET", "/api/queue")).json()) as { pending: { runId: string; next: Rec["next"] }[] };
+    const next = queue.pending.find((p) => p.runId === b)!.next;
+    expect(next.afterRun).toBe(a);
+    expect(next.until).toBe("after that run (about 1 min left)");
+    // A third run waits for the second one too: no time for it.
+    const c = await start(timed(), { vars: { ...vars, nap: "5" } });
+    const again = (await (await json("GET", "/api/queue")).json()) as { pending: { runId: string; next: Rec["next"] }[] };
+    expect(again.pending.find((p) => p.runId === b)!.next.until).toBe("after that run (about 1 min left)");
+    expect(again.pending.find((p) => p.runId === c)!.next.until).toBeUndefined();
+    await json("POST", `/api/runs/${c}/cancel`);
+    await json("POST", `/api/runs/${b}/cancel`);
+    await json("POST", `/api/runs/${a}/cancel`);
+  });
+
+  describe("with a stub context", () => {
+    const MIN = 60_000;
+    const iso = (minAgo: number) => new Date(Date.now() - minAgo * MIN).toISOString();
+    const rec = (id: string, min: number) => ({ id, type: "shell", ok: true, visit: 1, output: "", startedAt: iso(0), durationMs: min * MIN, logFile: "" });
+    const flowDef = { name: "f", steps: ["a", "b", "c", "claim_areas"].map((id) => ({ id, type: "shell", run: "true" })) };
+    const mk = (over: Record<string, unknown>) => ({ flow: "f", flowDef, vars: { github_repo: "acme/app" }, repo: "/x", runDir: "/tmp/none", totalCostUsd: 0, startedAt: iso(60), ...over });
+    const past = [10, 10, 15, 25, 25].map((b, i) => mk({ runId: `h${i}`, status: "succeeded", history: [rec("a", 5), rec("b", b), rec("c", 10)], state: { next: null, steps: {}, visits: {} } }));
+    const live = (runId: string, ago: number, over: Record<string, unknown> = {}) =>
+      mk({ runId, status: "running", history: [rec("a", 5)], state: { next: "b", steps: {}, visits: {} }, stepStartedAt: iso(ago), ...over });
+    type Ctx = import("../src/server/server.js").ApiContext;
+    const setup = async (runs: Record<string, unknown>[], active: () => boolean = () => true) => {
+      const { ConfigSchema } = await import("../src/config.js");
+      const byId = new Map(runs.map((r) => [r.runId as string, r]));
+      return {
+        config: () => ConfigSchema.parse({}),
+        scheduler: { list: () => [...past, ...runs], queue: () => ({ pending: [], active: [] }), isActive: (id: string) => active() && byId.has(id), get: (id: string) => byId.get(id) },
+        watchers: { tracked: () => [], statuses: () => [] },
+      } as unknown as Ctx;
+    };
+    const dep = async (blockers: { issue: number; runId?: string; kind?: "running" | "queued" }[]) => {
+      const { nextStep } = await import("../src/next-step.js");
+      return nextStep("dependency", { repo: "acme/app", issue: 89 }, {
+        blockers: blockers.map((b) => ({ issue: b.issue, next: nextStep(b.kind ?? "running", { runId: b.runId }) })),
+      });
+    };
+    const via = async (stub: Ctx, hold: unknown) => {
+      const { watchersWithNext } = await import("../src/server/next.js");
+      (stub.watchers as unknown as { statuses: () => unknown }).statuses = () => [{ id: "w", github_repo: "acme/app", status: { id: "w", lastActions: [], holds: [hold] } }];
+      return watchersWithNext(stub)[0]!.status!.holds![0]!;
+    };
+
+    it("adds the time left to a dependency, using the longest blocker", async () => {
+      const stub = await setup([live("r88", 5), live("r90", 15)]);
+      const hold = { reason: "x", issue: 89, next: await dep([{ issue: 88, runId: "r88" }]) };
+      expect((await via(stub, hold)).next.until).toBe("after #88 (about 20 min left)");
+      expect(hold.next.until).toBe("after #88");
+      const two = { reason: "x", issue: 89, next: await dep([{ issue: 88, runId: "r88" }, { issue: 90, runId: "r90" }]) };
+      expect((await via(stub, two)).next.until).toBe("after #88, #90 (about 20 min left)");
+    });
+
+    it("leaves it alone without a full picture", async () => {
+      const stub = await setup([live("r88", 5), live("r90", 15)]);
+      const queued = { reason: "x", issue: 89, next: await dep([{ issue: 88, runId: "r88" }, { issue: 90, kind: "queued" }]) };
+      expect((await via(stub, queued)).next.until).toBe("after #88, #90");
+      const other = await setup([live("r88", 5), live("r90", 15, { flow: "g" })]);
+      const two = { reason: "x", issue: 89, next: await dep([{ issue: 88, runId: "r88" }, { issue: 90, runId: "r90" }]) };
+      expect((await via(other, two)).next.until).toBe("after #88, #90");
+      const idle = await setup([live("r88", 5)], () => false);
+      const one = { reason: "x", issue: 89, next: await dep([{ issue: 88, runId: "r88" }]) };
+      expect((await via(idle, one)).next.until).toBe("after #88");
+    });
+
+    it("tells a run that waits for a code area how long the other run needs", async () => {
+      const { nextFor } = await import("../src/server/next.js");
+      const dir = join(tmp, "areatiming");
+      mkdirSync(join(dir, "logs"), { recursive: true });
+      writeFileSync(join(dir, "logs", "001-claim_areas.log"), "waiting for run r88 (src)\n");
+      const waiting = live("r91", 1, { state: { next: "claim_areas", steps: {}, visits: {} }, history: [], runDir: dir });
+      const stub = await setup([live("r88", 5), waiting]);
+      const n = nextFor(stub)(waiting as never);
+      expect(n).toMatchObject({ kind: "area_lock", afterRun: "r88", until: "after that run (about 20 min left)" });
+      expect(n.timing!.progress).toBe("Step 4 of 4");
+      expect(n.timing!.estimate).toBeUndefined();
+      expect(n.timing!.slow).toBeUndefined();
+
+      // The other run waits for a code area too: no estimate.
+      const dir2 = join(tmp, "areatiming2");
+      mkdirSync(join(dir2, "logs"), { recursive: true });
+      writeFileSync(join(dir2, "logs", "001-claim_areas.log"), "waiting for run r1 (src)\n");
+      const blocked = live("r88", 5, { state: { next: "claim_areas", steps: {}, visits: {} }, history: [], runDir: dir2 });
+      const stub2 = await setup([blocked, waiting]);
+      expect(nextFor(stub2)(waiting as never).until).toBeUndefined();
+    });
+  });
+
+  it("shows when and how long in the UI code, without wording of its own", async () => {
+    const { readFileSync } = await import("node:fs");
+    const ui = (f: string) => readFileSync(resolve("ui", f), "utf8");
+    expect(ui("runs.js")).toContain("whenParts(");
+    for (const f of ["runs.js", "dashboard.js", "admin.js"]) expect(ui(f)).not.toMatch(/usually|longer than usual|Estimate:|Continues/);
+  });
+});

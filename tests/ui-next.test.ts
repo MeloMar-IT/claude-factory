@@ -111,6 +111,45 @@ describe("ui/next.js renderer", () => {
   });
 });
 
+describe("timing in the UI", () => {
+  const timing = { step: 2, of: 3, stepId: "b", progress: "Step 2 of 3", estimate: "Estimate: about 20 min left (usually 25–40 min in total)", note: "Taking longer than usual" };
+  const withTiming = (): NextStep => ({ ...nextStep("one_at_a_time", { repo: "o/r", runId: "r2" }, { blockingRun: "r1" }), until: "after that run (about 20 min left)", timing });
+
+  it("timingParts has no wording of its own", () => {
+    expect(ui.timingParts(you())).toEqual([]);
+    const parts = ui.timingParts(withTiming()) as FakeElement[];
+    expect(parts.map((p) => p.textContent)).toEqual([timing.progress, timing.estimate, timing.note]);
+    expect(parts[2]!.attrs.class).toBe("slow-note");
+  });
+
+  it("nextParts shows them after Continues and before the link", () => {
+    const text = (ui.nextParts(withTiming()) as (FakeElement | null)[]).filter(Boolean).map((p) => p!.textContent);
+    const i = text.findIndex((t) => t.startsWith("Continues:"));
+    expect(text.slice(i + 1, i + 4)).toEqual([timing.progress, timing.estimate, timing.note]);
+    expect(text[i + 4]).toBe("Run page"); // the link follows
+  });
+
+  it("whenParts is empty without until and timing", () => {
+    expect(ui.whenParts(found())).toEqual([]);
+    expect(ui.whenParts(withTiming())).toHaveLength(4);
+  });
+
+  it("nextBlock shows them; a record without timing renders as before", () => {
+    expect((ui.nextBlock(withTiming()) as FakeElement).textContent).toContain(timing.estimate);
+    expect((ui.nextBlock(you()) as FakeElement).textContent).not.toContain("Step");
+  });
+
+  it("runRow and queueRow show until and timing", async () => {
+    const runs = await import("../ui/runs.js" as string);
+    const next = withTiming();
+    const row = runs.runRow({ runId: "r2", flow: "f", status: "running", task: "t", history: [], startedAt: new Date().toISOString(), totalCostUsd: 0, next }) as FakeElement;
+    for (const s of [next.text, "Continues: after that run (about 20 min left)", timing.progress, timing.estimate]) expect(row.textContent).toContain(s);
+    expect(() => runs.runRow({ runId: "r3", flow: "f", status: "running", task: "t", history: [], startedAt: new Date().toISOString() })).not.toThrow();
+    const q = runs.queueRow({ runId: "r2", kind: "run", next }, () => {}) as FakeElement;
+    expect(q.textContent).toContain("Continues: after that run (about 20 min left)");
+  });
+});
+
 describe("the changed UI modules", () => {
   it("load", async () => {
     const dashboard = await import("../ui/dashboard.js" as string);

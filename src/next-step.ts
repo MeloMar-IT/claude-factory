@@ -30,8 +30,31 @@ export interface NextStep {
   runId?: string;
   /** The whole record as one sentence (notifications, comments). */
   text: string;
+  /** The run this record waits for (one run at a time, code area). */
+  afterRun?: string;
+  /** Progress and estimate of a run that is not finished. */
+  timing?: RunTiming;
   /** Dependency: what it waits for. */
   blockers?: BlockerInfo[];
+}
+
+/** How far a run is and how long it may take. Estimates come from earlier runs; see estimate.ts. */
+export interface RunTiming {
+  /** The step's number in the flow, and the number of steps. */
+  step: number;
+  of: number;
+  stepId: string;
+  /** "Step 2 of 3". */
+  progress: string;
+  /** Quartiles of the run total (ms) from earlier runs: [usual low, usual high]. */
+  usualTotalMs?: [number, number];
+  /** The current step takes much longer than usual. A hint, not an error. */
+  slow?: boolean;
+  note?: string;
+  /** Estimated time left (ms). */
+  leftMs?: number;
+  /** The estimate as one labelled sentence. */
+  estimate?: string;
 }
 
 export interface BlockerInfo {
@@ -334,6 +357,8 @@ export function nextStep(kind: NextKind, base: NextBase = {}, d: NextData = {}):
     kind, who, why, action, where: w, until,
     repo: base.repo ?? "", user: "", issue, title: base.title ?? "", runId: base.runId,
     text: sentence(why.replace(/[.!?]+$/, ""), say.replace(/[.!?]+$/, "")),
+    ...(kind === "one_at_a_time" && d.blockingRun ? { afterRun: d.blockingRun } : {}),
+    ...(kind === "area_lock" && d.areaWait ? { afterRun: d.areaWait.runId } : {}),
     ...(kind === "dependency" ? { blockers: d.blockers ?? [] } : {}),
   };
 }

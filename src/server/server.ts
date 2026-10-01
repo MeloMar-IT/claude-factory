@@ -11,7 +11,7 @@ import { adminRoutes } from "./api-admin.js";
 import { flowRoutes } from "./api-flows.js";
 import { runRoutes } from "./api-runs.js";
 import { HttpError, send, serveStatic } from "./http.js";
-import { areaWait, nextRoutes, type RestartState } from "./next.js";
+import { areaWait, forgetHistory, nextRoutes, type RestartState } from "./next.js";
 
 const UI_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../../ui");
 const YAML_BROWSER_DIR = join(dirname(createRequire(import.meta.url).resolve("yaml/package.json")), "browser");
@@ -49,6 +49,8 @@ export async function startServer(opts: ServerOptions): Promise<{ url: string; c
     claudeBin: opts.claudeBin,
     config: () => config,
     queueFile: join(process.env.FACTORY_HOME ?? FACTORY_HOME, "queue.json"),
+    // A new succeeded run is a new sample: the next estimate must see it.
+    onFinished: (s) => { if (s.status === "succeeded") forgetHistory(ctx); },
   });
   const watchers = new WatcherManager({ scheduler, runsDir: opts.runsDir, repo: opts.repo, config: () => config, areaWait, log });
   const ctx: ApiContext = { opts, scheduler, watchers, config: () => config, reloadConfig: () => (config = loadConfig()) };

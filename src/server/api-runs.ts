@@ -6,6 +6,7 @@ import { readTranscript } from "../engine/transcript.js";
 import { parseFlow, resolveFlowPath } from "../flow/load.js";
 import { HttpError, NAME_RE, readJson, send, str } from "./http.js";
 import { nextFor, queueWithNext } from "./next.js";
+import type { NextStep } from "../next-step.js";
 import type { RunEvent } from "../queue/scheduler.js";
 import type { Route } from "./server.js";
 
@@ -65,12 +66,14 @@ export const runRoutes: Route = async (ctx, req, res, seg, method) => {
 
   if (action === "events" && method === "GET") {
     res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store", connection: "keep-alive" });
-    let last = ""; // text of the record sent last
+    // What a viewer sees of the record, sent last.
+    const shown = (n: NextStep) => [n.text, n.until, n.timing?.progress, n.timing?.estimate, n.timing?.note].join("\n");
+    let last = "";
     const write = (e: RunEvent) => {
       let out: unknown = e;
       if (e.type === "update") {
         const next = nextFor(ctx)(e.summary);
-        last = next.text;
+        last = shown(next);
         out = { ...e, summary: { ...e.summary, next } };
       }
       res.write(`event: ${e.type}\ndata: ${JSON.stringify(out)}\n\n`);
@@ -79,7 +82,7 @@ export const runRoutes: Route = async (ctx, req, res, seg, method) => {
     // A wait for a code area shows up in the step log only, without an update event: look again now and then.
     const recheck = setInterval(() => {
       const s = scheduler.get(id);
-      if (s?.status === "running" && nextFor(ctx)(s).text !== last) write({ type: "update", summary: s });
+      if (s?.status === "running" && shown(nextFor(ctx)(s)) !== last) write({ type: "update", summary: s });
     }, NEXT_RECHECK_MS);
     const ping = setInterval(() => res.write(": ping\n\n"), 15_000);
     req.on("close", () => {

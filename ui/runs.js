@@ -1,6 +1,6 @@
 import { api } from "./api.js";
 import { h, mount, timeAgo, toast } from "./dom.js";
-import { needsYou, nextBlock, whereLink } from "./next.js";
+import { needsYou, nextBlock, whenParts, whereLink } from "./next.js";
 
 const money = (n) => (n ? `$${n.toFixed(4)}` : "—");
 const secs = (ms) => (ms < 60_000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`);
@@ -10,6 +10,25 @@ const what = (r) => (r.vars?.issue ? `${r.vars.github_repo}#${r.vars.issue}` : r
 
 const REFRESH_MS = 30_000;
 
+/** One row of the runs table. */
+export const runRow = (r) => h("tr", { class: "link", onClick: () => (location.hash = `#/runs/${r.runId}`) },
+  h("td", {}, pill(r.status)),
+  h("td", {}, h("b", {}, r.flow), what(r) ? h("div", { class: "muted mono", style: { fontSize: "11.5px" } }, what(r)) : null),
+  h("td", { class: "task", title: r.task }, r.task || h("span", { class: "muted" }, "—"),
+    r.next ? h("div", { class: "muted", title: r.next.text }, r.next.text) : null,
+    r.next && whenParts(r.next).length ? h("div", { class: "next-parts timing" }, whenParts(r.next)) : null),
+  h("td", { class: "mono" }, r.history?.length ?? 0),
+  h("td", { class: "mono" }, money(r.totalCostUsd)),
+  h("td", { class: "muted" }, timeAgo(r.startedAt)));
+
+/** One entry of the queue. */
+export const queueRow = (p, onRemove) => h("div", { class: "row" },
+  pill("queued"), h("span", { class: "mono" }, p.runId), h("span", { class: "muted" }, [p.kind, p.source, p.next?.text].filter(Boolean).join(" · ")),
+  ...(p.next ? whenParts(p.next) : []),
+  p.next ? whereLink(p.next.where) : null,
+  h("span", { class: "spacer" }),
+  h("button", { class: "small", onClick: onRemove }, "Remove"));
+
 /** Runs list; refreshes itself every 30 seconds. Returns a cleanup function that stops that. */
 export async function renderRunsList(main) {
   mount(main, h("div", { class: "row" }, h("span", { class: "spinner" }), " Loading runs…"));
@@ -18,14 +37,7 @@ export async function renderRunsList(main) {
     const [runs, queue] = await Promise.all([api.runs(), api.queue()]);
     if (!main.isConnected) return;
     const yours = needsYou(runs);
-    const row = (r) => h("tr", { class: "link", onClick: () => (location.hash = `#/runs/${r.runId}`) },
-      h("td", {}, pill(r.status)),
-      h("td", {}, h("b", {}, r.flow), what(r) ? h("div", { class: "muted mono", style: { fontSize: "11.5px" } }, what(r)) : null),
-      h("td", { class: "task", title: r.task }, r.task || h("span", { class: "muted" }, "—"),
-        r.next ? h("div", { class: "muted", title: r.next.text }, r.next.text) : null),
-      h("td", { class: "mono" }, r.history.length),
-      h("td", { class: "mono" }, money(r.totalCostUsd)),
-      h("td", { class: "muted" }, timeAgo(r.startedAt)));
+    const row = runRow;
     const table = (list) => h("table", { class: "table" },
       h("thead", {}, h("tr", {}, ["Status", "Flow", "Task / what happens next", "Steps", "Cost", "Started"].map((t) => h("th", {}, t)))),
       h("tbody", {}, list.map(row)));
@@ -38,11 +50,7 @@ export async function renderRunsList(main) {
         h("button", { onClick: () => draw() }, "↻ Refresh")),
       queue.pending.length ? h("div", { class: "card", style: { marginBottom: "16px" } },
         h("h3", {}, "Queue"),
-        queue.pending.map((p) => h("div", { class: "row" },
-          pill("queued"), h("span", { class: "mono" }, p.runId), h("span", { class: "muted" }, [p.kind, p.source, p.next?.text].filter(Boolean).join(" · ")),
-          p.next ? whereLink(p.next.where) : null,
-          h("span", { class: "spacer" }),
-          h("button", { class: "small", onClick: async () => { await api.cancelRun(p.runId); draw(); } }, "Remove")))) : null,
+        queue.pending.map((p) => queueRow(p, async () => { await api.cancelRun(p.runId); draw(); }))) : null,
       yours.length ? h("div", { style: { marginBottom: "16px" } }, h("h3", { style: { marginBottom: "8px" } }, `Needs you (${yours.length})`), table(yours)) : null,
       runs.length ? table(runs) : h("div", { class: "empty" }, "No runs yet. Open a flow and press ▶ Run."));
   };

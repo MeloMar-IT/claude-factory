@@ -83,11 +83,21 @@ that wait for a limit, the budget or another run are not. Under each task the ta
 (Settings → Runs at the same time); the rest queue. Each queue line shows the same sentence
 and a link to what it waits for.
 
+**How long will it take?** A run that is not finished shows "Step N of M": the number of its
+step in the flow. It can jump, because steps that only run when another step jumps to them are
+counted too. A running run also shows an estimate ("Estimate: about 20 min left (usually 25–40
+min in total)"). It comes from succeeded runs of the same flow (same steps) in the same
+repository, among the newest 500 runs, and counts working time only. It appears after 3 such
+runs and starts again when steps are added, removed or renamed. It is an estimate, not a
+promise. "Taking longer than usual" means a step runs much longer than it usually does. Nothing
+is wrong yet: look at the live log.
+
 ### A run
 
 Open a run to follow it live. At the top, the **What happens next** block says who has the next
 move, what to do, why, a link to the place to do it, and when it continues by itself (if
-known). It updates live. The raw reason (for a waiting run, the approval message) is the
+known). It updates live. While the run is not finished it also shows its progress, the estimate
+and the "Taking longer than usual" hint (see "How long will it take?" above). The raw reason (for a waiting run, the approval message) is the
 **Reason** row below.
 
 ![Live log](images/run-log.png)
@@ -504,7 +514,8 @@ Look at the **Dashboard**: the **Waiting** card lists every labelled issue that 
 worked on right now (the same list is on each watcher's card on the **Watchers** page). Every
 line starts with a badge for who has the next move (**You**, **Foundry**, **Another story**, **A
 time limit**, **Something is wrong**), then the issue, what to do, why, "Continues: …" when it
-continues by itself, and a link to the place to do it (GitHub links open in a new tab). Lines
+continues by itself (it can say how long the run it waits for still needs, for example "after #88
+(about 20 min left)", and the Runs list shows it too), and a link to the place to do it (GitHub links open in a new tab). Lines
 where you have the next move come first, above the rest. During a restart wait the **Server**
 card says that the server waits to restart on a new version. Runs that started and then paused are listed too: a usage
 limit, the daily budget, a code area that another run uses, or an interruption. The same
