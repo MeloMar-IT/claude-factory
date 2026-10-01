@@ -17,8 +17,9 @@ import { installService, serviceStatus, uninstallService } from "./service.js";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
 import { restartOnNewBuild, supervise } from "./supervise.js";
+import { dropEmptyHomeVars, prepareDataHome, watchDataHome } from "./home.js";
 
-const USAGE = `Spaghetti Code Foundry (scf) — run custom flows of headless Claude Code + shell steps
+const usage = () => `Spaghetti Code Foundry (scf) — run custom flows of headless Claude Code + shell steps
 ("factory" still works as an alias for "scf".)
 
 Usage:
@@ -95,6 +96,7 @@ function report(s: RunSummary): number {
 }
 
 async function main(argv: string[]): Promise<number> {
+  dropEmptyHomeVars();
   mirrorEnvPrefixes();
   const { values, positionals } = parseArgs({
     args: argv,
@@ -128,9 +130,12 @@ async function main(argv: string[]): Promise<number> {
   const repo = resolve(values.repo ?? process.cwd());
 
   if (values.help || !cmd) {
-    process.stdout.write(USAGE);
+    process.stdout.write(usage());
     return cmd || values.help ? 0 : 1;
   }
+
+  const moved = prepareDataHome({ checkConfig: (p) => void loadConfig(p) });
+  if (moved.reason === "moved-missing" || moved.reason === "incomplete") throw new Error(moved.message);
 
   switch (cmd) {
     case "run": {
@@ -267,15 +272,19 @@ async function main(argv: string[]): Promise<number> {
         log: (m) => process.stdout.write(`${new Date().toISOString()} ${m}\n`),
       });
       const n = ctx.config().watchers.filter((w) => w.enabled).length;
-      process.stdout.write(`Spaghetti Code Foundry → ${url}\n  repo: ${repo}\n  watchers: ${n}\n  Ctrl+C to stop\n`);
+      process.stdout.write(`Spaghetti Code Foundry → ${url}\n  repo: ${repo}\n  data: ${FACTORY_HOME}\n  watchers: ${n}\n  Ctrl+C to stop\n`);
       if (cmd === "ui" && !values["no-open"] && !process.env.FACTORY_NO_OPEN && process.platform === "darwin") execFile("open", [url]);
+      const idle = () => { const q = ctx.scheduler.queue(); return q.active.length === 0 && q.pending.length === 0; };
+      const beforeExit = () => ctx.watchers.stopAll();
+      const log = (m: string) => process.stdout.write(`${new Date().toISOString()} ${m}\n`);
       restartOnNewBuild({
         distDir: dirname(fileURLToPath(import.meta.url)),
-        idle: () => { const q = ctx.scheduler.queue(); return q.active.length === 0 && q.pending.length === 0; },
+        idle,
         drain: () => ctx.watchers.stopAll(), // watchers start again with the new version
-        beforeExit: () => ctx.watchers.stopAll(),
-        log: (m) => process.stdout.write(`${new Date().toISOString()} ${m}\n`),
+        beforeExit,
+        log,
       });
+      watchDataHome({ idle, beforeExit, log });
       return new Promise<number>(() => {}); // run until killed
     }
 
@@ -326,7 +335,7 @@ async function main(argv: string[]): Promise<number> {
     }
 
     default:
-      throw new Error(`unknown command "${cmd}"\n\n${USAGE}`);
+      throw new Error(`unknown command "${cmd}"\n\n${usage()}`);
   }
 }
 

@@ -12,14 +12,21 @@
 // overlap when one is a prefix of the other. "*" overlaps every path. Areas starting with "@"
 // (e.g. "@develop") are names that only overlap themselves.
 // A lock whose run is no longer running (its run.json says so, or is gone) is ignored and removed.
-// Env: FACTORY_VAR_GITHUB_REPO (locks are per repository), FACTORY_LOCK_DIR (default
-// $FACTORY_HOME/locks or ~/.claude-factory/locks).
+// Env: FACTORY_VAR_GITHUB_REPO (locks are per repository), SCF_LOCK_DIR / FACTORY_LOCK_DIR (default
+// <data folder>/locks). The data folder is SCF_HOME, else FACTORY_HOME, else ~/.spaghetti-code-foundry
+// (or ~/.claude-factory while that is the only one that exists and has not been moved).
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
 const repo = (process.env.FACTORY_VAR_GITHUB_REPO || "local").replace(/[^\w.-]+/g, "_");
-const root = process.env.FACTORY_LOCK_DIR || join(process.env.FACTORY_HOME || join(homedir(), ".claude-factory"), "locks");
+const oldHome = join(homedir(), ".claude-factory"), newHome = join(homedir(), ".spaghetti-code-foundry");
+const explicit = process.env.SCF_HOME || process.env.FACTORY_HOME;
+const lockDir = process.env.SCF_LOCK_DIR || process.env.FACTORY_LOCK_DIR;
+if (!explicit && !lockDir && !existsSync(newHome) && existsSync(join(oldHome, "MOVED-TO-SPAGHETTI-CODE-FOUNDRY.txt")))
+  fail(`the data folder was moved to ${newHome}, but that folder is missing. Restore it, or set SCF_HOME.`);
+const home = explicit || (existsSync(newHome) || !existsSync(oldHome) ? newHome : oldHome);
+const root = lockDir || join(home, "locks");
 const dir = join(root, repo);
 mkdirSync(dir, { recursive: true });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

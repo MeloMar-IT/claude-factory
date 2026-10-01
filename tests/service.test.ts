@@ -201,6 +201,18 @@ describe("launchd service", () => {
     expect(serviceStatus(down.host)).toBe("installed but not loaded");
   });
 
+  it("status asks to reinstall when the service still logs outside the data folder", () => {
+    const dataDir = process.env.FACTORY_HOME!;
+    const h = fakeHost({ print: "state = running\npid = 42" });
+    writeFileSync(h.newPath, servicePlist({ ...opts, logFile: "/Users/me/.claude-factory/service.log" }));
+    const out = serviceStatus(h.host);
+    expect(out).toContain("installed · running (pid 42)");
+    expect(out).toContain("/Users/me/.claude-factory/service.log");
+    expect(out).toContain("scf service install");
+    writeFileSync(h.newPath, servicePlist({ ...opts, logFile: join(dataDir, "service.log") }));
+    expect(serviceStatus(h.host)).toBe("installed · running (pid 42)");
+  });
+
   it("only supports macOS", () => {
     const h = fakeHost({ platform: "linux" });
     mkdirSync(h.agentsDir, { recursive: true });
