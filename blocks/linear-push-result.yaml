@@ -8,7 +8,7 @@ steps:
     type: shell
     run: |
       case "$FACTORY_VAR_TICKET" in *[!A-Za-z0-9-]*|'') echo "set var ticket to an issue key like PROJ-123"; exit 1;; esac
-      text=$(printf "✅ claude-factory finished: branch \`%s\`\n\n%s\n" "$(git branch --show-current)" "$FACTORY_OUT_IMPLEMENT")
+      text=$(printf "✅ Spaghetti Code Foundry finished: branch \`%s\`\n\n%s\n" "$(git branch --show-current)" "$FACTORY_OUT_IMPLEMENT")
       api="${LINEAR_API_URL:-https://api.linear.app/graphql}"
       # commentCreate needs the issue's UUID, so look it up first.
       uuid=$(jq -n --arg id "$FACTORY_VAR_TICKET" '{query: "query($id: String!) { issue(id: $id) { id } }", variables: {id: $id}}' \
