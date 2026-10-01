@@ -344,8 +344,8 @@ async function generateDialog(modify) {
 
 function welcome() {
   mount(main, h("div", { class: "empty" },
-    h("h1", { style: { marginBottom: "8px" } }, "Build your own coding flows"),
-    h("p", {}, "Pick a flow on the left, start from a blank one, or describe what you want and let Claude draft it."),
+    h("h1", { style: { marginBottom: "8px" } }, "Welcome to Spaghetti Code Foundry"),
+    h("p", {}, "Build your own coding flows: pick a flow on the left, start from a blank one, or describe what you want and let Claude draft it."),
     h("div", { class: "row", style: { justifyContent: "center", marginTop: "16px" } },
       h("button", { class: "primary", onClick: () => generateDialog(false) }, "✨ Draft flow with Claude"),
       h("button", { onClick: () => openNew() }, "+ Blank flow"))));

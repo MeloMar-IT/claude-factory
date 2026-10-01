@@ -1,8 +1,10 @@
-# claude-factory
+# Spaghetti Code Foundry
+
+Formerly **claude-factory**. The command is now `scf` (`factory` still works); the data folders (`~/.claude-factory`, `<repo>/.claude-factory`), the labels (`claude-factory`, `factory:*`), `factory/…` branches and this repository keep the old name.
 
 An AI coding factory that runs on your own machine. You describe work as **flows** — YAML
 pipelines of agent steps (Claude Code or OpenAI's Codex CLI), shell steps, approvals and
-branches — and the factory runs them headlessly: from a task you type, a GitHub issue that gets
+branches — and the Foundry runs them headlessly: from a task you type, a GitHub issue that gets
 a label, a red CI build, or a schedule.
 
 ![Flow editor](docs/images/flows.png)
@@ -14,7 +16,7 @@ a label, a red CI build, or a schedule.
 - **Two agents, any model.** Steps run on Claude Code or Codex (with your ChatGPT login), on
   Anthropic, OpenAI or local models (Ollama, LM Studio). Routing rules pick the model per step,
   with fallbacks when a model hits a limit.
-- **Hands-off from GitHub.** Put one label on an issue — or a whole epic — and the factory asks
+- **Hands-off from GitHub.** Put one label on an issue — or a whole epic — and the Foundry asks
   its open questions up front, then plans (Opus, checked by Codex) and codes (Sonnet, two Codex
   reviews) each issue in dependency order, into one pull request you merge when you like. Plans
   get a 0–100 risk score; above 75 a human approves first. Watchers also answer review comments,
@@ -81,10 +83,10 @@ describe the flow you want; check the result with `scf validate`.
 | `github-issue` | Issue → plan (or questions) → code → tests → review → push → report on the issue |
 | `github-pr` | Like `github-issue`, then PR → wait for CI and fix it → learn |
 | `github-auto` | Triage first: small fix, full feature, split into sub-issues, or ask |
-| `epic-questions`, `issue-gitflow`, `release-daily` | Gitflow pipeline: questions up front; per issue plan (risk gate, size limit with automatic splitting) and code on a feature branch, merged into `develop` by the factory — in parallel for different code areas; once a day one PR `develop` → `main` |
+| `epic-questions`, `issue-gitflow`, `release-daily` | Gitflow pipeline: questions up front; per issue plan (risk gate, size limit with automatic splitting) and code on a feature branch, merged into `develop` by the Foundry — in parallel for different code areas; once a day one PR `develop` → `main` |
 | `epic-questions`, `issue-deliver`, `daily-pr` | One-label pipeline: questions up front, plan (with a risk score — a human approves above 75) and code in one run, one rolling PR with a daily report |
 | `issue-plan`, `issue-code-daily` | Older two-label pipeline: approve every plan, pause while the daily PR is open |
-| `pr-feedback` | Address review comments on a factory PR |
+| `pr-feedback` | Address review comments on a Foundry PR |
 | `ci-fix` | Fix CI that is red on the default branch |
 | `chore` | Scheduled maintenance; opens a PR only if something changed |
 | `jira-ticket`, `linear-ticket` | Tickets from Jira or Linear, code in the local repo |

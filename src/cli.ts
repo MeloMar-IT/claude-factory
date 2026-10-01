@@ -18,7 +18,7 @@ import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
 import { restartOnNewBuild, supervise } from "./supervise.js";
 
-const USAGE = `scf — run custom flows of headless Claude Code + shell steps
+const USAGE = `Spaghetti Code Foundry (scf) — run custom flows of headless Claude Code + shell steps
 ("factory" still works as an alias for "scf".)
 
 Usage:
@@ -267,7 +267,7 @@ async function main(argv: string[]): Promise<number> {
         log: (m) => process.stdout.write(`${new Date().toISOString()} ${m}\n`),
       });
       const n = ctx.config().watchers.filter((w) => w.enabled).length;
-      process.stdout.write(`claude-factory → ${url}\n  repo: ${repo}\n  watchers: ${n}\n  Ctrl+C to stop\n`);
+      process.stdout.write(`Spaghetti Code Foundry → ${url}\n  repo: ${repo}\n  watchers: ${n}\n  Ctrl+C to stop\n`);
       if (cmd === "ui" && !values["no-open"] && !process.env.FACTORY_NO_OPEN && process.platform === "darwin") execFile("open", [url]);
       restartOnNewBuild({
         distDir: dirname(fileURLToPath(import.meta.url)),

@@ -92,7 +92,7 @@ steps:
     const args = buildClaudeArgs({ prompt: "p", cwd: "/w", logFile: "/l", isolated: true, effort: "xhigh", systemPrompt: "extra" });
     expect(args).toEqual(expect.arrayContaining(["--strict-mcp-config", "--setting-sources", "project,local", "--disable-slash-commands", "--effort", "xhigh"]));
     const sys = args[args.indexOf("--append-system-prompt") + 1]!;
-    expect(sys).toContain("running unattended as one step of a claude-factory flow");
+    expect(sys).toContain("running unattended as one step of a Spaghetti Code Foundry flow");
     expect(sys).toContain("extra");
     expect(buildClaudeArgs({ prompt: "p", cwd: "/w", logFile: "/l" })).not.toContain("--setting-sources");
     expect(buildCodexArgs({ prompt: "p", cwd: "/w", logFile: "/l", sandbox: "read-only", effort: "max" })).toContain('model_reasoning_effort="xhigh"');

@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createServer } from "node:http";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -6,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ConfigSchema, type Config } from "../src/config.js";
 import { learningsFile, resumeRun, runFlow } from "../src/engine/runner.js";
 import { dockerCommand } from "../src/engine/guards.js";
-import { liveLogFile } from "../src/engine/state.js";
+import { liveLogFile, saveRun } from "../src/engine/state.js";
 import { mirrorEnvPrefixes, withScfAliases } from "../src/engine/template.js";
 import { notifyRun } from "../src/notify.js";
 import { parseFlow } from "../src/flow/load.js";
@@ -215,7 +216,7 @@ steps:
   - {id: to_feature, type: shell, run: git push -q origin HEAD:refs/heads/factory/x 2>&1}
 `, { config: baseConfig({ protected_branches: ["main", "release/*"] }) });
     expect(s.history[0]!.ok).toBe(false);
-    expect(s.history[0]!.output).toContain("protected branch 'main' is blocked");
+    expect(s.history[0]!.output).toContain("Spaghetti Code Foundry: pushing to protected branch 'main' is blocked");
     expect(s.history[1]!.ok).toBe(true);
     expect(s.status).toBe("succeeded");
   });
@@ -317,5 +318,31 @@ steps:
       process.env.FACTORY_NO_NOTIFY = saved;
     }
     expect(readFileSync(out, "utf8")).toBe("succeeded succeeded");
+  });
+
+  it("notifications are titled Foundry · flow status", async () => {
+    const s = await start("name: t\nworkspace: inplace\nsteps:\n  - {id: a, type: shell, run: 'true'}\n");
+    let body = "";
+    const server = createServer((req, res) => {
+      req.on("data", (c) => (body += c));
+      req.on("end", () => res.end("ok"));
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const port = (server.address() as { port: number }).port;
+    const saved = process.env.FACTORY_NO_NOTIFY;
+    delete process.env.FACTORY_NO_NOTIFY;
+    try {
+      await notifyRun(baseConfig({ notify: { macos: false, slack_webhook: `http://127.0.0.1:${port}/hook` } }), s);
+    } finally {
+      process.env.FACTORY_NO_NOTIFY = saved;
+      server.close();
+    }
+    expect(JSON.parse(body).text.startsWith("*Foundry · t succeeded*\n")).toBe(true);
+  });
+
+  it("names the product when a run is too old to resume", async () => {
+    const s = await start("name: t\nworkspace: inplace\nsteps:\n  - {id: a, type: shell, run: 'true'}\n");
+    saveRun({ ...s, flowDef: undefined } as unknown as typeof s);
+    await expect(resume(s.runId)).rejects.toThrow("older version of Spaghetti Code Foundry");
   });
 });

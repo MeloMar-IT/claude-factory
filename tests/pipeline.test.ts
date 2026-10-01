@@ -175,7 +175,9 @@ describe("label-driven issue pipeline", () => {
     expect(run.history.filter((h) => h.id === "fix_tests")).toHaveLength(3);
     const log = gh.ghLog();
     expect(log).toMatch(/issue edit 6 .*--add-label Factory_ERROR/);
-    expect(log).toContain("could not finish this issue");
+    expect(log).toContain("🤖 **Spaghetti Code Foundry** could not finish this issue");
+    expect(log).not.toContain("**claude-factory** could not finish");
+    expect(log).toMatch(new RegExp(`could not finish this issue[\\s\\S]*<!-- claude-factory run=${run.runId} -->`));
     expect(log).toContain("Last failing step: `run_tests` (attempt 4)");
     expect(log).toContain("result: FAILED");
     expect(gh.remoteGit("branch", "--list", "factory/*").trim()).toBe(""); // nothing was pushed

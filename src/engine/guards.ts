@@ -8,13 +8,13 @@ import { FACTORY_HOME } from "../flow/load.js";
 const ZERO = "0000000000000000000000000000000000000000";
 
 const PRE_PUSH = `#!/bin/sh
-# Installed by claude-factory: refuse pushes to protected branches, and pushes that add secrets.
+# Installed by Spaghetti Code Foundry: refuse pushes to protected branches, and pushes that add secrets.
 while read local_ref local_sha remote_ref remote_sha; do
   branch=\${remote_ref#refs/heads/}
   set -f
   for pattern in $FACTORY_PROTECTED_BRANCHES; do
     case "$branch" in
-      $pattern) echo "claude-factory: pushing to protected branch '$branch' is blocked" >&2; exit 1 ;;
+      $pattern) echo "Spaghetti Code Foundry: pushing to protected branch '$branch' is blocked" >&2; exit 1 ;;
     esac
   done
   set +f
