@@ -100,7 +100,7 @@ describe("names that stay", () => {
     expect(readme).toContain("Formerly **claude-factory**");
     expect(guide).toContain("Formerly **claude-factory**");
     for (const d of [readme, guide, authoring]) expect(d).not.toMatch(/\b[Tt]he\s+factory\b/);
-    expect(readme).toContain("git clone https://github.com/MeloMar-IT/claude-factory.git");
+    expect(readme).toContain("git clone https://github.com/MeloMar-IT/spaghetti-code-foundry.git\ncd spaghetti-code-foundry\n");
     expect(guide).toContain("`~/.claude-factory/config.yaml`");
     expect(guide).toContain("`factory:working`");
   });
@@ -115,6 +115,36 @@ describe("names that stay", () => {
     // tools/area-lock also reads SCF_HOME and SCF_LOCK_DIR (it picks the data folder itself)
     for (const f of [...walk("flows"), ...walk("tools")]) {
       expect(readFileSync(f, "utf8").replace(/SCF_(HOME|LOCK_DIR)/g, ""), f).not.toContain("SCF_");
+    }
+  });
+});
+
+describe("repository links", () => {
+  const REPO = "https://github.com/MeloMar-IT/spaghetti-code-foundry";
+  const read = (f: string) => readFileSync(f, "utf8");
+
+  it("package.json points to the new repository", () => {
+    const pkg = readJson("package.json");
+    expect(pkg.repository).toEqual({ type: "git", url: "git+" + REPO + ".git" });
+    expect(pkg.homepage).toBe(REPO + "#readme");
+    expect(pkg.bugs).toEqual({ url: REPO + "/issues" });
+  });
+
+  it("no link to the old repository is left", () => {
+    const files = ["README.md", "CLAUDE.md", "package.json", ...walk("docs").filter((p) => p.endsWith(".md"))];
+    for (const f of files) expect(read(f), f).not.toMatch(/github\.com[/:]MeloMar-IT\/claude-factory/i);
+    expect(read("README.md")).toContain(`](${REPO})`);
+  });
+
+  it("README and guide tell existing clones to update the remote", () => {
+    const [readme, guide] = [read("README.md"), read("docs/USER_GUIDE.md")];
+    expect(readme).toContain(`git remote set-url origin ${REPO}.git`);
+    expect(readme).toContain("git remote set-url origin git@github.com:MeloMar-IT/spaghetti-code-foundry.git");
+    expect(guide).toContain(`git remote set-url origin ${REPO}.git`);
+    for (const text of [readme, guide]) {
+      expect(text).not.toMatch(/repository keep the old name/);
+      const formerly = text.split("\n").find((l) => l.startsWith("Formerly **claude-factory**"));
+      expect(formerly).toContain("`~/.spaghetti-code-foundry`");
     }
   });
 });

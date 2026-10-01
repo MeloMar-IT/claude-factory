@@ -5,7 +5,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/MeloMar-IT/claude-factory.git"
+    "url": "git+https://github.com/MeloMar-IT/spaghetti-code-foundry.git"
+  },
+  "homepage": "https://github.com/MeloMar-IT/spaghetti-code-foundry#readme",
+  "bugs": {
+    "url": "https://github.com/MeloMar-IT/spaghetti-code-foundry/issues"
   },
   "type": "module",
   "bin": {
