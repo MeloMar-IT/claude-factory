@@ -417,6 +417,157 @@ describe("watcher", () => {
     await settle();
   });
 
+  const slowFlow = () => {
+    const dir = join(gh.tmp, ".claude-factory", "flows");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "slow.yaml"), "name: slow\nworkspace: inplace\nsteps:\n  - {id: work, type: shell, run: 'sleep 1'}\n");
+  };
+  const slowWatcher = (over: Record<string, unknown> = {}) =>
+    new Watcher(WatcherSchema.parse({ id: "w", github_repo: "acme/app", flow: "slow", ...over }), {
+      scheduler, runsDir: join(gh.tmp, "runs"), repo: gh.tmp, log: (l) => lines.push(l),
+    });
+
+  it("sets the working label on a run that works while the issue says failed, once", async () => {
+    slowFlow();
+    issues([8]);
+    const w = slowWatcher();
+    await w.tick();
+    await new Promise((r) => setTimeout(r, 300));
+    issues([8, "factory:failed"]);
+    const before = gh.ghLog().length;
+    await w.tick();
+    issues([8, "factory:working"]);
+    await w.tick();
+    const log = gh.ghLog().slice(before);
+    expect(log.match(/issue edit 8 .*--add-label factory:working/g)).toHaveLength(1);
+    expect(w.status.lastActions.some((a) => a.includes("#8 label → factory:working"))).toBe(true);
+    expect(w.status.lastError).toBeUndefined();
+    await settle();
+    expect(gh.ghLog().match(/--add-label factory:done/g)).toHaveLength(1);
+  });
+
+  it("leaves the done label alone and corrects a label that does not match the run", async () => {
+    issues([8]);
+    const w = watcher();
+    await w.tick();
+    await settle();
+    const run = runFor("8");
+    saveRun({ ...run, status: "failed", reason: "boom" });
+    issues([8, "factory:done"]);
+    let before = gh.ghLog().length;
+    await w.tick();
+    expect(gh.ghLog().slice(before)).not.toMatch(/issue edit 8 /);
+    issues([8, "factory:waiting-approval"]);
+    before = gh.ghLog().length;
+    await w.tick();
+    expect(gh.ghLog().slice(before)).toMatch(/issue edit 8 .*--add-label factory:failed/);
+  });
+
+  it("reports an issue closed on GitHub while its run works, and changes nothing", async () => {
+    slowFlow();
+    issues([8]);
+    const w = slowWatcher();
+    await w.tick();
+    await new Promise((r) => setTimeout(r, 300));
+    issues();
+    process.env.FAKE_GH_CLOSED_ISSUES = JSON.stringify([{ number: 8, title: "issue 8", state: "CLOSED", labels: [{ name: "factory:working" }] }]);
+    const before = gh.ghLog().length;
+    await w.tick();
+    expect(w.status.holds).toMatchObject([{ issue: 8, next: { kind: "closed_elsewhere", who: "You", where: { url: `#/runs/${runFor("8").runId}` } } }]);
+    expect(gh.ghLog().slice(before)).not.toMatch(/issue edit 8 /);
+    await settle();
+  });
+
+  it("does not report a closed issue whose run closed it itself", async () => {
+    const dir = join(gh.tmp, ".claude-factory", "flows");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "slow.yaml"), "name: slow\nworkspace: inplace\nsteps:\n  - {id: first, type: shell, run: 'true'}\n  - {id: report, type: shell, run: 'gh issue close 8 && sleep 1'}\n");
+    issues([8]);
+    const w = slowWatcher();
+    await w.tick();
+    await new Promise((r) => setTimeout(r, 300));
+    issues();
+    process.env.FAKE_GH_CLOSED_ISSUES = JSON.stringify([{ number: 8, title: "issue 8", state: "CLOSED", labels: [{ name: "factory:working" }] }]);
+    await w.tick();
+    expect(w.status.holds).toEqual([]);
+    await settle();
+  });
+
+  it("records the last successful check, and a failed closed-issue scan is the check's error", async () => {
+    issues([3, "factory:done"]);
+    const w = watcher();
+    await w.tick();
+    const ok = w.status.lastOk;
+    expect(ok).toBeDefined();
+    process.env.FAKE_GH_CLOSED_ISSUES = "not json";
+    await w.tick();
+    expect(w.status.lastError).toMatch(/tidying closed issues/);
+    expect(w.status.lastOk).toBe(ok);
+    expect(w.status.holds).toEqual([]);
+  });
+
+  it("gives up a check that hangs, so the next check works again", async () => {
+    const w = watcher();
+    w.checkTimeoutMs = 200;
+    let hang = true;
+    (w as unknown as { tickIssues: () => Promise<void> }).tickIssues = () => (hang ? new Promise(() => {}) : Promise.resolve());
+    issues([3, "factory:done"]);
+    await w.tick();
+    expect(w.status.lastError).toMatch(/was given up/);
+    expect(w.status.lastOk).toBeUndefined();
+    hang = false;
+    await w.tick();
+    expect(w.status.lastError).toBeUndefined();
+    expect(w.status.lastOk).toBeDefined();
+  });
+
+  it("reports a closed issue whose fresh run is queued next to an older run", async () => {
+    slowFlow();
+    issues([8]);
+    const w = slowWatcher();
+    await w.tick();
+    await settle();
+    const old = runFor("8");
+    saveRun({ ...old, status: "failed", reason: "boom" });
+    // Restart: remove the failed label; concurrency 2 is taken by two other slow runs, so the new run stays queued.
+    const { flow } = (await import("../src/flow/load.js")).loadFlow("slow", gh.tmp);
+    for (const x of ["a", "b"]) scheduler.submit({ kind: "run", flow, task: "", repo: gh.tmp, vars: { github_repo: "acme/other", issue: x } }, { lockKey: `other#${x}` });
+    issues([8]);
+    await w.tick();
+    const queued = w.tracked[0]!.runId;
+    expect(queued).toBeDefined();
+    expect(queued).not.toBe(old.runId);
+    issues();
+    process.env.FAKE_GH_CLOSED_ISSUES = JSON.stringify([{ number: 8, title: "issue 8", state: "CLOSED", labels: [{ name: "factory:failed" }] }]);
+    const before = gh.ghLog().length;
+    await w.tick();
+    expect(w.status.holds).toMatchObject([{ issue: 8, next: { kind: "closed_elsewhere", runId: queued } }]);
+    expect(gh.ghLog().slice(before)).not.toMatch(/issue edit 8 /);
+    await settle();
+  });
+
+  it("reports an invalid interval as the watcher's error", async () => {
+    const w = watcher({ every: "soon" });
+    await w.tick();
+    expect(w.status.lastError).toMatch(/invalid interval/);
+    expect(w.status.lastOk).toBeUndefined();
+  });
+
+  it("cancels a run that waits for approval", async () => {
+    const dir = join(gh.tmp, ".claude-factory", "flows");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "slow.yaml"), "name: slow\nworkspace: inplace\nsteps:\n  - {id: ok, type: approval, message: go}\n");
+    issues([8]);
+    const w = slowWatcher();
+    await w.tick();
+    await settle();
+    const run = runFor("8");
+    expect(run.status).toBe("waiting");
+    expect(scheduler.cancel(run.runId)).toBe(true);
+    expect(loadRun(join(gh.tmp, "runs"), run.runId)).toMatchObject({ status: "cancelled", reason: "cancelled by user" });
+    expect(scheduler.cancel(run.runId)).toBe(false);
+  });
+
   it("tracks every issue with its run", async () => {
     issues([3, "factory:done"], [5]);
     const w = watcher();

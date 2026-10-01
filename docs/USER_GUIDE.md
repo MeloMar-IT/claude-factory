@@ -133,7 +133,8 @@ a **What happens next** block with **You** as who and the approval message as th
   stopped, with everything it already did kept. Fix the cause first (e.g. answer the question,
   fix the environment), then press **↻ Resume**.
 - **Retry from step…** re-runs from any earlier step.
-- **Cancel** stops a running run; you can resume it later.
+- **Cancel** stops a running run, or a run that waits for approval; you can resume it later.
+  Removing a queued approval from the queue cancels that run too (Resume brings the approval back).
 
 Runs survive restarts: if the Foundry stops mid-run, the run is marked *interrupted* and can be
 resumed (watchers do this automatically).
@@ -411,6 +412,15 @@ Each watcher's card on the **Watchers** page lists the labelled issues it is *no
 right now under **What happens next**, with the same lines as the Dashboard. A watcher error is
 a line too; the raw error is under **Error details**.
 
+Every check also compares the label with the newest run and fixes what is safe to fix: a run that
+is working (for example approved or resumed on its page) gets `factory:working`, and a label that
+does not match the run (say `factory:failed` while the run waits for approval) is corrected. A
+`factory:done` label is left alone, and an issue without a status label starts over. If you close
+an issue on GitHub while its run is still working or waits for approval, nothing is changed; the
+watcher says so (see [Why is nothing happening?](#why-is-nothing-happening)) and you decide
+whether to cancel the run. Every label change is in the card's **Recent activity**. Next to the
+repository the card shows **last successful check …**, also when the newest check failed.
+
 More options are set in `~/.spaghetti-code-foundry/config.yaml` (the form keeps them when you edit the
 watcher). This is the watcher for the [one-label pipeline](#the-label-pipeline-one-label--plan--code--one-pull-request):
 
@@ -582,6 +592,12 @@ them for every run and issue at `GET /api/next` (and as `next` on each run). The
   later; the label stays `Factory_working`.
 - **The Foundry isn't running.** Watchers only run while `scf ui` / `scf serve` runs.
 - **It has an excluded label** such as `geni`.
+- **The issue was closed on GitHub, but its run is still working or waits for approval.** The
+  line says so and links to the run page. Cancel the run there if the work is no longer wanted;
+  if the issue was closed by the run itself (report, split, merge) you see nothing.
+- **The watcher has not checked for a long time** (more than three times its interval). The line
+  says since when ("has not checked since 11:20"). Press **Check now** on the Watchers page; the
+  line is gone after the next check.
 
 #### Branches: gitflow (recommended) or one rolling pull request
 
@@ -806,7 +822,9 @@ failing output is in the daily report comment. It becomes ready again when a lat
 
 **A watcher shows an error.** Check that `gh auth status` works in the terminal where the
 Foundry runs and that you have access to the repository. **Check now** on the Watchers page
-retries immediately.
+retries immediately. The same line appears when the scan of closed issues fails or the watcher's
+interval is wrong, and a "has not checked since …" line means no check finished for a long time
+(a check that takes over 10 minutes is given up).
 
 **"codex CLI not found" or "not logged in".** Install Codex (`npm i -g @openai/codex`, or the
 ChatGPT desktop app) and run `codex login`. The Models page shows the status.
