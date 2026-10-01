@@ -229,6 +229,63 @@ describe("watcher", () => {
     expect(capped.status.holds![0]!.reason).not.toContain("$");
   });
 
+  it("holds carry the time they wait since", async () => {
+    issues([4, "factory:needs-info"]);
+    process.env.FAKE_GH_COMMENTS = JSON.stringify({ comments: [
+      { author: { login: "bot" }, body: "old <!-- claude-factory run=x -->", createdAt: "2026-01-01T00:00:00Z" },
+      { author: { login: "bot" }, body: "**Q1.** a? <!-- claude-factory run=x -->", createdAt: "2026-01-02T00:00:00Z" },
+    ] });
+    const w = watcher();
+    await w.tick();
+    expect(w.status.holds).toMatchObject([{ issue: 4, next: { kind: "questions" }, since: "2026-01-02T00:00:00Z" }]);
+    await watcher().tick(); // a new server sees the same GitHub state
+    const again = watcher();
+    await again.tick();
+    expect(again.status.holds![0]!.since).toBe("2026-01-02T00:00:00Z");
+  });
+
+  it("a hold without a time keeps its first-seen time", async () => {
+    issues([8, "factory:failed"]);
+    const w = watcher();
+    await w.tick();
+    const first = w.status.holds![0]!;
+    expect(first.next.kind).toBe("failed");
+    expect(first.since).toBeUndefined();
+    expect(first.seen).toBeDefined();
+    await new Promise((r) => setTimeout(r, 15));
+    await w.tick();
+    expect(w.status.holds![0]!.seen).toBe(first.seen);
+  });
+
+  it("pause_while_pr_open gives pausedBy and the release time", async () => {
+    process.env.FAKE_GH_PRS = JSON.stringify([{ number: 17, headRefName: "factory/x", state: "OPEN", url: "https://github.com/acme/app/pull/17", title: "Daily", createdAt: "2026-09-30T08:00:00Z" }]);
+    issues([5]);
+    const w = watcher({ pause_while_pr_open: "factory/" });
+    await w.tick();
+    expect(w.status.pausedBy).toEqual({ number: 17, url: "https://github.com/acme/app/pull/17", title: "Daily", createdAt: "2026-09-30T08:00:00Z" });
+    const release = w.status.holds!.find((h) => h.next.kind === "release")!;
+    expect(release.since).toBe("2026-09-30T08:00:00Z");
+    process.env.FAKE_GH_PRS = "[]";
+    await w.tick();
+    expect(w.status.pausedBy).toBeUndefined();
+  });
+
+  it("errorSince is set on the first failing check, kept, and cleared by a good one", async () => {
+    process.env.FAKE_GH_ISSUES = "not json";
+    const w = watcher();
+    await w.tick();
+    expect(w.status.lastError).toBeDefined();
+    const since = w.status.errorSince;
+    expect(since).toBeDefined();
+    await new Promise((r) => setTimeout(r, 15));
+    await w.tick();
+    expect(w.status.errorSince).toBe(since);
+    issues();
+    await w.tick();
+    expect(w.status.lastError).toBeUndefined();
+    expect(w.status.errorSince).toBeUndefined();
+  });
+
   it("a failed issue names both ways to retry", async () => {
     issues([8]);
     const w = watcher();

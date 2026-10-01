@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { stepLogFile } from "../engine/execute.js";
 import type { RunSummary } from "../engine/state.js";
 import { nextStep, releaseAtFor, runNextStep, trackingWatcher, type NextStep } from "../next-step.js";
-import { labelNames, type WatcherStatus } from "../queue/watcher.js";
+import { labelNames, type Hold, type WatcherStatus } from "../queue/watcher.js";
 import type { WatcherConfig } from "../config.js";
 import { supersededRuns } from "../stats.js";
 import { send } from "./http.js";
@@ -91,9 +91,25 @@ export function watchersWithNext(ctx: ApiContext): (WatcherConfig & { status?: W
     : w));
 }
 
-/** Records for the server, the watchers, every tracked issue and every run. */
-export function allNext(ctx: ApiContext): { server: NextStep[]; watchers: NextStep[]; issues: NextStep[]; runs: NextStep[] } {
-  const list = ctx.scheduler.list(Infinity); // every record, not just the newest runs
+/** A record and what the Your turn page needs to know about it. */
+export interface Entry {
+  next: NextStep;
+  /** A real time it waits since (from GitHub or the run). */
+  since?: string;
+  /** When this server first saw it (no real time known). */
+  seen?: string;
+  watcher?: string;
+  prTitle?: string;
+}
+
+/** The time a run's record is about: since when it waits, or when it ended. */
+export const runSince = (run: RunSummary): string => run.waiting?.since ?? run.finishedAt ?? run.startedAt;
+
+/**
+ * Every record the server knows: itself, the watchers, every issue a watcher tracks (one per
+ * watcher) and a function for the runs. `list` is the loaded runs.
+ */
+export function collectNext(ctx: ApiContext, list: RunSummary[]) {
   const next = nextFor(ctx, list);
   const q = ctx.scheduler.queue();
   const tracked = ctx.watchers.tracked();
@@ -101,15 +117,21 @@ export function allNext(ctx: ApiContext): { server: NextStep[]; watchers: NextSt
 
   const server = ctx.restart ? [nextStep("restart", {}, { restartWhy })] : [];
 
-  const watchers: NextStep[] = [];
+  const holdEntry = (t: (typeof tracked)[number], h: Hold): Entry => {
+    const by = t.status.pausedBy;
+    // A hold about a run is as old as the run's wait; "seen" starts again after a restart.
+    const run = h.next.runId ? list.find((r) => r.runId === h.next.runId) : undefined;
+    return { next: h.next, since: h.since ?? (run ? runSince(run) : undefined), seen: h.seen, watcher: t.watcher.id, prTitle: by && by.url === h.next.where.url ? by.title : undefined };
+  };
+  const watchers: Entry[] = [];
   for (const t of tracked) {
-    if (t.status.lastError) watchers.push(watcherError(t.watcher.github_repo, t.status.lastError));
-    for (const h of t.status.holds ?? []) if (!h.issue) watchers.push(h.next);
+    if (t.status.lastError) watchers.push({ next: watcherError(t.watcher.github_repo, t.status.lastError), since: t.status.errorSince, watcher: t.watcher.id });
+    for (const h of t.status.holds ?? []) if (!h.issue) watchers.push(holdEntry(t, h));
   }
 
   const byRun = new Map(list.map((r) => [r.runId, r]));
   const live = new Set([...q.active.map((a) => a.runId), ...q.pending.map((p) => p.runId)]);
-  const picked = new Map<string, { rank: number; rec: NextStep }>();
+  const issues: (Entry & { key: string; rank: number })[] = [];
   for (const t of tracked) {
     for (const i of t.issues) {
       const base = { repo: t.watcher.github_repo, issue: i.issue, title: i.title, runId: i.runId };
@@ -117,28 +139,40 @@ export function allNext(ctx: ApiContext): { server: NextStep[]; watchers: NextSt
       const isLive = !!i.runId && live.has(i.runId);
       const hold = (t.status.holds ?? []).find((h) => h.issue === i.issue);
       const data = { watched: true, issueUrl: `https://github.com/${t.watcher.github_repo}/issues/${i.issue}` };
-      let rec: NextStep;
+      let e: Entry;
       const queuedJob = i.runId ? q.pending.find((p) => p.runId === i.runId) : undefined;
-      if (run && isLive) rec = next(run);
-      else if (queuedJob && !run) rec = nextStep(queuedJob.waitingFor ? "one_at_a_time" : "queued", base, { ...data, blockingRun: queuedJob.waitingFor });
-      else if (hold) rec = hold.next;
-      else if (run) rec = next(run);
-      else if (i.done) rec = nextStep("done", base, data);
-      else rec = nextStep(ctx.restart ? "restart" : "starting", base, { ...data, restartWhy });
-      const key = `${base.repo}#${i.issue}`;
-      const rank = isLive ? 0 : i.done ? 2 : 1;
-      const have = picked.get(key);
-      if (!have || rank < have.rank) picked.set(key, { rank, rec });
+      if (run && isLive) e = { next: next(run), since: runSince(run) };
+      else if (queuedJob && !run) e = { next: nextStep(queuedJob.waitingFor ? "one_at_a_time" : "queued", base, { ...data, blockingRun: queuedJob.waitingFor }) };
+      else if (hold) e = holdEntry(t, hold);
+      else if (run) e = { next: next(run), since: runSince(run) };
+      else if (i.done) e = { next: nextStep("done", base, data) };
+      else e = { next: nextStep(ctx.restart ? "restart" : "starting", base, { ...data, restartWhy }) };
+      issues.push({ ...e, watcher: t.watcher.id, key: `${base.repo}#${i.issue}`, rank: isLive ? 0 : i.done ? 2 : 1 });
     }
   }
 
-  const runs = list.map(next);
-  for (const p of q.pending) {
-    if (byRun.has(p.runId) || p.kind !== "run") continue;
-    runs.push(jobNext(p));
-  }
+  const runs = () => {
+    const out = list.map(next);
+    for (const p of q.pending) {
+      if (byRun.has(p.runId) || p.kind !== "run") continue;
+      out.push(jobNext(p));
+    }
+    return out;
+  };
 
-  return { server, watchers, issues: [...picked.values()].map((p) => p.rec), runs };
+  return { server, watchers, issues, runs, next };
+}
+
+/** Records for the server, the watchers, every tracked issue and every run. */
+export function allNext(ctx: ApiContext): { server: NextStep[]; watchers: NextStep[]; issues: NextStep[]; runs: NextStep[] } {
+  const c = collectNext(ctx, ctx.scheduler.list(Infinity)); // every record, not just the newest runs
+  // One record per issue: a running one first, a finished one last; the first watcher wins a tie.
+  const picked = new Map<string, { rank: number; rec: NextStep }>();
+  for (const i of c.issues) {
+    const have = picked.get(i.key);
+    if (!have || i.rank < have.rank) picked.set(i.key, { rank: i.rank, rec: i.next });
+  }
+  return { server: c.server, watchers: c.watchers.map((w) => w.next), issues: [...picked.values()].map((p) => p.rec), runs: c.runs() };
 }
 
 export const nextRoutes: Route = async (ctx, _req, res, seg, method) => {

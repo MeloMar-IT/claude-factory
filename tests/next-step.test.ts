@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { WatcherSchema } from "../src/config.js";
 import type { RunSummary } from "../src/engine/state.js";
-import { COMMENT_KINDS, commentText, countQuestions, nextStep, nextStepEnv, releaseAtFor, runNextStep, trackingWatcher, type NextKind, type NextStep } from "../src/next-step.js";
+import { COMMENT_KINDS, commentText, countQuestions, nextStep, nextStepEnv, releaseAtFor, releaseWatchersFor, runNextStep, trackingWatcher, type NextKind, type NextStep } from "../src/next-step.js";
 
 const run = (over: Partial<RunSummary> = {}) =>
   ({
@@ -247,6 +247,22 @@ describe("runNextStep", () => {
     const bare = { runId: "x", status: "stopped", reason: "boom" } as unknown as RunSummary;
     expect(() => runNextStep(bare)).not.toThrow();
     expect(() => releaseAtFor([], { ...bare, status: "succeeded" } as RunSummary)).not.toThrow();
+  });
+});
+
+describe("releaseWatchersFor", () => {
+  const w = (over: Record<string, unknown>) => WatcherSchema.parse({ id: "x", github_repo: "acme/app", task: "t", source: "schedule", flow: "release-daily", at: "17:00", ...over });
+  const flowRun = (...ids: string[]) => run({ flowDef: { steps: ids.map((id) => ({ id })) } as unknown as RunSummary["flowDef"] });
+
+  it("finds the schedule watcher of the flow's delivery step", () => {
+    const rel = w({ id: "rel" });
+    expect(releaseWatchersFor([rel, w({ id: "other", flow: "daily-pr" })], flowRun("code", "push_develop"))).toEqual([rel]);
+  });
+  it("finds none without the step, for another repo, when disabled or without a time", () => {
+    expect(releaseWatchersFor([w({})], flowRun("code"))).toEqual([]);
+    expect(releaseWatchersFor([w({ github_repo: "acme/other" })], flowRun("push_develop"))).toEqual([]);
+    expect(releaseWatchersFor([w({ enabled: false })], flowRun("push_develop"))).toEqual([]);
+    expect(releaseWatchersFor([w({ at: undefined })], flowRun("push_develop"))).toEqual([]);
   });
 });
 

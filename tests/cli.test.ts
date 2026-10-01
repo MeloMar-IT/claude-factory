@@ -169,6 +169,18 @@ describe("data folder", () => {
     writeFileSync(join(oldDir, "flows", "mine.yaml"), FLOW);
   };
 
+  it("scf run writes who started the run", () => {
+    const { home, oldDir } = withHome();
+    seedOld(oldDir);
+    const repo = join(home, "repo");
+    mkdirSync(repo);
+    const runs = join(home, "runs");
+    const r = scf(["run", "mine", "--repo", repo, "--runs-dir", runs], home);
+    expect(r.status).toBe(0);
+    const [id] = readdirSync(runs);
+    expect(readJson(join(runs, id!, "run.json")).source).toBe("cli");
+  });
+
   it("scf flows moves ~/.claude-factory to ~/.spaghetti-code-foundry and keeps the backup", () => {
     const { home, oldDir, newDir } = withHome();
     seedOld(oldDir);

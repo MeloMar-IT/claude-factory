@@ -149,6 +149,7 @@ async function main(argv: string[]): Promise<number> {
         repo,
         runsDir: resolve(values["runs-dir"] ?? join(FACTORY_HOME, "runs")),
         vars: parseVars(values.var),
+        source: "cli",
         log: (m) => process.stdout.write(m + "\n"),
       });
       return report(summary);

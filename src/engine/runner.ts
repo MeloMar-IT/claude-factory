@@ -47,6 +47,8 @@ export interface RunOptions extends CommonOptions {
   vars?: Record<string, string>;
   /** Pre-allocated run id (e.g. so a UI can subscribe before the run starts). */
   runId?: string;
+  /** Who started the run; saved in run.json. */
+  source?: string;
 }
 
 export interface ResumeOptions extends CommonOptions {
@@ -93,6 +95,7 @@ export async function runFlow(flow: Flow, opts: RunOptions): Promise<RunSummary>
     history: [],
     state: { next: null, steps: {}, visits: {} },
     pid: process.pid,
+    ...(opts.source ? { source: opts.source } : {}),
   };
   claimRunStart(opts.runsDir, () => {
     mkdirSync(join(runDir, "logs"), { recursive: true });

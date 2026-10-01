@@ -8,6 +8,7 @@ import { renderSettings, renderWatchers } from "./admin.js";
 import { refreshModelLists, renderModels } from "./models.js";
 import { renderDashboard } from "./dashboard.js";
 import { renderRunDetail, renderRunsList } from "./runs.js";
+import { renderYourTurn, startBadge, startHash } from "./turn.js";
 
 const sidebar = document.getElementById("sidebar");
 const main = document.getElementById("main");
@@ -365,7 +366,8 @@ async function route() {
   S.cleanup = null;
   document.querySelectorAll("[data-nav]").forEach((a) => a.classList.toggle("active", a.dataset.nav === (section === "new" ? "flows" : section)));
   try {
-    if (section === "library") await renderLibrary(main);
+    if (section === "your-turn") S.cleanup = await renderYourTurn(main);
+    else if (section === "library") await renderLibrary(main);
     else if (section === "dashboard") await renderDashboard(main);
     else if (section === "watchers") await renderWatchers(main);
     else if (section === "settings") await renderSettings(main);
@@ -394,4 +396,7 @@ S.info = await api.info();
 document.getElementById("repo").textContent = S.info.repo;
 await refreshFlows();
 void refreshModelLists();
+// When something waits for the owner, the app opens on the Your turn page.
+const to = startHash(location.hash, await startBadge());
+if (to) history.replaceState(null, "", to);
 route();
