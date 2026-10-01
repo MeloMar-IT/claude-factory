@@ -48,7 +48,7 @@ steps:
       - $url"
       done < subtasks.txt
       rm -f subtasks.txt
-      { echo "🤖 **claude-factory** split this ticket into smaller ones:"; printf '%s\n' "$created"
+      { echo "🤖 **Spaghetti Code Foundry** split this ticket into smaller ones:"; printf '%s\n' "$created"
         [ -n "$label" ] && echo && echo "They are labelled \`claude-factory\` and will be picked up automatically."
         echo; echo "<!-- claude-factory run=$FACTORY_RUN_ID -->"; } \
         | gh issue comment "$N" --repo "$R" --body-file -

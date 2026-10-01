@@ -9,7 +9,7 @@ steps:
     type: shell
     run: |
       {
-        echo "✋ **claude-factory is ready to push** branch \`$(git branch --show-current)\`:"
+        echo "✋ **Spaghetti Code Foundry is ready to push** branch \`$(git branch --show-current)\`:"
         echo; git log --oneline origin/HEAD..HEAD 2>/dev/null
         echo; echo '```'; git diff --stat origin/HEAD 2>/dev/null | tail -20; echo '```'
         echo; echo "Reply **/approve** to continue or **/reject** to stop (optionally followed by a note)."

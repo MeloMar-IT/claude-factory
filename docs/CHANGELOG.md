@@ -4,6 +4,7 @@ Changes that are merged but not yet in a release go under **Unreleased**. Newest
 
 ## Unreleased
 
+- Comments from the ticket flows (`github-issue`, `github-pr`, `github-auto`) say "Spaghetti Code Foundry": questions, plan, approval request, result and split. The hidden `<!-- claude-factory run=… -->` marker and the `claude-factory` label stay.
 - The web UI, the app's own messages (CLI help and banner, notifications, the push-protection message, label descriptions, the failure comment on issues) and the docs say "Spaghetti Code Foundry". Label names, folders, branch names and the hidden `<!-- claude-factory` marker stay as they are.
 
 - New command `scf` (Spaghetti Code Foundry) and package name `spaghetti-code-foundry`; `factory` keeps working and prints a short note. Settings work as `SCF_…` or `FACTORY_…` (`SCF_…` wins); steps and notify commands get every `FACTORY_…` variable also as `SCF_…`. The login service is now `com.spaghetti-code-foundry.server` — run `scf service install` once to replace the old one; if that fails, the old service is put back.

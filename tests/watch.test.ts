@@ -140,6 +140,37 @@ describe("watcher", () => {
     expect(done.history.find((h) => h.id === "approve")!.output).toBe("approved by marcel: ship it");
   });
 
+  it("the approval request github-pr posts keeps the old marker, and /approve on it resumes the run", async () => {
+    issues([6]);
+    const w = watcher({ flow: "github-pr", vars: { test_cmd: "test -f feature.txt", require_approval: "yes", ci_settle_sec: "0" } });
+    await w.tick();
+    await settle();
+    const run = runFor("6");
+    expect(run.status).toBe("waiting");
+
+    // The comment the flow really posted (the fake gh logs every comment body).
+    const log = gh.ghLog();
+    const marker = `<!-- claude-factory run=${run.runId} approval -->`;
+    const start = log.indexOf("✋ **Spaghetti Code Foundry is ready to push** branch");
+    const end = log.indexOf(marker, start);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    expect(log).not.toContain("<!-- spaghetti-code-foundry");
+    const posted = log.slice(start, end + marker.length);
+
+    issues([6, "factory:waiting-approval"]);
+    process.env.FAKE_GH_COMMENTS = JSON.stringify({ comments: [
+      { author: { login: "bot" }, body: posted, createdAt: "2026-01-01T00:00:00Z" },
+      { author: { login: "marcel" }, body: "/approve ship it", createdAt: "2026-01-01T02:00:00Z" },
+    ] });
+    await w.tick();
+    await settle();
+    const done = runFor("6");
+    expect(done.runId).toBe(run.runId);
+    expect(done.status).toBe("succeeded");
+    expect(done.history.find((h) => h.id === "approve")!.output).toBe("approved by marcel: ship it");
+  });
+
   it("resumes a run that was interrupted by a crash", async () => {
     issues([8]);
     const w = watcher();
