@@ -95,9 +95,9 @@ describe("next-step records, one per kind", () => {
     ["usage_limit", data, "A time limit", "Nothing — it continues by itself", ISSUE],
     ["daily_budget", data, "A time limit", "Nothing — it continues by itself", ISSUE],
     ["release", { ...data, pr: { number: 99, url: "https://github.com/acme/app/pull/99" } }, "You", "Merge the release pull request #99", "https://github.com/acme/app/pull/99"],
-    ["failed", data, "Something is wrong", "Remove the `factory:failed` label to start over, or resume the run on its page to continue at the failed step", ISSUE],
+    ["failed", data, "Something is wrong", "Look at the steps and the log on the run page, then remove the `factory:failed` label to start over, or resume the run on its page to continue at the failed step", ISSUE],
     ["restart", {}, "Foundry", "Nothing — it continues by itself", "#/watchers"],
-    ["watcher_error", { reason: "gh failed" }, "Something is wrong", "Check the watcher on the Watchers page", "#/watchers"],
+    ["watcher_error", { reason: "gh failed" }, "Something is wrong", "Look at Error details on the Watchers page", "#/watchers"],
     ["closed_elsewhere", {}, "You", "Cancel the run if the work is no longer wanted", "#/runs/r1"],
     ["watcher_stale", { lastCheck: "2026-10-01T11:20:00Z", timeZone: "UTC" }, "Something is wrong", "Press Check now on the Watchers page", "#/watchers"],
     ["running", data, "Foundry", "Nothing — it continues by itself", ISSUE],
@@ -199,11 +199,55 @@ describe("next-step records, one per kind", () => {
     }
   });
 
-  it("cuts failure reasons to the first sentence and drops amounts", () => {
-    expect(nextStep("failed", base, { reason: "step x failed: boom. More text" }).why).toBe("It failed: step x failed: boom");
-    const n = runNextStep(run({ status: "failed", reason: "run budget of $2 reached" }));
-    expect(n.why).toBe("It failed: run budget reached");
-    expect(n.text).not.toContain("$");
+  it("explains failure reasons in plain words", () => {
+    const n = nextStep("failed", base, { reason: 'step "x" failed: exit code 1' });
+    expect(n.why).toBe("The step x failed: its command ended with an error");
+    expect(n.text.endsWith(", then resume the run on its page.")).toBe(true);
+    expect(n.text).not.toContain("exit code");
+    const b = runNextStep(run({ status: "failed", reason: "run budget of $2 reached" }));
+    expect(b.why).toBe("The run reached its budget: it used the amount the flow allows for one run");
+    expect(b.text).not.toContain("$");
+    const u = nextStep("failed", base, { reason: "boom. More text" });
+    expect(u.why).toBe("The run failed: the error is not one the Foundry can explain");
+    expect(u.text).not.toContain("boom");
+    expect(nextStep("failed", base, {}).why).toBe("The run failed: no reason was saved");
+  });
+
+  it("the advice fits the retry", () => {
+    for (const reason of ["run budget of $2 reached", 'step "a" failed: claude result: error_max_budget_usd']) {
+      const w = nextStep("failed", base, { ...data, reason });
+      expect(w.action.endsWith("then remove the `factory:failed` label to start over")).toBe(true);
+      expect(w.text).not.toContain("resume");
+      expect(nextStep("failed", base, { reason }).action.endsWith("then start a new run")).toBe(true);
+    }
+    for (const reason of ['step "a" failed: timed out', 'step "a" exceeded max_visits (3)']) {
+      expect(nextStep("failed", base, { ...data, reason }).action).toContain("or resume the run on its page");
+    }
+    const n = nextStep("failed", base, { ...data, reason: 'step "x" failed: exit code 1' });
+    expect(n.text).toBe(`${n.why} — ${n.action.charAt(0).toLowerCase()}${n.action.slice(1)}.`);
+  });
+
+  it("a failed run with no step to resume at offers only to start over", () => {
+    const r = run({ status: "failed", reason: 'step "x" failed: exit code 1', state: { next: null, steps: {}, visits: {} } } as never);
+    expect(runNextStep(r).action.endsWith("then start a new run")).toBe(true);
+    expect(runNextStep(r, watched).action.endsWith("to start over")).toBe(true);
+    const ok = run({ status: "failed", reason: 'step "x" failed: exit code 1', state: { next: "x", steps: {}, visits: {} } } as never);
+    expect(runNextStep(ok).action.endsWith("then resume the run on its page")).toBe(true);
+  });
+
+  it("explains watcher errors", () => {
+    const n = nextStep("watcher_error", { repo: "o/r" }, { reason: "cannot access o/r with gh: x" });
+    expect(n.why).toBe("The watcher cannot reach the repository: GitHub did not let it in or could not find it");
+    expect(n.action).toBe("Check the repository name and that gh is logged in");
+    expect(n.where.url).toBe("#/watchers");
+    expect(nextStep("watcher_error", {}, { reason: "the check took longer than 600s and was given up" }).why).toContain("did not finish its check");
+    expect(nextStep("watcher_error", {}, { reason: 'invalid interval "soon" (use e.g. 30s)' }).why).toContain("not a valid time");
+  });
+
+  it("runs saved before this change show the plain text", () => {
+    const r = run({ status: "failed", reason: 'step "x" failed: claude result: error_max_turns' });
+    expect(runNextStep(r).why).toBe("The step x failed: the agent used all its turns");
+    expect(r.reason).toBe('step "x" failed: claude result: error_max_turns');
   });
 
   it("gives hints about what each reply does", () => {
@@ -223,7 +267,7 @@ describe("next-step records, one per kind", () => {
 
   it("failed: unwatched runs resume on the run page", () => {
     const n = nextStep("failed", base, { reason: "x" });
-    expect(n.action).toBe("Resume the run on its page");
+    expect(n.action).toBe("Look at Details on the run page, then resume the run on its page");
     expect(n.where.url).toBe("#/runs/r1");
     expect(nextStep("failed", base, data).text).toContain("to start over, or resume the run");
   });

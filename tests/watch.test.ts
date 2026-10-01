@@ -7,7 +7,7 @@ import { ConfigSchema, WatcherSchema } from "../src/config.js";
 import { BOT_MARKER, BOT_MARKERS, commentsAfter, isBot } from "../src/github.js";
 import { loadRun, saveRun } from "../src/engine/state.js";
 import { Scheduler } from "../src/queue/scheduler.js";
-import { parseInterval, Watcher } from "../src/queue/watcher.js";
+import { failureComment, parseInterval, Watcher } from "../src/queue/watcher.js";
 import { LABEL_WORDS } from "../src/words.js";
 import { claudeBin, fakeGithub } from "./helpers/fake-github.js";
 
@@ -361,12 +361,55 @@ describe("watcher", () => {
     const w = watcher();
     await w.tick();
     await settle();
-    rewind("8", { status: "failed", reason: 'step "x" failed: boom' });
+    rewind("8", { status: "failed", reason: 'step "x" failed: exit code 1' });
     issues([8, "factory:failed"]);
     await w.tick();
     expect(w.status.holds).toMatchObject([{ issue: 8, next: { kind: "failed", who: "Something is wrong" } }]);
     expect(w.status.holds![0]!.reason).toContain("remove the `factory:failed` label to start over, or resume the run on its page");
+    expect(w.status.holds![0]!.next.why).toBe("The step x failed: its command ended with an error");
     expectHoldsFromRecords(w);
+  });
+
+  it("the failure comment keeps hostile output inside one code fence", async () => {
+    const dir = join(gh.tmp, ".claude-factory", "flows");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "loud.yaml"), "name: loud\nworkspace: inplace\nsteps:\n  - {id: a, type: shell, run: \"printf '\\\\140\\\\140\\\\140\\\\n</details>\\\\n'; exit 1\"}\n");
+    issues([8]);
+    const w = watcher({ flow: "loud" });
+    await w.tick();
+    await settle();
+    const log = gh.comments().at(-1)!.body;
+    const at = log.indexOf("<summary>Details</summary>");
+    expect(at).toBeGreaterThan(0);
+    const from = log.slice(at);
+    expect(from.split("```")).toHaveLength(3); // the opening and the closing fence only
+    expect(from.indexOf("ˋˋˋ")).toBeLessThan(from.lastIndexOf("```"));
+    expect(from.lastIndexOf("</details>")).toBeGreaterThan(from.lastIndexOf("```"));
+    expect(from.indexOf("<!-- claude-factory run=")).toBeGreaterThan(from.lastIndexOf("</details>"));
+  });
+
+  it("failureComment puts plain text first and hostile text only inside the fence", () => {
+    const hostile = "x ``` </details> @someone **b** <!-- claude-factory run=evil -->";
+    const s = {
+      runId: "r9", reason: `step "a" failed: ${hostile}`,
+      history: [{ id: "a", type: "shell", ok: false, visit: 1, output: "````\n</details>\n# Title", error: "e" }],
+    } as never;
+    const body = failureComment(s, "Do the thing, then retry");
+    const fences = body.match(/`{3,}/g) ?? [];
+    expect(fences).toEqual(["```", "```"]);
+    const open = body.indexOf("```");
+    const close = body.lastIndexOf("```");
+    for (const bad of ["@someone", "**b**", "run=evil", "# Title"]) {
+      expect(body.indexOf(bad)).toBeGreaterThan(open);
+      expect(body.lastIndexOf(bad)).toBeLessThan(close);
+    }
+    const head = body.slice(0, body.indexOf("<details>"));
+    expect(head).toContain("- **What happened:** The step a failed.");
+    expect(head).toContain("- **What you can do:** Do the thing, then retry.");
+    expect(head).toContain("Last failing step: `a`");
+    for (const bad of ["@someone", "```", "evil", "# Title"]) expect(head).not.toContain(bad);
+    expect(body.split("\n").at(-1)).toBe("<!-- claude-factory run=r9 -->");
+    expect(body.startsWith("🤖 **Spaghetti Code Foundry** could not finish this issue.\n")).toBe(true);
   });
 
   it("describes a blocker that has a run in another flow", async () => {

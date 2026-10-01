@@ -119,8 +119,8 @@ open the run.
 
 Open a run to follow it live. At the top, the **What happens next** block says who has the next
 move, what to do, why, a link to the place to do it, and when it continues by itself (if
-known). It updates live. The raw reason (for a waiting run, the approval message) is the
-**Reason** row below.
+known). It updates live. For a failure it says what happened, why and what you can do in plain
+words. The raw reason (for a waiting run, the approval message) is the **Details** row below.
 
 The status next to the flow name has the same **?**. The **Current step** (while the run
 works) or **Resumes at step** (when it is stopped) row names the step and says what it does:
@@ -434,7 +434,7 @@ in GitHub:
 | `factory:needs-info` | Waiting for you — questions: reply on the issue, or reply `/defaults` |
 | `factory:waiting-approval` | Waiting for you — approval: reply `/approve` or `/reject` on the issue |
 | `factory:done` | Done — nothing to do |
-| `factory:failed` | Failed; the reason is commented on the issue. Remove the label to start over, or resume the run on its page to continue at the failed step |
+| `factory:failed` | Failed; what happened, why and what you can do are commented on the issue, with the failing output. Remove the label to start over, or resume the run on its page to continue at the failed step |
 
 The descriptions on GitHub say the same in short. They are set when the labels are created and
 refreshed at every server start. The trigger label and the review label (`vars.review_plan_label`)
@@ -579,7 +579,7 @@ The threshold is the `auto_split_max_risk` variable (default 50).
 | `Factory_working` | Working, or paused — usage limit: planning and coding are running or paused | Wait; follow it on the Runs page |
 | `Factory_waiting` | Waiting for you — risky plan / split: it waits for your decision | `/approve` or `/reject` + feedback on the issue |
 | `Factory_done` | Done: implemented, tested, reviewed and merged into `develop` (gitflow) or in the rolling pull request | Nothing — merge the release pull request (or the rolling one) when you like |
-| `Factory_ERROR` | It failed; the reason and the failing output are commented on the issue | Fix the cause if needed, then remove the label to start over, or resume the run on its page to continue at the failed step |
+| `Factory_ERROR` | It failed; what happened, why and what you can do are commented on the issue, with the failing output | Fix the cause if needed, then remove the label to start over, or resume the run on its page to continue at the failed step |
 
 Issues with an excluded label (e.g. `geni`) are never picked up, whatever other labels they have.
 
@@ -729,10 +729,11 @@ it; paused runs continue the next day. Flows can also cap one run (`limits.max_c
   `require_approval=yes` for `github-pr`).
 
 **Notifications** — macOS notifications, a Slack webhook, or your own command, for the run
-outcomes you choose. The message says who has to do what, for example "acme/app#7 — It failed:
-… — remove the `factory:failed` label to start over, or resume the run on its page to continue at
-the failed step." It is at most 300 characters; a long title or reason is shortened, the action
-never.
+outcomes you choose. The message says who has to do what, for example "acme/app#7 — The step
+run_tests failed: its command ended with an error — look at the output of the step and fix the
+cause, then remove the `factory:failed` label to start over, or resume the run on its page to
+continue at the failed step." It is at most 300 characters; a long title or reason is shortened,
+the action never.
 
 **Bot identity** — by default commits and comments are made as you. Set a bot name/email and a
 token (or a GitHub App) to make them as a bot instead.
@@ -854,14 +855,55 @@ or `/reject` with what to change.
 **The Foundry pull request is a draft.** The daily full test run or build failed on it; the
 failing output is in the daily report comment. It becomes ready again when a later report passes.
 
-**A watcher shows an error.** Check that `gh auth status` works in the terminal where the
-Foundry runs and that you have access to the repository. **Check now** on the Watchers page
-retries immediately. The same line appears when the scan of closed issues fails or the watcher's
-interval is wrong, and a "has not checked since …" line means no check finished for a long time
-(a check that takes over 10 minutes is given up).
+**A run failed, or a watcher shows an error.** The message says what happened, why, and what
+you can do first. Find yours in the table:
 
-**"codex CLI not found" or "not logged in".** Install Codex (`npm i -g @openai/codex`, or the
-ChatGPT desktop app) and run `codex login`. The Models page shows the status.
+| Message | What you can do |
+|---|---|
+| The step … failed: its command ended with an error | Look at the output of the step and fix the cause |
+| The step … failed: it ran longer than its time limit | Look at the output of the step to see what took so long |
+| The step … failed: the agent stopped without a result | Look at the log of the step on the run page |
+| The step … failed: the agent stopped with an error | Look at the log of the step on the run page |
+| The step … failed: the agent used all its turns | Look at the log of the step on the run page |
+| The step … failed: the agent hit an error while it worked | Look at the log of the step on the run page |
+| The step … failed: the agent used up the budget of the step | Give the step a larger budget in the flow |
+| The step … failed: the agent ended with an error | Look at the log of the step on the run page |
+| The step … failed: it used all its attempts | Look at why the step keeps failing in its log on the run page |
+| The run reached its budget: it used the amount the flow allows for one run | Allow a larger budget for one run in the flow |
+| The step … failed: a person rejected it | Read the note of the person and change the work as asked |
+| The step … failed: Codex is not installed on this computer | Install Codex on the computer that runs the Foundry |
+| The step … failed: Codex is not logged in | Log in to Codex on the computer that runs the Foundry |
+| The run failed: the Foundry hit an error of its own | Look at the steps and the log on the run page |
+| The run failed: no reason was saved | Look at the steps and the log on the run page |
+| The run failed: the error is not one the Foundry can explain | Look at Details on the run page |
+| The watcher cannot reach the repository: GitHub did not let it in or could not find it | Check the repository name and that gh is logged in |
+| The watcher cannot reach the repository: a call to GitHub failed | Check that gh is logged in and the repository is there |
+| The watcher did not finish its check: it took too long and was given up | Press Check now on the Watchers page to try again |
+| The watcher cannot start: its check interval is not a valid time | Change the check interval of the watcher to a time like 5m |
+| The watcher cannot start: its check interval is outside what is allowed | Change the check interval of the watcher to a time like 5m |
+| The watcher has an error: the error is not one the Foundry can explain | Look at Error details on the Watchers page |
+
+Then the message adds how to try again. A failed run can be resumed on its page to continue at
+the failed step, or (for an issue the Foundry watches) you remove the `factory:failed` label to
+start over. When the fix is a change to the flow (a larger budget), only a new run counts: a
+resumed run keeps the flow it started with. A change in Settings, such as the cost limits, also
+counts for a resume.
+
+The raw text is still there, as a detail: under **Details** on the run page and inside each
+failed step of the **Steps & transcripts** list, under **Error details** on the watcher card,
+and inside the collapsed **Details** of the failure comment on the issue. The settings behind
+the messages are `max_visits` (attempts), `limits.max_cost_usd` (run budget), `max_budget_usd`
+(step budget) and `timeout_sec` (time limit). If a step only needs more time, raise
+`timeout_sec` and start over.
+
+For a watcher, check that `gh auth status` works in the terminal where the Foundry runs and
+that you have access to the repository. **Check now** on the Watchers page retries
+immediately. A "has not checked since …" line means no check finished for a long time (a check
+that takes over 10 minutes is given up).
+
+**"Codex is not installed" or "Codex is not logged in".** Install Codex (`npm i -g
+@openai/codex`, or the ChatGPT desktop app) and run `codex login`. The Models page shows the
+status.
 
 **A local model says it is done but changed nothing.** The model is not good at tool use. Try a
 coding model (`qwen3-coder`, `gpt-oss`) and use **Try a model** on the Models page.
