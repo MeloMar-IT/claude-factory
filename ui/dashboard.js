@@ -1,5 +1,6 @@
 import { api } from "./api.js";
 import { h, mount, svg } from "./dom.js";
+import { needsYou, nextList, waitingGroups } from "./next.js";
 
 const usd = (n, d = 2) => `$${(n ?? 0).toFixed(d)}`;
 const pct = (a, b) => (b ? `${Math.round((a / b) * 100)}%` : "—");
@@ -44,15 +45,6 @@ function costChart(days) {
     tip);
 }
 
-/** Why a watcher's issues are not being started: one line per issue (or for the whole watcher). */
-export function holdList(holds, repo) {
-  return h("ul", { class: "holds" }, holds.map((x) => h("li", {},
-    x.issue ? h("a", { href: `https://github.com/${repo}/issues/${x.issue}`, target: "_blank", rel: "noopener", class: "mono" }, `#${x.issue}`) : null,
-    x.title ? h("span", { class: "hold-title" }, ` ${x.title}`) : null,
-    h("span", { class: "muted" }, `${x.issue ? " — " : ""}${x.reason}`),
-    x.url ? h("a", { href: x.url, target: "_blank", rel: "noopener", class: "hold-link" }, "open ↗") : null)));
-}
-
 function rateBar(ok, total) {
   const w = total ? (ok / total) * 100 : 0;
   return h("span", { class: "rate" }, h("span", { class: "rate-track" }, h("span", { class: "rate-fill", style: { width: `${w}%` } })), h("span", { class: "mono" }, pct(ok, total)));
@@ -60,21 +52,25 @@ function rateBar(ok, total) {
 
 export async function renderDashboard(main) {
   mount(main, h("div", { class: "row" }, h("span", { class: "spinner" }), " Loading…"));
-  const [s, info, evals, watchers] = await Promise.all([api.stats(), api.info(), api.evals().catch(() => []), api.watchers().catch(() => [])]);
-  const holding = watchers.filter((w) => w.enabled && w.status?.holds?.length);
+  const [s, info, evals, watchers, runs, next] = await Promise.all([api.stats(), api.info(), api.evals().catch(() => []), api.watchers().catch(() => []),
+    api.runs().catch(() => []), api.next().catch(() => ({ server: [] }))]);
+  const { yours, rest } = waitingGroups(watchers);
+  const group = ({ w, records }) => h("div", { class: "hold-group" },
+    h("div", { class: "muted", style: { fontSize: "12.5px" } }, h("b", { class: "mono" }, w.id), ` · ${w.github_repo}${w.source === "issues" ? ` · label ${w.label}` : ""}`),
+    nextList(records));
   const t = s.totals;
   const budget = info.dailyBudget;
   mount(main,
     h("div", { class: "toolbar" }, h("h1", {}, "Dashboard"), h("span", { class: "muted" }, "last 30 days")),
+    next.server?.length ? h("div", { class: "card", style: { marginBottom: "12px" } }, h("h3", {}, "Server"), nextList(next.server)) : null,
     h("div", { class: "tiles" },
       tile("Spent today", usd(info.spentToday), info.costLimits === false ? "estimate at API prices · no limits enforced" : budget ? `of ${usd(budget)} daily budget` : "no daily budget set"),
       tile("Spent (30 days)", usd(t.costUsd), `${t.runs} runs`),
       tile("Success rate", pct(t.succeeded, t.runs), `${t.succeeded} succeeded · ${t.failed} failed`),
-      tile("Needs a human", String(t.stopped + t.waiting), `${t.waiting} waiting for approval · ${t.stopped} stopped`)),
-    holding.length ? h("div", { class: "card" }, h("h3", {}, "Waiting — why issues aren't being worked on"),
-      holding.map((w) => h("div", { class: "hold-group" },
-        h("div", { class: "muted", style: { fontSize: "12.5px" } }, h("b", { class: "mono" }, w.id), ` · ${w.github_repo} · label ${w.label}`),
-        holdList(w.status.holds, w.github_repo)))) : null,
+      tile("Needs a human", String(needsYou(runs).length), h("a", { href: "#/runs" }, "see Needs you on the Runs page"))),
+    yours.length || rest.length ? h("div", { class: "card" }, h("h3", {}, "Waiting — what happens next"),
+      yours.map(group),
+      yours.length && rest.length ? h("div", { class: "hold-rest" }, rest.map(group)) : rest.map(group)) : null,
     h("div", { class: "card" }, h("h3", {}, "Cost per day"), costChart(s.byDay),
       h("details", {}, h("summary", {}, "Show as table"),
         h("table", { class: "table compact" }, h("thead", {}, h("tr", {}, h("th", {}, "Day"), h("th", {}, "Runs"), h("th", {}, "Cost"))),

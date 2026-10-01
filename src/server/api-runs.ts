@@ -5,7 +5,7 @@ import { runDiff } from "../engine/diff.js";
 import { readTranscript } from "../engine/transcript.js";
 import { parseFlow, resolveFlowPath } from "../flow/load.js";
 import { HttpError, NAME_RE, readJson, send, str } from "./http.js";
-import { nextFor } from "./next.js";
+import { nextFor, queueWithNext } from "./next.js";
 import type { RunEvent } from "../queue/scheduler.js";
 import type { Route } from "./server.js";
 
@@ -13,7 +13,7 @@ const NEXT_RECHECK_MS = 2_000;
 
 export const runRoutes: Route = async (ctx, req, res, seg, method) => {
   const { opts, scheduler } = ctx;
-  if (seg[0] === "queue" && method === "GET") return send(res, 200, scheduler.queue()), true;
+  if (seg[0] === "queue" && method === "GET") return send(res, 200, queueWithNext(ctx)), true;
   if (seg[0] !== "runs") return false;
   const id = seg[1];
 

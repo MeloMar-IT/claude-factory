@@ -77,12 +77,18 @@ When a run finishes, its branch stays in your repository. Review it, merge it, o
 
 ![Runs](images/runs.png)
 
-Runs that wait for a decision or stopped with a question are listed under **Needs you**. At
-most *N* runs execute at the same time (Settings → Runs at the same time); the rest queue.
+Runs whose next move is yours (the record says **You**) are listed under **Needs you**. Runs
+that wait for a limit, the budget or another run are not. Under each task the table shows the
+"what happens next" sentence, also for finished runs. At most *N* runs execute at the same time
+(Settings → Runs at the same time); the rest queue. Each queue line shows the same sentence
+and a link to what it waits for.
 
 ### A run
 
-Open a run to follow it live.
+Open a run to follow it live. At the top, the **What happens next** block says who has the next
+move, what to do, why, a link to the place to do it, and when it continues by itself (if
+known). It updates live. The raw reason (for a waiting run, the approval message) is the
+**Reason** row below.
 
 ![Live log](images/run-log.png)
 
@@ -103,7 +109,8 @@ Open a run to follow it live.
 
 An **approval** step pauses the run until a person decides. Approve or reject in the UI, with
 `scf approve <run-id>` / `scf reject <run-id>`, or — for GitHub flows — by commenting
-`/approve` or `/reject` on the issue (only people with write access count).
+`/approve` or `/reject` on the issue (only people with write access count). A waiting run shows
+a **What happens next** block with **You** as who and the approval message as the reason.
 
 ![Waiting for approval](images/run-waiting.png)
 
@@ -346,7 +353,8 @@ in GitHub:
 | `factory:failed` | Failed; the reason is commented on the issue. Remove the label to start over, or resume the run on its page to continue at the failed step |
 
 Each watcher's card on the **Watchers** page lists the labelled issues it is *not* working on
-right now and why ("waits for #73", "needs your answer", …); the Dashboard shows the same list.
+right now under **What happens next**, with the same lines as the Dashboard. A watcher error is
+a line too; the raw error is under **Error details**.
 
 More options are set in `~/.spaghetti-code-foundry/config.yaml` (the form keeps them when you edit the
 watcher). This is the watcher for the [one-label pipeline](#the-label-pipeline-one-label--plan--code--one-pull-request):
@@ -490,10 +498,12 @@ Issues with an excluded label (e.g. `geni`) are never picked up, whatever other 
 #### Why is nothing happening?
 
 Look at the **Dashboard**: the **Waiting** card lists every labelled issue that isn't being
-worked on right now, with the reason and a link to what it waits for (the same list is on each
-watcher's card on the **Watchers** page). Every line is one sentence that says who has to act
-and what to do ("… — reply /approve to start coding …", "… — nothing to do, it starts
-tomorrow"), and has an "open ↗" link. Runs that started and then paused are listed too: a usage
+worked on right now (the same list is on each watcher's card on the **Watchers** page). Every
+line starts with a badge for who has the next move (**You**, **Foundry**, **Another story**, **A
+time limit**, **Something is wrong**), then the issue, what to do, why, "Continues: …" when it
+continues by itself, and a link to the place to do it (GitHub links open in a new tab). Lines
+where you have the next move come first, above the rest. During a restart wait the **Server**
+card says that the server waits to restart on a new version. Runs that started and then paused are listed too: a usage
 limit, the daily budget, a code area that another run uses, or an interruption. The same
 sentences are in the failure comment on the issue and in notifications, and the server gives
 them for every run and issue at `GET /api/next` (and as `next` on each run). The usual reasons:
@@ -649,9 +659,10 @@ themselves still pause runs; they continue by themselves when the limit resets.
 
 ![Dashboard](images/dashboard.png)
 
-Spend today and over 30 days, success rate, runs that need a human, the **Waiting** card (every
-labelled issue that isn't being worked on, with the reason and what to do — "answer 3
-questions", "#74 waits for #73, which is being worked on", "reply /approve or /reject" — and a link), cost per day, results per flow and per repository,
+Spend today and over 30 days, success rate, **Needs a human** (the number of runs whose next
+move is yours — the same as **Needs you** on the Runs page), the **Waiting** card (every
+labelled issue that isn't being worked on: who has the next move, what to do, why, and a link;
+lines for you come first), a **Server** card when the server waits to restart, cost per day, results per flow and per repository,
 the steps where runs fail most, and eval results.
 
 ### Evals
@@ -723,8 +734,7 @@ built-in ones.
 ## 10. Troubleshooting
 
 **Nothing is happening to an issue.** Look at the **Waiting** card on the Dashboard — it says
-why (a question, a risky plan waiting for `/approve`, a dependency, another issue being built,
-the usage limit). See also [Why is nothing happening?](#why-is-nothing-happening).
+who has the next move (the badge at the start of the line), what to do and why. See also [Why is nothing happening?](#why-is-nothing-happening).
 
 **A plan is waiting for approval.** Its risk score is above 75, or the issue has
 `Factory_review_plan`. Read the plan on the issue and reply `/approve` (with notes if you like)

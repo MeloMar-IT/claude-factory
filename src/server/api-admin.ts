@@ -5,6 +5,7 @@ import { cleanRuns } from "../clean.js";
 import { listEvalReports } from "../evals.js";
 import { computeStats } from "../stats.js";
 import { HttpError, readJson, send } from "./http.js";
+import { watchersWithNext } from "./next.js";
 import type { Route } from "./server.js";
 
 export const adminRoutes: Route = async (ctx, req, res, seg, method) => {
@@ -39,7 +40,7 @@ export const adminRoutes: Route = async (ctx, req, res, seg, method) => {
   }
 
   if (seg[0] === "watchers") {
-    if (!seg[1] && method === "GET") return send(res, 200, watchers.statuses()), true;
+    if (!seg[1] && method === "GET") return send(res, 200, watchersWithNext(ctx)), true;
     if (seg[1] && seg[2] === "tick" && method === "POST") return send(res, 200, await watchers.runNow(seg[1])), true;
   }
 
