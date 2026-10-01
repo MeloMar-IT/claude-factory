@@ -64,6 +64,9 @@ describe("gitflow pipeline", () => {
     expect(gh.remoteGit("log", "--format=%s", "develop")).toMatch(/^Merge #5: Add a feature \(feature\/5-add-a-feature\)/);
     expect(gh.remoteGit("show", "develop:feature.txt")).toBe("implemented #5\n");
     expect(gh.remoteGit("log", "--format=%s", "main")).not.toContain("#5"); // main untouched
+    // Merged into develop, so the feature branch is deleted on the remote.
+    expect(run.history.find((h) => h.id === "push_develop")!.output).toContain("deleted the merged branch feature/5-add-a-feature");
+    expect(gh.remoteGit("branch", "--list", "feature/*").trim()).toBe("");
     const log = gh.ghLog();
     expect(log).toContain("merged it into `develop`");
     expect(log).toContain("with the daily release pull request");
