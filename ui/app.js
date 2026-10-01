@@ -9,11 +9,13 @@ import { refreshModelLists, renderModels } from "./models.js";
 import { renderDashboard } from "./dashboard.js";
 import { renderRunDetail, renderRunsList } from "./runs.js";
 import { renderBoard } from "./board.js";
+import { loadHealth, startHealth } from "./health.js";
 import { startSince } from "./since.js";
 import { renderYourTurn, startBadge, startHash } from "./turn.js";
 
 const sidebar = document.getElementById("sidebar");
 const main = document.getElementById("main");
+const healthEl = document.getElementById("health");
 const NAME_RE = /^[\w-]+$/;
 
 const BLANK = `name: my-flow
@@ -97,6 +99,7 @@ function openNew(yaml = BLANK) {
   if (!S.cur.obj) S.cur.mode = "yaml";
   history.pushState(null, "", "#/new");
   S.lastHash = "#/new";
+  loadHealth(healthEl); // pushState fires no hashchange
   renderFlowView();
 }
 
@@ -395,6 +398,7 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
+startHealth(healthEl);
 S.info = await api.info();
 document.getElementById("repo").textContent = S.info.repo;
 await refreshFlows();

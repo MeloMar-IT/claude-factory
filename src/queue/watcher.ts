@@ -1,6 +1,6 @@
 import type { WatcherConfig } from "../config.js";
 import { spentToday, type RunSummary } from "../engine/state.js";
-import { explainError } from "../errors.js";
+import { errorLine, explainError } from "../errors.js";
 import { loadFlow } from "../flow/load.js";
 import { canWrite, commentsAfter, ensureLabel, gh, ghJson, isBot, issueComments, setLabels, type Comment, type Issue } from "../github.js";
 import { countQuestions, runClosedIssue, LIMIT_RETRY_MS, nextStep, runNextStep, type NextData, type BlockerInfo, type NextKind, type NextStep } from "../next-step.js";
@@ -221,7 +221,7 @@ export class Watcher {
   private async setup() {
     if (this.setupDone) return;
     await gh(["repo", "view", this.repo, "--json", "nameWithOwner"]).catch((e: Error) => {
-      throw new Error(`cannot access ${this.repo} with gh: ${e.message.split("\n")[0]}`);
+      throw new Error(`cannot access ${this.repo} with gh: ${errorLine(e.message)}`);
     });
     if (this.cfg.source === "issues") {
       const review = this.cfg.vars.review_plan_label ?? "";
@@ -256,7 +256,7 @@ export class Watcher {
         this.status.lastOk = new Date().toISOString();
       }
     } catch (e) {
-      this.status.lastError = (e as Error).message.split("\n")[0];
+      this.status.lastError = errorLine((e as Error).message);
       this.status.errorSince ??= new Date().toISOString();
       this.d.log(`[${this.cfg.id}] ! ${this.status.lastError}`);
     } finally {
@@ -617,7 +617,7 @@ export class Watcher {
     this.status.pausedBy = paused ? { number: paused.number, url: paused.url, title: paused.title, createdAt: paused.createdAt } : undefined;
     this.tracked = tracked;
     // The closed-issue scan is part of the check: its failure is the check's error.
-    if (tidyError) throw new Error(`tidying closed issues: ${tidyError.message.split("\n")[0]}`);
+    if (tidyError) throw new Error(`tidying closed issues: ${errorLine(tidyError.message)}`);
   }
 
   /**

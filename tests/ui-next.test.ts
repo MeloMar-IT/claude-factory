@@ -187,7 +187,7 @@ describe("plain error text in the UI", () => {
     expect(t).not.toContain("exit code");
     const w = nextStep("watcher_error", { repo: "o/r" }, { reason: "cannot access o/r with gh: x" });
     const c = ui.nextList([w]).textContent as string;
-    expect(c.indexOf(w.action)).toBeLessThan(c.indexOf("The watcher cannot reach the repository"));
+    expect(c.indexOf(w.action)).toBeLessThan(c.indexOf("The watcher for o/r can't reach GitHub"));
     expect(c).not.toContain("cannot access");
   });
 });

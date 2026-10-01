@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { WatcherSchema } from "../src/config.js";
 import type { RunSummary } from "../src/engine/state.js";
 import { statusName } from "../src/words.js";
-import { COMMENT_KINDS, commentText, countQuestions, nextStep, nextStepEnv, releaseAtFor, releaseWatchersFor, runClosedIssue, runNextStep, trackingWatcher, type NextKind, type NextStep } from "../src/next-step.js";
+import { briefFailure, COMMENT_KINDS, commentText, countQuestions, nextStep, nextStepEnv, releaseAtFor, releaseWatchersFor, runClosedIssue, runNextStep, trackingWatcher, type NextKind, type NextStep } from "../src/next-step.js";
 
 const run = (over: Partial<RunSummary> = {}) =>
   ({
@@ -152,7 +152,8 @@ describe("next-step records, one per kind", () => {
     const variants: [NextKind, Parameters<typeof nextStep>[2]][] = [
       ...cases.map((c) => [c[0], c[1]] as [NextKind, Parameters<typeof nextStep>[2]]),
       ["approve_plan", {}], ["approve_split", {}], ["failed", {}], ["interrupted", {}], ["cancelled", {}], ["planner_questions", {}],
-      ["restart", { restartWhy: "data_folder" }], ["release", { releaseAt: "17:00" }],
+      ["restart", { restartWhy: "data_folder" }], ["restart", { runsLeft: 2 }], ["usage_limit", { limitAgent: "codex" }], ["daily_budget", {}],
+      ["watcher_error", { reason: "dial tcp" }], ["release", { releaseAt: "17:00" }],
       ["dependency", { blockers: [{ issue: 1, next: nextStep("dependency", {}, { blockers: [{ issue: 2, next: nextStep("running") }] }) }] }],
       ["area_lock", { areaWait: { runId: "r0", areas: "src, tests" } }],
     ];
@@ -237,11 +238,51 @@ describe("next-step records, one per kind", () => {
 
   it("explains watcher errors", () => {
     const n = nextStep("watcher_error", { repo: "o/r" }, { reason: "cannot access o/r with gh: x" });
-    expect(n.why).toBe("The watcher cannot reach the repository: GitHub did not let it in or could not find it");
-    expect(n.action).toBe("Check the repository name and that gh is logged in");
+    expect(n.why).toBe("The watcher for o/r can't reach GitHub: GitHub did not answer or did not let it in");
+    expect(n.action).toBe("Check the network and `gh auth status`");
     expect(n.where.url).toBe("#/watchers");
+    expect(nextStep("watcher_error", { repo: "o/r" }, { reason: "gh down" }).why).toBe("The watcher for o/r has an error: the error is not one the Foundry can explain");
+    expect(nextStep("watcher_error", {}, { reason: "gh down" }).why).toBe("The watcher has an error: the error is not one the Foundry can explain");
     expect(nextStep("watcher_error", {}, { reason: "the check took longer than 600s and was given up" }).why).toContain("did not finish its check");
     expect(nextStep("watcher_error", {}, { reason: 'invalid interval "soon" (use e.g. 30s)' }).why).toContain("not a valid time");
+  });
+
+  it("says how many runs a restart waits for", () => {
+    const a = nextStep("restart", {}, { restartWhy: "new_version", runsLeft: 2 });
+    expect(a.text).toBe("A new version is waiting — it restarts after 2 runs.");
+    expect(a.where.url).toBe("#/runs");
+    expect(nextStep("restart", {}, { restartWhy: "data_folder", runsLeft: 1 }).text).toBe("The data folder moved — it restarts after 1 run.");
+    expect(nextStep("restart", {}, { runsLeft: 0 }).text).toMatch(/it restarts in a moment\.$/);
+    expect(nextStep("restart", {}, { restartWhy: "new_version" }).text).toBe("The server waits to restart on a new version — nothing to do, it restarts when the active runs are done.");
+  });
+
+  it("names the agent of a usage limit and links bare limits to the right page", () => {
+    const reason = "usage limit reached — resets 11:52";
+    const n = nextStep("usage_limit", {}, { limitAgent: "codex", reason });
+    expect(n.why).toBe("The Codex usage limit is reached");
+    expect(n.where.url).toBe("#/runs");
+    expect(n.until).toBe("11:52");
+    expect(nextStep("usage_limit", {}, { reason }).why).toBe("The usage limit is reached");
+    expect(nextStep("usage_limit", {}, { reason }).where.url).toBe("#/watchers");
+    const b = nextStep("daily_budget");
+    expect(b.where.url).toBe("#/settings");
+    expect(b.action).toBe("Raise the daily budget in Settings, or wait until tomorrow");
+    expect(nextStep("daily_budget", { runId: "r1" }).where.url).toBe("#/runs/r1");
+    expect(nextStep("daily_budget", { issue: 3 }, { issueUrl: "https://github.com/o/r/issues/3" }).action).toBe("Nothing — it continues by itself");
+  });
+
+  it("briefFailure drops the reason and the title of a Foundry failure only", () => {
+    const f = nextStep("failed", { repo: "/work/app", title: "Fix /work/app/x", runId: "r1" }, { cause: "factory", what: "internal error: open '/work/app/x'", fix: "restart or update the Foundry" });
+    const b = briefFailure(f);
+    expect(b.why).toBe("The Foundry failed, not the code");
+    expect(b.title).toBe("");
+    expect(b.text).toBe("The Foundry failed, not the code — restart or update the Foundry, then resume the run on its page.");
+    expect(b.text).not.toContain("/work");
+    expect(b).toMatchObject({ action: f.action, where: f.where, issue: f.issue, runId: "r1" });
+    const code = nextStep("failed", base, { cause: "code", reason: 'step "x" failed: exit code 1' });
+    expect(briefFailure(code)).toBe(code);
+    const done = nextStep("done", base);
+    expect(briefFailure(done)).toBe(done);
   });
 
   it("runs saved before this change show the plain text", () => {

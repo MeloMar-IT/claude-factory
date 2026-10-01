@@ -85,6 +85,10 @@ export interface NextData {
   canResume?: boolean;
   /** `watcher_stale`: ISO time of the last finished check. */
   lastCheck?: string;
+  /** `restart`: runs the server still waits for (without it the text is the one issue records use). */
+  runsLeft?: number;
+  /** `usage_limit`: the agent whose limit it is, e.g. "codex". */
+  limitAgent?: string;
   /** `failed`: why the run did not finish; the factory wording is used for "factory". */
   cause?: FailureCause;
   /** `failed`: what went wrong, and the suggested fix. */
@@ -101,6 +105,8 @@ export interface NextBase {
 
 const RUN_PAGE = (id: string) => `#/runs/${id}`;
 const WATCHERS = { label: "Watchers page", url: "#/watchers" };
+const RUNS = { label: "Runs page", url: "#/runs" };
+const SETTINGS = { label: "Settings page", url: "#/settings" };
 
 /** First sentence only, no amounts, one line. */
 function clean(t: string | undefined): string {
@@ -141,6 +147,9 @@ function hhmm(iso: string | undefined, d: NextData): string {
 }
 
 export const LIMIT_RETRY_MS = 30 * 60_000;
+/** The health line shows a usage limit for an hour after the run stopped (two retry periods), and a Foundry failure for 7 days. */
+export const LIMIT_SHOWN_MS = 2 * LIMIT_RETRY_MS;
+export const FAILURE_SHOWN_MS = 7 * 86_400_000;
 
 /** "#88, which is being coded" — what a blocker is doing, as one clause. */
 function blockerClause(b: BlockerInfo): string {
@@ -263,14 +272,20 @@ export function nextStep(kind: NextKind, base: NextBase = {}, d: NextData = {}):
     }
     case "usage_limit": {
       who = "A time limit";
-      why = "The usage limit is reached";
+      why = d.limitAgent ? `The ${upperFirst(d.limitAgent)} usage limit is reached` : "The usage limit is reached";
       until = limitReset(d.reason) ?? limitRetry(d, LIMIT_RETRY_MS);
       say = "nothing to do, it is tried again after the limit resets";
+      if (d.limitAgent) w = RUNS;
       break;
     }
     case "daily_budget":
       who = "A time limit"; why = "The daily budget is used up"; until = "tomorrow";
       say = "nothing to do, it starts tomorrow";
+      if (!issueWhere && !runWhere) {
+        action = "Raise the daily budget in Settings, or wait until tomorrow";
+        say = "raise the daily budget in Settings, or wait until tomorrow";
+        w = SETTINGS;
+      }
       break;
     case "release": {
       if (!d.pr && d.releaseAt) {
@@ -320,6 +335,12 @@ export function nextStep(kind: NextKind, base: NextBase = {}, d: NextData = {}):
     }
     case "restart": {
       who = "Foundry";
+      if (d.runsLeft !== undefined) {
+        why = d.restartWhy === "data_folder" ? "The data folder moved" : "A new version is waiting";
+        say = d.runsLeft > 0 ? `it restarts after ${plural(d.runsLeft, "run")}` : "it restarts in a moment";
+        w = RUNS;
+        break;
+      }
       why = d.restartWhy === "data_folder" ? "The server waits to restart onto a moved data folder" : "The server waits to restart on a new version";
       say = "nothing to do, it restarts when the active runs are done";
       w = WATCHERS;
@@ -328,7 +349,8 @@ export function nextStep(kind: NextKind, base: NextBase = {}, d: NextData = {}):
     case "watcher_error": {
       who = "Something is wrong";
       const e = explainError(d.reason, "watcher");
-      why = `${e.what}: ${e.why}`;
+      const what = base.repo ? e.what.replace(/^The watcher /, `The watcher for ${base.repo} `) : e.what;
+      why = `${what}: ${e.why}`;
       action = e.todo;
       say = lowerFirst(e.todo);
       w = WATCHERS;
@@ -398,6 +420,16 @@ export function nextStep(kind: NextKind, base: NextBase = {}, d: NextData = {}):
     ...(kind === "dependency" ? { blockers: d.blockers ?? [] } : {}),
     ...(d.cause ? { cause: d.cause } : {}),
   };
+}
+
+/**
+ * A Foundry failure for a page that must not show raw reasons (they can hold paths and settings):
+ * the reason and the title are left out, the fix and the link stay. Other records are unchanged.
+ */
+export function briefFailure(n: NextStep): NextStep {
+  if (n.kind !== "failed" || n.cause !== "factory") return n;
+  const why = "The Foundry failed, not the code";
+  return { ...n, why, title: "", text: sentence(why, lowerFirst(n.action).replace(/[.!?]+$/, "")) };
 }
 
 /** The reasons a flow asks for in a comment on the issue. */

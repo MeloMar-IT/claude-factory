@@ -4,6 +4,17 @@ Changes that are merged but not yet in a release go under **Unreleased**. Newest
 
 ## Unreleased
 
+- A health line at the top of every page (#56). Under the top bar every page says "All good", or the number of problems of the Foundry itself and one sentence for each, with its action and a link. It refreshes on every page change and every 30 seconds, and says so when the server does not answer. The problems are:
+  - a server that waits to restart ("A new version is waiting — it restarts after 2 runs");
+  - a usage limit, one per agent (Claude, Codex), for runs that stopped in the last hour, with the time it continues; a used-up daily budget (the link goes to Settings);
+  - a watcher error, which names the repository, and a watcher that has not checked for 3× its interval (not while the server waits to restart);
+  - an issue closed on GitHub while its run still works, with a **Cancel run** button that asks for confirmation;
+  - runs that failed because of the Foundry (newest per issue, not replaced, finished in the last 7 days, at most 5). The line names the failure and its fix without the reason; the run page has the reason.
+  - The time of the last successful check is shown per repository.
+  - New `GET /api/health` (`ok`, `summary`, `problems`, `repos`), built in `src/server/health.ts` with `src/next-step.ts`. It holds only record fields: no titles, settings, tokens or paths, and links are only `https://…` or `#/…`. `GET /api/next` is unchanged.
+  - The **Server** card on the Dashboard is gone; the health line replaces it.
+  - A watcher error now names its repository everywhere ("The watcher for acme/app has an error"). A connection problem (`cannot access … with gh`, no host, `dial tcp`, timeout, HTTP 5xx) reads "The watcher for acme/app can't reach GitHub" with the action "Check the network and `gh auth status`". **Error details** now also show gh's first output line (`errorLine()` in `src/errors.ts`).
+
 - Plain error messages (#50): a failed run and a watcher error now read as what happened, why and what you can do — in the next-step record, notifications, the run page, the watcher card and the failure comment on the issue. The raw text is under **Details** on the run page and inside each step of the step list, under **Error details** on the watcher card, and in the collapsed **Details** of the issue comment. When the fix is a change to the flow, or the run has no step to resume at, the message says to start over instead of resume. The watcher's recent activity shows the plain text too. Stored reasons are unchanged, so older runs show the new text too. New module `src/errors.ts` (`explainError`); the failure comment is built by `failureComment()` in `src/queue/watcher.ts`.
 
 - Plain status names in the app (#49): the Runs list (also "Needs you" and the queue card), the run page, the Dashboard **Waiting** card and the watcher cards show the status name from the next-step record instead of the run state ("stopped", "waiting for approval"). A **?** next to each status shows the record's two sentences; it opens with a click, Enter/Space or a tap. `GET /api/watchers` has a new `state` on each watcher (`name`: `active`, `error` or `disabled`, plus `status` and `help`), so the watcher's own state has a **?** too; an error is called "watcher error". The run page's "Next step" row is now "Current step" or "Resumes at step" and always says what the step is: its description, or the kind of step. Your turn says "2 stories wait for this" instead of "Holds back 2 stories".

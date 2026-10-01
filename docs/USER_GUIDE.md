@@ -102,6 +102,19 @@ When you open the app after a break of 30 minutes or more, a strip under the hea
 - **Notes:** if GitHub could not be read, or a limit was reached (20 repositories, 200 merged pull requests, 2000 finished runs), the strip says so. If that leaves it empty, it stays hidden and tries again after 5 minutes.
 - Flows that have no step named `commit` or `push_develop` never show stories as done or merged.
 
+### The health line
+
+A line under the top bar of every page says **All good**, or the number of problems of the Foundry itself and one line for each: who has the next move, what to do, why, "Continues: …" when it continues by itself, and a link to the place to act. The sentences come from the server, so they read the same as on the other pages. It asks again on every page change and every 30 seconds. When the server does not answer, the line says so.
+
+- **A restart is waiting:** "A new version is waiting — it restarts after 2 runs." The number is the runs that are active or queued.
+- **A usage limit:** one line per agent (Claude, Codex), not per run, with the time it continues. It shows for an hour after the run stopped; a watcher tries again every 30 minutes, so a limit that lasts keeps showing. A used-up daily budget is a problem too; the link goes to Settings.
+- **A watcher error:** it names the repository, for example "The watcher for acme/app can't reach GitHub", with the action to check the network and `gh auth status`. Equal sentences for one repository show once. A watcher that has not checked for 3× its interval shows too, except while the server waits to restart (the watchers are stopped on purpose then).
+- **An issue closed on GitHub while its run still works:** with a **Cancel run** button. It asks you to confirm, cancels that run and reloads the line. You can resume the run later.
+- **A run that failed because of the Foundry:** the newest run per issue that no newer run replaced, from the last 7 days, at most 5. The line says "The Foundry failed, not the code" with the fix and a link to the run; the reason is on the run page.
+- **Last check per repository:** each repository of an enabled watcher is listed with the time of its last successful check (the oldest, when it has several watchers), or "no successful check yet".
+
+The same data is at `GET /api/health`: `ok`, `summary` ("All good", "1 problem", "N problems"), `problems` (records like those of `GET /api/next`) and `repos`. It holds no settings, tokens or paths, and links are only `https://…` or `#/…`.
+
 ### The board
 
 **Board** shows where every story is, like a parcel tracker. There is one board per repository; with more than one repository you get tabs.
@@ -636,8 +649,9 @@ time limit**, **Something is wrong**), then the status name with its **?** (pres
 it means and what happens next), then the issue, what to do, why, "Continues: …" when it
 continues by itself, and a link to the place to do it (GitHub links open in a new tab). Lines
 where you have the next move come first, above the rest. The state of the watcher itself
-(**active**, **disabled** or **watcher error**) has a **?** too. During a restart wait the **Server**
-card says that the server waits to restart on a new version. Runs that started and then paused are listed too: a usage
+(**active**, **disabled** or **watcher error**) has a **?** too. Problems of the Foundry itself
+(a restart wait, a usage limit, a watcher error) are in the [health line](#the-health-line) on
+every page. Runs that started and then paused are listed too: a usage
 limit, the daily budget, a code area that another run uses, or an interruption. The same
 sentences are in the failure comment on the issue and in notifications, and they also end the
 Foundry's comments that ask you something (questions, a risky plan, a split, the push approval).
@@ -841,8 +855,9 @@ themselves still pause runs; they continue by themselves when the limit resets.
 Spend today and over 30 days, success rate, **Needs a human** (the number of runs whose next
 move is yours — the same as **Needs you** on the Runs page), the **Waiting** card (every
 labelled issue that isn't being worked on: who has the next move, what to do, why, and a link;
-lines for you come first), a **Server** card when the server waits to restart, cost per day, results per flow and per repository,
-the steps where runs fail most, and eval results.
+lines for you come first), cost per day, results per flow and per repository,
+the steps where runs fail most, and eval results. A server that waits to restart shows in the
+[health line](#the-health-line), not on the Dashboard.
 
 ### Evals
 
@@ -919,7 +934,8 @@ built-in ones.
 
 ## 10. Troubleshooting
 
-**Nothing is happening to an issue.** Look at the **Waiting** card on the Dashboard — it says
+**Nothing is happening to an issue.** First look at the [health line](#the-health-line) under the
+top bar: it says when the Foundry itself is the problem. Then look at the **Waiting** card on the Dashboard — it says
 who has the next move (the badge at the start of the line), what to do and why. See also [Why is nothing happening?](#why-is-nothing-happening).
 
 **A plan is waiting for approval.** Its risk score is above 75, or the issue has
@@ -950,12 +966,12 @@ you can do first. Find yours in the table:
 | The run failed: the Foundry hit an error of its own | Look at the steps and the log on the run page |
 | The run failed: no reason was saved | Look at the steps and the log on the run page |
 | The run failed: the error is not one the Foundry can explain | Look at Details on the run page |
-| The watcher cannot reach the repository: GitHub did not let it in or could not find it | Check the repository name and that gh is logged in |
-| The watcher cannot reach the repository: a call to GitHub failed | Check that gh is logged in and the repository is there |
-| The watcher did not finish its check: it took too long and was given up | Press Check now on the Watchers page to try again |
-| The watcher cannot start: its check interval is not a valid time | Change the check interval of the watcher to a time like 5m |
-| The watcher cannot start: its check interval is outside what is allowed | Change the check interval of the watcher to a time like 5m |
-| The watcher has an error: the error is not one the Foundry can explain | Look at Error details on the Watchers page |
+| The watcher for … can't reach GitHub: GitHub did not answer or did not let it in | Check the network and `gh auth status` |
+| The watcher for … cannot reach the repository: a call to GitHub failed | Check that gh is logged in and the repository is there |
+| The watcher for … did not finish its check: it took too long and was given up | Press Check now on the Watchers page to try again |
+| The watcher for … cannot start: its check interval is not a valid time | Change the check interval of the watcher to a time like 5m |
+| The watcher for … cannot start: its check interval is outside what is allowed | Change the check interval of the watcher to a time like 5m |
+| The watcher for … has an error: the error is not one the Foundry can explain | Look at Error details on the Watchers page |
 
 Then the message adds how to try again. A failed run can be resumed on its page to continue at
 the failed step, or (for an issue the Foundry watches) you remove the `factory:failed` label to
@@ -970,8 +986,10 @@ the messages are `max_visits` (attempts), `limits.max_cost_usd` (run budget), `m
 (step budget) and `timeout_sec` (time limit). If a step only needs more time, raise
 `timeout_sec` and start over.
 
-For a watcher, check that `gh auth status` works in the terminal where the Foundry runs and
-that you have access to the repository. **Check now** on the Watchers page retries
+A watcher error names its repository and shows in the [health line](#the-health-line). For a
+connection problem, check the network, and that `gh auth status` works in the terminal where the
+Foundry runs and that you have access to the repository. **Error details** on the watcher card
+shows gh's first output line too. **Check now** on the Watchers page retries
 immediately. A "has not checked since …" line means no check finished for a long time (a check
 that takes over 10 minutes is given up).
 
