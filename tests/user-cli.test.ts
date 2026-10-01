@@ -1,0 +1,327 @@
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { PassThrough } from "node:stream";
+import { terminalIo, userCommand, type UserIo } from "../src/auth/cli.js";
+import { verifyPassword } from "../src/auth/users.js";
+
+const CLI = resolve("dist/cli.js");
+const PW = "test-password-12345";
+const PW2 = "test-other-password-678";
+let tmp: string;
+let home: string;
+const mode = (p: string) => statSync(p).mode & 0o777;
+const usersFile = () => join(home, "users.json");
+const stored = () => JSON.parse(readFileSync(usersFile(), "utf8")) as { users: { email: string; status: string; passwordHash: string }[] };
+const outputs: string[] = [];
+
+beforeAll(() => {
+  if (!existsSync(CLI)) throw new Error(`${CLI} is missing — run \`npm run build\` first`);
+});
+beforeEach(() => {
+  tmp = mkdtempSync(join(tmpdir(), "user-cli-"));
+  home = join(tmp, "missing", "home");
+});
+afterEach(() => rmSync(tmp, { recursive: true, force: true }));
+
+const cleanEnv = () => {
+  const env: NodeJS.ProcessEnv = { ...process.env, SCF_HOME: home };
+  delete env.FACTORY_HOME;
+  return env;
+};
+function run(args: string[], input: string, env: NodeJS.ProcessEnv = cleanEnv()) {
+  const r = spawnSync(process.execPath, [CLI, ...args], { input, env, encoding: "utf8" });
+  outputs.push(r.stdout, r.stderr);
+  return { code: r.status, out: r.stdout, err: r.stderr };
+}
+const create = (email = "ann@example.com", extra: string[] = ["--admin"], password = PW) =>
+  run(["user", "create", ...extra, "--name", "Ann", "--email", email], password + "\n");
+const runAsync = (args: string[], input: string, env: NodeJS.ProcessEnv = cleanEnv()) =>
+  new Promise<number | null>((done) => {
+    const c = spawn(process.execPath, [CLI, ...args], { env, stdio: ["pipe", "pipe", "pipe"] });
+    c.stdout.resume();
+    c.stderr.resume();
+    c.stdin.end(input);
+    c.on("close", done);
+  });
+
+describe("scf user (child process)", () => {
+  it("creates the first admin on a fresh install", () => {
+    const r = create();
+    expect(r.code).toBe(0);
+    expect(r.out).toContain("created admin ann@example.com");
+    expect(mode(home)).toBe(0o700);
+    expect(mode(usersFile())).toBe(0o600);
+  });
+
+  it("keeps the modes under umask 000", () => {
+    const r = spawnSync("sh", ["-c", 'umask 000; exec "$@"', "sh", process.execPath, CLI, "user", "create", "--name", "Ann", "--email", "ann@example.com"], {
+      input: PW + "\n", env: cleanEnv(), encoding: "utf8",
+    });
+    expect(r.status).toBe(0);
+    expect(mode(home)).toBe(0o700);
+    expect(mode(usersFile())).toBe(0o600);
+  });
+
+  it("fails on a duplicate, a short password, no password and a missing option", () => {
+    expect(create().code).toBe(0);
+    const before = readFileSync(usersFile());
+    expect(create("ANN@example.com", []).code).toBe(1);
+    expect(create("b@example.com", [], "short").code).toBe(1);
+    expect(run(["user", "create", "--name", "B", "--email", "b@example.com"], "").code).toBe(1);
+    expect(run(["user", "create", "--name", "B"], PW + "\n").code).toBe(1);
+    expect(readFileSync(usersFile())).toEqual(before);
+  });
+
+  it("has no password option", () => {
+    expect(run(["user", "create", `--password=${PW}`, "--name", "A", "--email", "a@example.com"], "").code).toBe(1);
+  });
+
+  it("checks the syntax before it does anything", () => {
+    create();
+    const before = readFileSync(usersFile());
+    const bad = [
+      ["block", "a@example.com", "b@example.com"],
+      ["block", "ann@example.com", "--admin"],
+      ["unblock", "ann@example.com", "--name", "x"],
+      ["password", "ann@example.com", "--email", "x@example.com"],
+      ["list", "extra"],
+      ["list", "--admin"],
+      ["create", "extra", "--name", "x", "--email", "x@example.com"],
+      ["block", "ann@example.com", "--repo", "."],
+      ["block"],
+    ];
+    for (const a of bad) {
+      const r = run(["user", ...a], PW + "\n");
+      expect(r.code, a.join(" ")).toBe(1);
+      expect(r.err).toContain("usage: scf user create");
+    }
+    expect(readFileSync(usersFile())).toEqual(before);
+  });
+
+  it("lists accounts without a hash", () => {
+    create();
+    const r = run(["user", "list"], "");
+    expect(r.code).toBe(0);
+    for (const w of ["ann@example.com", "Ann", "admin", "active"]) expect(r.out).toContain(w);
+  });
+
+  it("changes a password", async () => {
+    create();
+    const old = stored().users[0]!.passwordHash;
+    expect(run(["user", "password", "ANN@example.com"], PW2 + "\n").code).toBe(0);
+    const now = stored().users[0]!.passwordHash;
+    expect(now).not.toBe(old);
+    expect(await verifyPassword(PW2, now)).toBe(true);
+    expect(run(["user", "password", "nobody@example.com"], PW2 + "\n").code).toBe(1);
+  });
+
+  it("blocks and unblocks", () => {
+    create();
+    expect(run(["user", "block", "ann@example.com"], "").code).toBe(0);
+    expect(stored().users[0]!.status).toBe("blocked");
+    expect(run(["user", "unblock", "ann@example.com"], "").code).toBe(0);
+    expect(stored().users[0]!.status).toBe("active");
+    expect(run(["user", "block", "nobody@example.com"], "").code).toBe(1);
+    expect(run(["user", "unblock", "nobody@example.com"], "").code).toBe(1);
+  });
+
+  it("prints the usage", () => {
+    for (const a of [["user"], ["user", "frobnicate"]]) {
+      const r = run(a, "");
+      expect(r.code).toBe(1);
+      expect(r.err).toContain("usage: scf user create");
+    }
+    expect(run(["--help"], "").out).toContain("scf user create");
+  });
+
+  it("is not needed by other commands", () => {
+    create();
+    expect(run(["flows"], "").code).toBe(0);
+  });
+
+  it("two processes at the same time do not undo each other", async () => {
+    const codes = await Promise.all(["a", "b", "c", "d"].map((n) => runAsync(["user", "create", "--name", n, "--email", `${n}@example.com`], PW + "\n")));
+    expect(codes).toEqual([0, 0, 0, 0]);
+    expect(run(["user", "list"], "").out.split("\n").filter((l) => l.includes("@example.com"))).toHaveLength(4);
+  });
+
+  it("takes over a dead lock", async () => {
+    mkdirSync(join(home, "auth.lock"), { recursive: true });
+    const dead = spawnSync(process.execPath, ["-e", ""]).pid!;
+    writeFileSync(join(home, "auth.lock", "pid"), String(dead));
+    const codes = await Promise.all(["a", "b", "c", "d"].map((n) => runAsync(["user", "create", "--name", n, "--email", `${n}@example.com`], PW + "\n")));
+    expect(codes).toEqual([0, 0, 0, 0]);
+    expect(stored().users).toHaveLength(4);
+    expect(readdirSync(home).filter((n) => n.startsWith("auth.lock"))).toEqual([]);
+  });
+
+  it("a broken file is an error, not no accounts", () => {
+    mkdirSync(home, { recursive: true });
+    writeFileSync(usersFile(), "{");
+    for (const r of [run(["user", "list"], ""), create()]) {
+      expect(r.code).toBe(1);
+      expect(r.err).toContain("is not valid JSON");
+    }
+    expect(readFileSync(usersFile(), "utf8")).toBe("{");
+  });
+
+  it("never prints a password or a hash", () => {
+    create();
+    run(["user", "list"], "");
+    const key = stored().users[0]!.passwordHash.split("$")[3]!;
+    for (const o of outputs) {
+      expect(o).not.toContain("scrypt$");
+      expect(o).not.toContain(key);
+      expect(o).not.toContain(PW);
+      expect(o).not.toContain(PW2);
+    }
+  });
+});
+
+describe("userCommand with a fake terminal", () => {
+  let saved: string | undefined;
+  beforeEach(() => {
+    saved = process.env.FACTORY_HOME;
+    process.env.FACTORY_HOME = join(tmp, "h");
+  });
+  afterEach(() => {
+    if (saved === undefined) delete process.env.FACTORY_HOME;
+    else process.env.FACTORY_HOME = saved;
+  });
+  const fake = (answers: string[], hidden: string[]) => {
+    const calls: string[] = [];
+    const lines: string[] = [];
+    const io: UserIo = {
+      isTTY: true,
+      ask: async (p) => (calls.push(p), answers.shift()!),
+      askHidden: async (p) => (calls.push(p), hidden.shift()!),
+      readStdinLine: async () => (calls.push("stdin"), undefined),
+      out: (l) => void lines.push(l),
+    };
+    return { io, calls, lines };
+  };
+  const list = () => userCommand({ positionals: ["list"], values: {} }, fake([], []).io);
+
+  it("asks for name, e-mail and the password twice", async () => {
+    const f = fake(["Ann", "ann@example.com"], [PW, PW]);
+    expect(await userCommand({ positionals: ["create"], values: { admin: true } }, f.io)).toBe(0);
+    expect(f.calls).toEqual(["Name: ", "E-mail: ", "Password: ", "Repeat password: "]);
+    expect(f.lines).toEqual(["created admin ann@example.com"]);
+    expect(f.lines.join("\n")).not.toContain(PW);
+  });
+
+  it("stops when the passwords differ", async () => {
+    const f = fake([], [PW, PW2]);
+    await expect(userCommand({ positionals: ["create"], values: { name: "Ann", email: "ann@example.com" } }, f.io)).rejects.toThrow("not the same");
+    expect(existsSync(join(tmp, "h", "users.json"))).toBe(false);
+  });
+
+  it("rejects a short password before the second prompt", async () => {
+    const f = fake([], ["short", "short"]);
+    await expect(userCommand({ positionals: ["create"], values: { name: "Ann", email: "ann@example.com" } }, f.io)).rejects.toThrow("password");
+    expect(f.calls).toEqual(["Password: "]);
+  });
+
+  it("does not take prototype names for sub-commands", async () => {
+    const f = fake([], []);
+    for (const sub of ["toString", "constructor", "__proto__", "hasOwnProperty"]) {
+      await expect(userCommand({ positionals: [sub, "ann@example.com"], values: {} }, f.io)).rejects.toThrow("usage: scf user create");
+    }
+    expect(f.calls).toEqual([]);
+    expect(existsSync(join(tmp, "h", "users.json"))).toBe(false);
+  });
+
+  it("calls no io method on a syntax error", async () => {
+    const f = fake([], []);
+    await expect(userCommand({ positionals: ["list", "extra"], values: {} }, f.io)).rejects.toThrow("usage");
+    await expect(userCommand({ positionals: ["create"], values: { repo: "." } }, f.io)).rejects.toThrow("usage");
+    expect(f.calls).toEqual([]);
+    expect(f.lines).toEqual([]);
+    await list();
+  });
+});
+
+// ---- the real prompts (terminalIo) on a fake terminal: streams that say isTTY and can switch raw mode ----
+
+/** Runs userCommand with the real terminalIo(); `steps` type an answer once its prompt has been printed. */
+async function onTerminal(args: { positionals: string[]; values: Record<string, unknown> }, steps: { wait: string; send: string }[]) {
+  const stdin = new PassThrough() as unknown as NodeJS.ReadStream & PassThrough;
+  stdin.isTTY = true;
+  stdin.setRawMode = () => stdin;
+  const stderr = new PassThrough() as unknown as NodeJS.WriteStream & PassThrough;
+  let out = "";
+  let seen = 0;
+  let i = 0;
+  stderr.on("data", (d) => {
+    out += d;
+    const s = steps[i];
+    if (s && out.slice(seen).includes(s.wait)) {
+      seen = out.length;
+      i++;
+      setImmediate(() => stdin.write(s.send));
+    }
+  });
+  let error: Error | undefined;
+  await userCommand(args, terminalIo(stdin, stderr)).catch((e: Error) => (error = e));
+  return { out, error };
+}
+
+describe("userCommand on a terminal", () => {
+  let saved: string | undefined;
+  beforeEach(() => {
+    saved = process.env.FACTORY_HOME;
+    process.env.FACTORY_HOME = home;
+  });
+  afterEach(() => {
+    if (saved === undefined) delete process.env.FACTORY_HOME;
+    else process.env.FACTORY_HOME = saved;
+  });
+
+  it("asks with echo off", async () => {
+    const r = await onTerminal(
+      { positionals: ["create"], values: { admin: true } },
+      [
+        { wait: "Name: ", send: "Ann\r" },
+        { wait: "E-mail: ", send: "ann@example.com\r" },
+        { wait: "Password: ", send: PW + "X\x7f\r" },
+        { wait: "Repeat password: ", send: PW + "\r" },
+      ],
+    );
+    expect(r.error).toBeUndefined();
+    expect(r.out).not.toContain(PW);
+    expect(r.out).not.toContain(PW.slice(PW.length / 2));
+    expect(await verifyPassword(PW, stored().users[0]!.passwordHash)).toBe(true);
+  });
+
+  it("refuses two different passwords", async () => {
+    const r = await onTerminal(
+      { positionals: ["create"], values: { name: "Ann", email: "ann@example.com" } },
+      [{ wait: "Password: ", send: PW + "\r" }, { wait: "Repeat password: ", send: PW2 + "\r" }],
+    );
+    expect(r.error?.message).toContain("the two passwords are not the same");
+    expect(r.out).not.toContain(PW);
+    expect(r.out).not.toContain(PW2);
+    expect(existsSync(usersFile())).toBe(false);
+  });
+
+  it("stops on Ctrl-C", async () => {
+    const r = await onTerminal({ positionals: ["create"], values: { name: "Ann", email: "ann@example.com" } }, [{ wait: "Password: ", send: "partial-typed\x03" }]);
+    expect(r.error?.message).toBe("cancelled");
+    expect(r.out).not.toContain("partial");
+    expect(existsSync(usersFile())).toBe(false);
+  });
+
+  it("changes a password", async () => {
+    mkdirSync(home, { recursive: true });
+    await userCommand({ positionals: ["create"], values: { name: "Ann", email: "ann@example.com" } }, {
+      isTTY: true, ask: async () => "", askHidden: async () => PW, readStdinLine: async () => undefined, out: () => {},
+    });
+    const r = await onTerminal({ positionals: ["password", "ann@example.com"] , values: {} }, [{ wait: "Password: ", send: PW2 + "\r" }, { wait: "Repeat password: ", send: PW2 + "\r" }]);
+    expect(r.error).toBeUndefined();
+    expect(r.out).not.toContain(PW2);
+    expect(await verifyPassword(PW2, stored().users[0]!.passwordHash)).toBe(true);
+  });
+});

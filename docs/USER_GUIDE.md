@@ -797,6 +797,17 @@ token (or a GitHub App) to make them as a bot instead.
 **Disk** — every run keeps its workspace so you can inspect or resume it. Remove old ones here
 or with `scf clean` (branches in your repositories are kept).
 
+**Accounts.** `scf user` keeps accounts in `users.json` in the data folder. Each account has an id,
+name, e-mail, role (`admin` or `user`), status (`active` or `blocked`), password hash, created time
+and last sign-in. Only you can read the file (mode `0600`). A data folder that does not exist yet is
+created with mode `0700`. Passwords are never stored: each one is hashed with scrypt, a 16-byte
+random salt per account, N=32768, r=8, p=3 and a 64-byte key. The parameters are stored with each
+hash (`scrypt$N=32768,r=8,p=3$<salt>$<key>`). A hash in any other form makes the file invalid.
+Anyone who can run commands on the machine as you has admin rights: they can read the file or run
+`scf user create --admin`. This includes the agent and shell steps of flows, which run as your
+user. Nothing asks you to sign in yet. A file that cannot be read or is not valid is an error,
+never "no accounts".
+
 Global settings are stored in `~/.spaghetti-code-foundry/config.yaml`; runs in `~/.spaghetti-code-foundry/runs/`.
 
 ---
@@ -878,6 +889,13 @@ The command is `scf`. `factory` still works as an alias and prints a short note.
 | `scf watch [flow] --var github_repo=o/r [--source …] [--once]` | Run one watcher from the terminal |
 | `scf eval <suite.yaml> [--flows a,b] [--models …]` | Run an eval suite |
 | `scf clean [--older-than 7] [--purge] [--dry-run]` | Remove old run workspaces |
+| `scf user create [--admin] [--name n] [--email e]` | Create an account. The first one needs `--admin`. Name and e-mail are asked for on a terminal |
+| `scf user list` | List accounts (never shows passwords or hashes) |
+| `scf user password <e-mail>` | Set a new password |
+| `scf user block <e-mail>` / `scf user unblock <e-mail>` | Block or unblock an account |
+
+The password is asked twice on a terminal, or read from the first line of stdin; it is never an
+option or an environment variable.
 
 ### Environment variables
 
@@ -977,6 +995,9 @@ A protected branch is a setting to change (**Protected branches** in Settings, o
 branch); the run then says the Foundry failed. A secret-scan finding is in the code: the step
 output lists the file, line and kind of secret.
 
+**Forgot the password.** Run `scf user password <e-mail>` on the machine. If no admin is left, run
+`scf user create --admin`.
+
 **Tests fail for reasons unrelated to the change.** Set the right command with the `test_cmd`
 variable, per repository in `<repo>/.claude-factory/config.yaml`.
 
@@ -993,6 +1014,7 @@ learnings, queue, locks and evals. The copy is made next to the new folder and r
 in one step, so you never see a half-done move. Paths that point into the old folder (in run state,
 lock files, `queue.json` and `config.yaml`) are rewritten. If `config.yaml` can't be rewritten
 safely, it is kept as it was and a warning lists the values that still point to the old folder.
+`users.json` and `sessions.json` are copied unchanged, with their mode.
 
 **The backup.** `~/.claude-factory` is never changed or deleted, except for a note file
 `MOVED-TO-SPAGHETTI-CODE-FOUNDRY.txt`. Nothing there is used anymore: your settings now live in

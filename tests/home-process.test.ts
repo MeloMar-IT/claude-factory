@@ -9,7 +9,9 @@ import { FACTORY_HOME, parseFlow } from "../src/flow/load.js";
 import {
   claimRunStart, homeMoved, homePaths, homeRestartReason, migrateDataHome, NOTE_NAME, prepareDataHome, setFactoryHome, watchDataHome,
 } from "../src/home.js";
-import { acquireLock, lockPath, releaseLock } from "../src/home-migrate.js";
+import { acquireLock, lockHolder, lockPath, releaseLock } from "../src/home-migrate.js";
+import { StoreError, withAuthLock, writeJsonFile } from "../src/auth/store.js";
+import { createUser, setStatus } from "../src/auth/users.js";
 import { RESTART_CODE } from "../src/supervise.js";
 
 let tmp: string;
@@ -220,6 +222,63 @@ describe("watchDataHome", () => {
     stop();
     expect(logs).toEqual(["moved — restart scf to use it"]);
     expect(exits).toEqual([]);
+  });
+});
+
+describe("account store and the move", () => {
+  const ann = { name: "Ann", email: "ann@example.com", password: "test-password-12345" };
+  const moveOpts = { from: "", to: "", env: {} as NodeJS.ProcessEnv, freeBytes: () => 1e15, sizeBytes: () => 1000, log: quiet };
+
+  it("writes on the old folder and releases both locks", async () => {
+    setFactoryHome(oldHome);
+    await createUser(ann);
+    expect(existsSync(join(oldHome, "users.json"))).toBe(true);
+    expect(existsSync(lockPath(newHome))).toBe(false);
+    expect(existsSync(join(oldHome, "auth.lock"))).toBe(false);
+  });
+
+  it("holds the move lock between the check and the write", async () => {
+    setFactoryHome(oldHome);
+    await createUser(ann);
+    withAuthLock(() => {
+      expect(lockHolder(lockPath(newHome))).toBe(process.pid);
+      const r = migrateDataHome({ ...moveOpts, from: oldHome, to: newHome, lockWaitMs: 100 });
+      expect(r.status).toBe("postponed");
+      expect(r.reason).toBe("busy");
+      expect(existsSync(newHome)).toBe(false);
+      writeJsonFile(join(oldHome, "users.json"), { version: 1, users: [] });
+    });
+    const r = migrateDataHome({ ...moveOpts, from: oldHome, to: newHome });
+    expect(r.status).toBe("migrated");
+    expect(JSON.parse(readFileSync(join(newHome, "users.json"), "utf8"))).toEqual({ version: 1, users: [] });
+  });
+
+  it("refuses after the move and changes nothing", async () => {
+    setFactoryHome(oldHome);
+    const u = await createUser(ann);
+    const before = readFileSync(join(oldHome, "users.json"));
+    mkdirSync(newHome);
+    await expect(createUser({ ...ann, email: "b@example.com" })).rejects.toMatchObject({ kind: "cannot-write", message: expect.stringContaining("moved to") });
+    await expect(setStatus(u.id, "blocked")).rejects.toBeInstanceOf(StoreError);
+    expect(readFileSync(join(oldHome, "users.json"))).toEqual(before);
+    expect(existsSync(join(oldHome, "auth.lock"))).toBe(false);
+    expect(existsSync(lockPath(newHome))).toBe(false);
+  });
+
+  it("reports a busy move lock", () => {
+    setFactoryHome(oldHome);
+    acquireLock(lockPath(newHome));
+    try {
+      expect(() => withAuthLock(() => 1, 150)).toThrow(expect.objectContaining({ kind: "locked", message: expect.stringContaining(lockPath(newHome)) }));
+      expect(existsSync(join(oldHome, "auth.lock"))).toBe(false);
+    } finally {
+      releaseLock(lockPath(newHome));
+    }
+  });
+
+  it("takes no move lock with an explicit home", () => {
+    process.env.FACTORY_HOME = join(tmp, "explicit");
+    withAuthLock(() => expect(existsSync(lockPath(newHome))).toBe(false));
   });
 });
 

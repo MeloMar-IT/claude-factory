@@ -39,6 +39,11 @@ Usage:
   scf new <name> [--from <flow>] [--global]      Create your own flow (copies a template)
   scf ui [--port 4777] [--no-open]               Web UI + queue + watchers from config.yaml
   scf serve [--port 4777]                        Same without opening a browser (for services)
+  scf user create [--admin] [--name n] [--email e]
+                                                 Create an account (the first one: --admin)
+  scf user list                                  List accounts
+  scf user password <e-mail>                     Set a new password
+  scf user block <e-mail> | unblock <e-mail>     Block or unblock an account
   scf service install|uninstall|status          Keep \`scf serve\` running as a macOS login agent
   scf watch [flow] --var github_repo=o/r         Every 5 min, run the flow (default github-issue) on
         [--every 5m] [--label claude-factory]    each open issue with the label; results are marked
@@ -123,6 +128,9 @@ async function main(argv: string[]): Promise<number> {
       from: { type: "string" },
       note: { type: "string" },
       "no-open": { type: "boolean" },
+      admin: { type: "boolean" },
+      name: { type: "string" },
+      email: { type: "string" },
       help: { type: "boolean", short: "h" },
     },
   });
@@ -339,6 +347,12 @@ async function main(argv: string[]): Promise<number> {
       else if (sub === "status") process.stdout.write(serviceStatus() + "\n");
       else throw new Error("usage: scf service install|uninstall|status");
       return 0;
+    }
+
+    case "user": {
+      const { userCommand, terminalIo } = await import("./auth/cli.js");
+      const { help: _h, ...given } = values;
+      return userCommand({ positionals: positionals.slice(1), values: given }, terminalIo());
     }
 
     default:

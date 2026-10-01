@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -68,6 +68,24 @@ const migrate = (o: Partial<MigrateOptions> = {}) =>
 const worktrees = (repo: string) => git(repo, "worktree", "list", "--porcelain");
 const real = (p: string) => realpathSync(p);
 const leftovers = () => readdirSync(tmp).filter((n) => n.includes(".migrating-"));
+
+describe("account files in the move", () => {
+  it("copies users.json and sessions.json byte for byte and keeps their mode", () => {
+    const body = JSON.stringify({ version: 1, users: [{ name: `${from}/x` }] });
+    for (const f of ["users.json", "sessions.json"]) writeFileSync(join(from, f), body, { mode: 0o600 });
+    writeFileSync(join(from, "queue.json"), body);
+    mkdirSync(join(from, "runs", "r9"), { recursive: true });
+    writeFileSync(join(from, "runs", "r9", "users.json"), body);
+    writeFileSync(join(from, "runs", "r9", "run.json"), JSON.stringify({ runId: "r9", status: "succeeded" }));
+    expect(migrate().status).toBe("migrated");
+    for (const f of ["users.json", "sessions.json"]) {
+      expect(readFileSync(join(to, f))).toEqual(Buffer.from(body));
+      expect(statSync(join(to, f)).mode & 0o777).toBe(0o600);
+    }
+    expect(readFileSync(join(to, "queue.json"), "utf8")).toContain(to);
+    expect(readFileSync(join(to, "runs", "r9", "users.json"), "utf8")).toContain(to);
+  });
+});
 
 describe("moving waiting runs with git worktrees", () => {
   it("repairs the worktree, so a waiting run is approved and resumed in the new folder", async () => {

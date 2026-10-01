@@ -462,18 +462,27 @@ export function homeMoved(): string | undefined {
   return existsSync(newHome) || existsSync(note) ? newHome : undefined;
 }
 
-/** Wraps the first write of a run: processes on the old folder take a short lock, and refuse once it moved. */
-export function claimRunStart(runsDir: string, write: () => void, waitMs = 120_000): void {
+/**
+ * Wraps a write into the data folder: processes on the old folder take the move lock for a moment, and refuse once
+ * the folder moved. `fail` builds the error for "busy" (detail: the lock) and "moved" (detail: the new folder).
+ */
+export function claimHomeWrite(path: string, write: () => void, waitMs: number, fail: (kind: "busy" | "moved", detail: string) => Error): void {
   const { oldHome, lock } = homePaths();
-  if (explicitHome(process.env) || FACTORY_HOME !== oldHome || !(resolve(runsDir) + sep).startsWith(oldHome + sep)) return write();
-  if (!acquireLock(lock, waitMs)) throw new Error(`could not start the run: another scf process holds ${lock}`);
+  if (explicitHome(process.env) || FACTORY_HOME !== oldHome || !(resolve(path) + sep).startsWith(oldHome + sep)) return write();
+  if (!acquireLock(lock, waitMs)) throw fail("busy", lock);
   try {
     const moved = homeMoved();
-    if (moved) throw new Error(`the data folder moved to ${moved}; restart scf to continue`);
+    if (moved) throw fail("moved", moved);
     write();
   } finally {
     releaseLock(lock);
   }
+}
+
+/** Wraps the first write of a run: processes on the old folder take a short lock, and refuse once it moved. */
+export function claimRunStart(runsDir: string, write: () => void, waitMs = 120_000): void {
+  claimHomeWrite(runsDir, write, waitMs, (kind, detail) =>
+    new Error(kind === "busy" ? `could not start the run: another scf process holds ${detail}` : `the data folder moved to ${detail}; restart scf to continue`));
 }
 
 /** Why a long-running server should restart, if it should. */
