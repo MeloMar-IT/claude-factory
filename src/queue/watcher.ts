@@ -7,11 +7,11 @@ import type { Scheduler } from "./scheduler.js";
 
 /** Status labels the watcher puts on issues. Remove one to have the issue picked up again. */
 export const STATUS_LABELS = {
-  working: { name: "factory:working", color: "1d4ed8", description: "claude-factory is working on this" },
-  done: { name: "factory:done", color: "15803d", description: "claude-factory finished this" },
-  needsInfo: { name: "factory:needs-info", color: "d97706", description: "claude-factory needs more information — reply to continue" },
-  waiting: { name: "factory:waiting-approval", color: "7c3aed", description: "claude-factory waits for /approve or /reject" },
-  failed: { name: "factory:failed", color: "b91c1c", description: "claude-factory run failed — remove this label to retry" },
+  working: { name: "factory:working", color: "1d4ed8", description: "Spaghetti Code Foundry is working on this" },
+  done: { name: "factory:done", color: "15803d", description: "Spaghetti Code Foundry finished this" },
+  needsInfo: { name: "factory:needs-info", color: "d97706", description: "Spaghetti Code Foundry needs more information — reply to continue" },
+  waiting: { name: "factory:waiting-approval", color: "7c3aed", description: "Spaghetti Code Foundry waits for /approve or /reject" },
+  failed: { name: "factory:failed", color: "b91c1c", description: "Spaghetti Code Foundry run failed — remove this label to retry" },
 } as const;
 type LabelKey = keyof typeof STATUS_LABELS;
 type LabelNames = Record<LabelKey, string>;
@@ -160,7 +160,7 @@ export class Watcher {
       throw new Error(`cannot access ${this.repo} with gh: ${e.message.split("\n")[0]}`);
     });
     if (this.cfg.source === "issues") {
-      await ensureLabel(this.repo, this.cfg.label, "c2410c", "Let claude-factory work on this issue");
+      await ensureLabel(this.repo, this.cfg.label, "c2410c", "Let Spaghetti Code Foundry work on this issue");
       for (const [k, l] of Object.entries(STATUS_LABELS)) await ensureLabel(this.repo, this.L[k as LabelKey], l.color, l.description);
     }
     loadFlow(this.flowName(), this.d.repo); // fail early on a missing flow
@@ -282,7 +282,7 @@ export class Watcher {
     const failed = [...s.history].reverse().find((h) => !h.ok);
     const tail = (failed?.output || failed?.error || "").trim().slice(-3000);
     const body = [
-      `🤖 **claude-factory** could not finish this issue: ${s.reason ?? s.status}`,
+      `🤖 **Spaghetti Code Foundry** could not finish this issue: ${s.reason ?? s.status}`,
       failed ? `\nLast failing step: \`${failed.id}\`${failed.visit > 1 ? ` (attempt ${failed.visit})` : ""}` : "",
       tail ? `\n<details><summary>Output (tail)</summary>\n\n\`\`\`\n${tail.replace(/```/g, "ˋˋˋ")}\n\`\`\`\n</details>` : "",
       `\n_Remove the \`${this.L.failed}\` label to try again._`,

@@ -21,7 +21,7 @@ async function saveConfig(mutate, okMsg) {
 
 const SOURCES = {
   issues: "Issues with a label → run a flow",
-  "pr-feedback": "Review comments on factory PRs → pr-feedback",
+  "pr-feedback": "Review comments on Foundry PRs → pr-feedback",
   "ci-failures": "CI red on the default branch → ci-fix PR",
   schedule: "On a schedule → run a chore (PR if anything changed)",
 };

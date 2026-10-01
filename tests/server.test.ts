@@ -44,6 +44,24 @@ describe("ui server", () => {
     expect((await fetch(base + "/../package.json")).status).toBe(404);
   });
 
+  it("shows the product name", async () => {
+    const text = (p: string) => fetch(base + p).then((r) => r.text());
+    const html = await text("/");
+    expect(html).toContain("<title>Spaghetti Code Foundry</title>");
+    expect(html).toContain('<span class="brand-full">Spaghetti Code Foundry</span><span class="brand-short">Foundry</span>');
+    expect(html).not.toContain("claude-factory");
+    const css = await text("/style.css");
+    expect(css).toContain(".brand-short { display: none; }");
+    expect(css).toMatch(/@media \(max-width: 760px\) \{[^@]*\.brand-full \{ display: none; \}[^@]*\.brand-short \{ display: inline; \}/);
+    const app = await text("/app.js");
+    expect(app).toContain("Welcome to Spaghetti Code Foundry");
+    expect(app).toContain("Build your own coding flows: pick a flow on the left,");
+    const admin = await text("/admin.js");
+    expect(admin).toContain("Review comments on Foundry PRs");
+    expect(admin).toContain('label: "claude-factory"');
+    expect(admin).toContain('placeholder: "claude-factory[bot]"');
+  });
+
   it("rejects foreign origins", async () => {
     const r = await fetch(base + "/api/runs", {
       method: "POST",

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { FACTORY_HOME, flowDir, parseFlow } from "../flow/load.js";
 import { runClaude } from "../steps/claude.js";
 
-const SYSTEM = `You design workflow files for "claude-factory". The reference you get describes the
+const SYSTEM = `You design workflow files for "Spaghetti Code Foundry". The reference you get describes the
 complete format. Reply with ONLY the complete flow as YAML inside a single \`\`\`yaml code fence.
 No other text. Use only the fields documented in the reference.`;
 

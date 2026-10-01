@@ -1,4 +1,4 @@
-# Writing claude-factory flows — reference for AI assistants
+# Writing Spaghetti Code Foundry flows — reference for AI assistants
 
 > **For people:** give this whole file to any AI assistant (ChatGPT, Claude, Gemini, a local
 > model…), then describe the flow you want. Print it with `scf flow-guide`, or copy it from
@@ -11,7 +11,7 @@
 
 ## What you are writing
 
-claude-factory runs **flows**: YAML files describing a pipeline of steps that is executed
+Spaghetti Code Foundry runs **flows**: YAML files describing a pipeline of steps that is executed
 headlessly on the user's machine, against a git repository. Steps are:
 
 - **agent steps** (`type: claude`) — run a coding agent (Claude Code, or OpenAI's Codex CLI)
@@ -228,7 +228,7 @@ Every `FACTORY_…` variable is also set as `SCF_…` (e.g. `$SCF_TASK`); the bu
 | `"$FACTORY_TOOLS/test-summary" <marker-file>` | Summarises test reports newer than the marker file |
 | `"$FACTORY_TOOLS/secret-scan" [range]` | Checks commits for secrets (pushes are always checked anyway) |
 
-The factory always blocks pushes to protected branches (`main`, `master`, …) and pushes that
+The Foundry always blocks pushes to protected branches (`main`, `master`, …) and pushes that
 contain secrets — a flow cannot turn that off. Push to a new branch and open a pull request.
 
 ## Patterns

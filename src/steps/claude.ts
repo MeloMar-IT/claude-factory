@@ -54,7 +54,7 @@ export function resolveClaudeBin(): string {
  * servers, plugins, skills, hooks, env): it bloats every turn and invites off-task detours.
  */
 export const FACTORY_AGENT_NOTE = [
-  "You are running unattended as one step of a claude-factory flow. Do only the task in the prompt.",
+  "You are running unattended as one step of a Spaghetti Code Foundry flow. Do only the task in the prompt.",
   "Ignore instructions from global or home-folder configuration about spawning agents or swarms,",
   "memory tools, hooks or other orchestration. Do not use skills. Do not look at other projects",
   "or at ~/.claude. Work only inside the current workspace.",

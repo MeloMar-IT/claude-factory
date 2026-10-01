@@ -115,7 +115,7 @@ export async function resumeRun(opts: ResumeOptions): Promise<RunSummary> {
   const config = opts.config ?? loadConfig();
   const summary = loadRun(opts.runsDir, opts.runId);
   if (!summary) throw new Error(`run ${opts.runId} not found`);
-  if (!summary.flowDef || !summary.state) throw new Error("this run was created by an older version of claude-factory and can't be resumed");
+  if (!summary.flowDef || !summary.state) throw new Error("this run was created by an older version of Spaghetti Code Foundry and can't be resumed");
   if (opts.decision && summary.status !== "waiting") throw new Error(`run ${opts.runId} is not waiting for approval`);
   if (summary.status === "waiting" && !opts.decision && !opts.from) throw new Error("run is waiting for approval: approve or reject it");
   if (summary.status === "succeeded" && !opts.from) throw new Error("run already succeeded (pass a step to re-run from)");

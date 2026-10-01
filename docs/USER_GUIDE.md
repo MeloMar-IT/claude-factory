@@ -1,8 +1,10 @@
-# claude-factory user guide
+# Spaghetti Code Foundry user guide
 
-claude-factory runs **flows**: pipelines of steps that code, test, review and ship changes with
-AI coding agents on your own machine. This guide walks through the web UI, writing your own
-flows, automating work from GitHub, choosing models, and keeping it all safe.
+Spaghetti Code Foundry runs **flows**: pipelines of steps that code, test, review and ship
+changes with AI coding agents on your own machine. This guide walks through the web UI, writing
+your own flows, automating work from GitHub, choosing models, and keeping it all safe.
+
+Formerly **claude-factory**. The command is now `scf` (`factory` still works); the data folders (`~/.claude-factory`, `<repo>/.claude-factory`), the labels (`claude-factory`, `factory:*`), `factory/…` branches and the repository keep the old name.
 
 - [1. Start](#1-start)
 - [2. Run a flow](#2-run-a-flow)
@@ -53,7 +55,7 @@ Pick a flow on the left, press **▶ Run**, describe the task and start it.
 
 - **Task** — what you want done, in plain language. Flows use it in their prompts.
 - **Repository** — the local git repository to work on.
-- **Variables** — settings the flow exposes, e.g. `test_cmd`. Leave `auto` to let the factory
+- **Variables** — settings the flow exposes, e.g. `test_cmd`. Leave `auto` to let the Foundry
   detect the test command (npm/pnpm/yarn, pytest, Go, Cargo, Gradle, Maven, Make).
 
 **Your checkout is never touched.** Depending on the flow's *workspace* setting, a run works in:
@@ -112,7 +114,7 @@ An **approval** step pauses the run until a person decides. Approve or reject in
 - **Retry from step…** re-runs from any earlier step.
 - **Cancel** stops a running run; you can resume it later.
 
-Runs survive restarts: if the factory stops mid-run, the run is marked *interrupted* and can be
+Runs survive restarts: if the Foundry stops mid-run, the run is marked *interrupted* and can be
 resumed (watchers do this automatically).
 
 ---
@@ -308,7 +310,7 @@ ChatGPT) instead of pausing when the daily or run budget is used up.
 
 ## 6. Automate with watchers
 
-A watcher checks GitHub on a schedule and starts runs by itself — as long as the factory is
+A watcher checks GitHub on a schedule and starts runs by itself — as long as the Foundry is
 running (see [Keep it running](#keep-it-running)). GitHub access uses the `gh` CLI's login.
 
 ![Watchers](images/watchers.png)
@@ -318,7 +320,7 @@ running (see [Keep it running](#keep-it-running)). GitHub access uses the `gh` C
 | Source | Starts a run when… | Default flow |
 |---|---|---|
 | **Issues** | an open issue has the trigger label | `github-issue` |
-| **Review comments** | someone comments on a factory PR (branch `factory/*`) | `pr-feedback` |
+| **Review comments** | someone comments on a Foundry PR (branch `factory/*`) | `pr-feedback` |
 | **CI failures** | the latest CI run of a workflow on the default branch failed | `ci-fix` |
 | **Schedule** | it is time for the chore (every N, or once a day at a set time) | `chore` |
 
@@ -337,7 +339,7 @@ in GitHub:
 | Label (default name) | Meaning |
 |---|---|
 | `factory:working` | A run is working on it |
-| `factory:needs-info` | The factory asked a question on the issue — reply and it continues |
+| `factory:needs-info` | The Foundry asked a question on the issue — reply and it continues |
 | `factory:waiting-approval` | Waiting for `/approve` or `/reject` on the issue |
 | `factory:done` | Finished |
 | `factory:failed` | Failed; the reason is commented on the issue. Remove the label to retry |
@@ -394,7 +396,7 @@ project's build and test commands (`./gradlew`, `mvn`, `npm`, `pytest`, `go test
 `make`) and read-only git commands — so it can check its own work and, for example, regenerate
 test fixtures. Pushing is never allowed. If the build needs environment settings (such as
 `JAVA_HOME`), put them in the `agent_env` variable: `KEY=value` pairs separated by `;` or new
-lines. `PATH`, tokens and the factory's own variables can't be set this way.
+lines. `PATH`, tokens and the Foundry's own variables can't be set this way.
 
 ### The label pipeline: one label → plan + code → one pull request
 
@@ -450,7 +452,7 @@ issues that can each be built and tested on their own, and scores how risky it i
 without you looking (0–100: a mechanical split along existing boundaries is low; deferring or
 reinterpreting scope, or anything that needs your decision, is high).
 
-- **Split risk 50 or lower:** the factory creates the new issues by itself — with the original's
+- **Split risk 50 or lower:** the Foundry creates the new issues by itself — with the original's
   labels, `Factory_go`, and a **Depends on** section with the real issue numbers so they are built
   in order — comments the list on the original and closes it. The new issues then go through the
   questions check and are built like any other.
@@ -460,7 +462,7 @@ reinterpreting scope, or anything that needs your decision, is high).
 
 The threshold is the `auto_split_max_risk` variable (default 50).
 
-#### Labels the factory sets
+#### Labels the Foundry sets
 
 | Label | Means | What you do |
 |---|---|---|
@@ -481,8 +483,8 @@ Issues with an excluded label (e.g. `geni`) are never picked up, whatever other 
 | Check a plan before it is coded | Add `Factory_review_plan` before (or together with) `Factory_go` |
 | Approve / reject a risky plan | `/approve` (+ notes), or `/reject` + what to change |
 | Retry after an error | Remove `Factory_ERROR` |
-| Stop the factory from touching an issue | Remove `Factory_go`, or add an excluded label |
-| Get the work into `main` | Merge the daily release pull request `develop` → `main` (gitflow), or the rolling factory pull request |
+| Stop the Foundry from touching an issue | Remove `Factory_go`, or add an excluded label |
+| Get the work into `main` | Merge the daily release pull request `develop` → `main` (gitflow), or the rolling Foundry pull request |
 
 #### Why is nothing happening?
 
@@ -493,7 +495,7 @@ watcher's card on the **Watchers** page). The usual reasons:
 - **It needs you:** a question (`Factory_needs_info`), a risky plan (`Factory_waiting`) or an
   error (`Factory_ERROR`).
 - **It waits for another issue.** If the issue has a **Depends on** (or **Blocked by**) line or
-  section, it starts only when those issues are done — closed, or `Factory_done` (in the factory
+  section, it starts only when those issues are done — closed, or `Factory_done` (in the Foundry
   pull request). You can name them as `#72` or by title (`Story 4 — Download the update safely`).
   So you can put `Factory_go` on a whole chain at once; each story is planned and coded on top of
   the code of the one before it.
@@ -501,7 +503,7 @@ watcher's card on the **Watchers** page). The usual reasons:
 - **New issues are being checked for questions** (a few minutes, once per batch).
 - **The usage limit or the daily budget is reached.** Runs pause and continue by themselves
   later; the label stays `Factory_working`.
-- **The factory isn't running.** Watchers only run while `scf ui` / `scf serve` runs.
+- **The Foundry isn't running.** Watchers only run while `scf ui` / `scf serve` runs.
 - **It has an excluded label** such as `geni`.
 
 #### Branches: gitflow (recommended) or one rolling pull request
@@ -513,13 +515,13 @@ The pipeline can deliver in two ways; the watcher's flow decides which.
 ```mermaid
 flowchart LR
     M[main] -->|"created from main (once)"| D[develop]
-    D --> F1["feature/86-…"] -->|"tests + reviews pass →<br/>factory merges"| D
+    D --> F1["feature/86-…"] -->|"tests + reviews pass →<br/>Foundry merges"| D
     D --> F2["feature/88-…"] -->|merged| D
     D -->|"17:00: release PR, you merge"| M
 ```
 
 - Every issue gets its own branch, `feature/<issue>-<title>`, from `develop`. When its tests and
-  both Codex reviews pass, the **factory merges it into `develop` itself**, runs the tests on the
+  both Codex reviews pass, the **Foundry merges it into `develop` itself**, runs the tests on the
   merged `develop`, pushes, deletes the merged feature branch (`delete_merged_branches: no`
   keeps it) and **closes the issue** — done means merged into `develop` (`close_when_merged: no`
   leaves it open until the release reaches `main`). If `develop` moved meanwhile, it merges again; conflicts are
@@ -528,12 +530,12 @@ flowchart LR
 - **Several issues are coded at the same time** when they change different parts of the code:
   each plan names its code areas (`AREAS:`), and a run waits only while another run holds an
   overlapping area. Issues in a **Depends on** chain are still built one after the other.
-- Every day at **17:00** (`release-daily`) the factory runs the full tests and build on `develop`
+- Every day at **17:00** (`release-daily`) the Foundry runs the full tests and build on `develop`
   and opens (or updates) **one pull request `develop` → `main`** that lists and closes the day's
   issues — a draft while the checks fail. **You merge it once a day.**
 - `develop` is created from `main` the first time, and kept up to date with `main` (for example
   after a hotfix) before new work starts. `develop` must not be in *Protected branches*
-  (Settings), since the factory pushes to it; `main` stays protected.
+  (Settings), since the Foundry pushes to it; `main` stays protected.
 - **Size limit:** a plan over 15 files or about 800 lines of production code (tests and docs
   don't count) is split into smaller issues instead — automatically when the split risk is low
   (`max_files`, `max_code_lines`).
@@ -545,7 +547,7 @@ flowchart LR
 - The **pull request is opened with the first finished issue** and grows as more are finished —
   coding never waits for a merge. Merge it whenever you like; after that, work continues on a
   fresh branch from `main`.
-- Every day at **17:00** the factory runs the full tests and build on it and comments the result
+- Every day at **17:00** the Foundry runs the full tests and build on it and comments the result
   on the pull request. While they fail, the pull request is a draft.
 
 #### Older two-label pipeline
@@ -557,8 +559,8 @@ daily pull request is open. Use them if you want to see every plan before any co
 ### Keep it running
 
 Watchers only run while `scf ui` (or `scf serve`) runs. When a new version of
-claude-factory is built (`npm run build`), the running server restarts itself as soon as no run
-is active — no need to stop and start it. To keep the factory running in the background on macOS,
+Spaghetti Code Foundry is built (`npm run build`), the running server restarts itself as soon as no run
+is active — no need to stop and start it. To keep the Foundry running in the background on macOS,
 also after a restart of your Mac:
 
 ```bash
@@ -714,11 +716,11 @@ the usage limit). See also [Why is nothing happening?](#why-is-nothing-happening
 `Factory_review_plan`. Read the plan on the issue and reply `/approve` (with notes if you like)
 or `/reject` with what to change.
 
-**The factory pull request is a draft.** The daily full test run or build failed on it; the
+**The Foundry pull request is a draft.** The daily full test run or build failed on it; the
 failing output is in the daily report comment. It becomes ready again when a later report passes.
 
 **A watcher shows an error.** Check that `gh auth status` works in the terminal where the
-factory runs and that you have access to the repository. **Check now** on the Watchers page
+Foundry runs and that you have access to the repository. **Check now** on the Watchers page
 retries immediately.
 
 **"codex CLI not found" or "not logged in".** Install Codex (`npm i -g @openai/codex`, or the

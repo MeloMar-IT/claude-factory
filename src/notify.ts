@@ -14,7 +14,7 @@ export async function notifyRun(config: Config, s: RunSummary): Promise<void> {
   if (process.env.FACTORY_NO_NOTIFY === "1") return;
   const n = config.notify;
   if (s.status === "running" || !n.on.includes(s.status)) return;
-  const title = `claude-factory · ${s.flow} ${s.status}`;
+  const title = `Foundry · ${s.flow} ${s.status}`;
   const msg = message(s);
   const jobs: Promise<unknown>[] = [];
 
