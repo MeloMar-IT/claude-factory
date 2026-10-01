@@ -1,5 +1,6 @@
 import type { WatcherConfig } from "./config.js";
 import type { RunSummary } from "./engine/state.js";
+import { statusHelp, statusName } from "./words.js";
 
 /** Why something waits (or what it does now). One kind per waiting reason. */
 export type NextKind =
@@ -13,6 +14,10 @@ export type NextWho = "You" | "Foundry" | "Another story" | "A time limit" | "So
 
 export interface NextStep {
   kind: NextKind;
+  /** Short plain status name, e.g. "waiting for you — questions". */
+  status: string;
+  /** Two sentences: what it means, and what happens next or what to do. */
+  help: string;
   who: NextWho;
   /** One plain sentence: why it waits. */
   why: string;
@@ -127,7 +132,7 @@ function blockerClause(b: BlockerInfo): string {
     case "queued": case "one_at_a_time": case "starting": case "checking": return "which is queued";
     case "area_lock": return "which waits for a code area";
     case "usage_limit": case "daily_budget": return "which is paused by a limit";
-    case "release": return "which waits for a release";
+    case "release": return n.until ? `which waits for the ${n.until}` : "which waits for the release pull request";
     case "failed": return "which failed";
     case "interrupted": case "stopped": case "cancelled": return "which is stopped";
     default: return "which is to be done";
@@ -254,10 +259,10 @@ export function nextStep(kind: NextKind, base: NextBase = {}, d: NextData = {}):
       }
       who = "You";
       const n = d.pr?.number;
-      why = n ? `Daily pull request #${n} is not merged yet` : "The release is not merged yet";
-      action = n ? `Merge the daily pull request #${n}` : "Merge the release pull request";
+      why = n ? `Release pull request #${n} is not merged yet` : "The release pull request is not merged yet";
+      action = n ? `Merge the release pull request #${n}` : "Merge the release pull request";
       say = `${action.charAt(0).toLowerCase()}${action.slice(1)} to continue`;
-      if (d.pr?.url) w = { label: `Pull request #${n}`, url: d.pr.url };
+      if (d.pr?.url) w = { label: `Release pull request #${n}`, url: d.pr.url };
       break;
     }
     case "failed": {
@@ -330,8 +335,9 @@ export function nextStep(kind: NextKind, base: NextBase = {}, d: NextData = {}):
       break;
   }
 
+  const facts = { releaseAt: kind === "release" && !d.pr ? d.releaseAt : undefined, blockers: (d.blockers ?? []).map((b) => b.issue) };
   return {
-    kind, who, why, action, where: w, until,
+    kind, status: statusName(kind, facts), help: statusHelp(kind, facts), who, why, action, where: w, until,
     repo: base.repo ?? "", user: "", issue, title: base.title ?? "", runId: base.runId,
     text: sentence(why.replace(/[.!?]+$/, ""), say.replace(/[.!?]+$/, "")),
     ...(kind === "dependency" ? { blockers: d.blockers ?? [] } : {}),

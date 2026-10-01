@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { WatcherSchema } from "../src/config.js";
 import type { RunSummary } from "../src/engine/state.js";
+import { statusName } from "../src/words.js";
 import { COMMENT_KINDS, commentText, countQuestions, nextStep, nextStepEnv, releaseAtFor, releaseWatchersFor, runNextStep, trackingWatcher, type NextKind, type NextStep } from "../src/next-step.js";
 
 const run = (over: Partial<RunSummary> = {}) =>
@@ -73,7 +74,7 @@ describe("next-step records, one per kind", () => {
     ["area_lock", { areaWait: { runId: "r0", areas: "src" } }, "Another story", "Nothing — it continues by itself", "#/runs/r0"],
     ["usage_limit", data, "A time limit", "Nothing — it continues by itself", ISSUE],
     ["daily_budget", data, "A time limit", "Nothing — it continues by itself", ISSUE],
-    ["release", { ...data, pr: { number: 99, url: "https://github.com/acme/app/pull/99" } }, "You", "Merge the daily pull request #99", "https://github.com/acme/app/pull/99"],
+    ["release", { ...data, pr: { number: 99, url: "https://github.com/acme/app/pull/99" } }, "You", "Merge the release pull request #99", "https://github.com/acme/app/pull/99"],
     ["failed", data, "Something is wrong", "Remove the `factory:failed` label to start over, or resume the run on its page to continue at the failed step", ISSUE],
     ["restart", {}, "Foundry", "Nothing — it continues by itself", "#/watchers"],
     ["watcher_error", { reason: "gh failed" }, "Something is wrong", "Check the watcher on the Watchers page", "#/watchers"],
@@ -95,6 +96,65 @@ describe("next-step records, one per kind", () => {
     expect(n.where.url).toBe(url);
     expect(n.user).toBe("");
     expect(n).toMatchObject({ repo: "acme/app", issue: 7, title: "T", runId: "r1" });
+  });
+
+  it("carries status and help from the glossary, kind first", () => {
+    for (const [kind, d] of cases) {
+      const n = nextStep(kind, base, d);
+      expect(n.status, kind).toBe(statusName(kind, { blockers: (d?.blockers ?? []).map((b) => b.issue) }));
+      expect(n.help, kind).toMatch(/^[^.!?]+[.!?] [^.!?]+[.!?]$/);
+    }
+    expect(Object.keys(nextStep("done"))[0]).toBe("kind");
+  });
+
+  it("words the release by pull request or schedule", () => {
+    expect(runNextStep(run(), { ...watched, releaseAt: "17:00" }).status).toBe("in develop (ships with the 17:00 release)");
+    expect(nextStep("release", base, { pr: { number: 99 }, releaseAt: "17:00" }).status).toBe("waiting for you — release pull request");
+    const stopped = runNextStep(run({ status: "stopped", reason: 'stopped at step "wait_for_merge"' }));
+    expect(stopped.status).toBe("waiting for you — release pull request");
+    expect(stopped.action).toBe("Merge the release pull request");
+    const r = nextStep("release", base, { pr: { number: 99, url: "u" } });
+    for (const t of [r.why, r.action, r.where.label]) {
+      expect(t).toContain("elease pull request");
+      expect(t).not.toContain("aily pull request");
+    }
+  });
+
+  it("names the release in a dependency chain", () => {
+    const dep = (b: NextStep) => nextStep("dependency", { issue: 89 }, { blockers: [{ issue: 88, next: b }] }).why;
+    expect(dep(nextStep("release", { issue: 88 }, { pr: { number: 99 } }))).toBe("#89 waits for #88, which waits for the release pull request");
+    expect(dep(nextStep("release", { issue: 88 }, { releaseAt: "17:00" }))).toBe("#89 waits for #88, which waits for the 17:00 release");
+  });
+
+  it("uses no banned word in any record", () => {
+    const variants: [NextKind, Parameters<typeof nextStep>[2]][] = [
+      ...cases.map((c) => [c[0], c[1]] as [NextKind, Parameters<typeof nextStep>[2]]),
+      ["approve_plan", {}], ["approve_split", {}], ["failed", {}], ["interrupted", {}], ["cancelled", {}], ["planner_questions", {}],
+      ["restart", { restartWhy: "data_folder" }], ["release", { releaseAt: "17:00" }],
+      ["dependency", { blockers: [{ issue: 1, next: nextStep("dependency", {}, { blockers: [{ issue: 2, next: nextStep("running") }] }) }] }],
+      ["area_lock", { areaWait: { runId: "r0", areas: "src, tests" } }],
+    ];
+    for (const [kind, d] of variants) {
+      const n = nextStep(kind, base, d);
+      for (const t of [n.why, n.action, n.text, n.status, n.help, n.where.label]) {
+        for (const w of ["hold", "precheck", "area lock", "jump_only"]) expect(t.toLowerCase(), `${kind}: ${t}`).not.toContain(w);
+      }
+    }
+  });
+
+  it("keeps banned words only inside quoted values", () => {
+    const bad = "precheck hold area lock jump_only split risk";
+    const scan = (t: string) => ["hold", "precheck", "area lock", "jump_only", "split risk"].filter((w) => t.toLowerCase().includes(w));
+    const recs = [
+      nextStep("approval", base, { message: bad }), nextStep("failed", base, { reason: bad }), nextStep("failed", base, { ...data, reason: bad, failedLabel: "on-hold" }),
+      nextStep("watcher_error", base, { reason: bad }), nextStep("area_lock", base, { areaWait: { runId: "r0", areas: bad } }),
+    ];
+    for (const n of recs) {
+      for (const t of [n.status, n.help, n.where.label]) expect(scan(t)).toEqual([]);
+      for (const t of [n.why, n.action, n.text]) expect(scan(t.split(bad).join("").split("on-hold").join(""))).toEqual([]);
+    }
+    expect(recs[2]!.action).toContain("`on-hold`");
+    expect(recs[0]!.why).toContain(bad);
   });
 
   it("has a kind in the table for every kind", () => {

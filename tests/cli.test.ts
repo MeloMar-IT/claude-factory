@@ -7,6 +7,7 @@ import { WatcherSchema } from "../src/config.js";
 import { flowDir } from "../src/flow/load.js";
 import { BOT_MARKER } from "../src/github.js";
 import { STATUS_LABELS } from "../src/queue/watcher.js";
+import { LABEL_WORDS } from "../src/words.js";
 
 const NOTICE = 'note: "factory" is now "scf" (Spaghetti Code Foundry); "factory" keeps working as an alias.';
 const readJson = (p: string) => JSON.parse(readFileSync(p, "utf8"));
@@ -85,9 +86,10 @@ describe("names that stay", () => {
     ]);
     expect(WatcherSchema.parse({ id: "w", github_repo: "o/r" }).label).toBe("claude-factory");
     expect(flowDir("repo", "/r")).toBe("/r/.claude-factory/flows");
-    for (const l of Object.values(STATUS_LABELS)) {
-      expect(l.description.startsWith("Spaghetti Code Foundry ")).toBe(true);
-      expect(l.description.length).toBeLessThanOrEqual(100);
+    const descriptions = [...Object.values(STATUS_LABELS).map((l) => l.description), LABEL_WORDS.trigger, LABEL_WORDS.review, LABEL_WORDS.triggerReview];
+    for (const d of descriptions) {
+      expect(d).toContain("Foundry");
+      expect(d.length).toBeLessThanOrEqual(100);
     }
   });
 

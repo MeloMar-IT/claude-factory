@@ -138,6 +138,44 @@ a **What happens next** block with **You** as who and the approval message as th
 Runs survive restarts: if the Foundry stops mid-run, the run is marked *interrupted* and can be
 resumed (watchers do this automatically).
 
+### Words the Foundry uses
+
+One glossary decides the words. The app, the comments on GitHub and the labels all use them.
+
+| Status | What it means and what happens next |
+|---|---|
+| waiting for you — questions | The Foundry has questions about this issue before it starts. Answer them on the issue, or reply /defaults to go with the recommendations. When the planner asks: The planner has questions that the issue and the code do not answer. Answer them and the work goes on. |
+| waiting for you — risky plan | The plan is risky, or you asked to check it, so coding waits for your decision. Approve it to start coding, or reject it and say what to change. |
+| waiting for you — split | The issue is too big for one change, so the Foundry proposes smaller issues. Approve and it creates them and closes this one, or reject it and say what to change. |
+| waiting for you — approval | A step of the run asks for your approval before it goes on. Approve or reject it, and the run goes on with your decision. |
+| waiting for you — stopped | The run stopped at a step that needs a person. Look at the run, fix what it asks for and resume it. |
+| waiting for you — release pull request | A release pull request brings finished work to main, and this one is not merged yet. Merge it and the Foundry goes on. |
+| in develop (ships with the 17:00 release) | The work is finished and waits for the 17:00 release. Nothing to do now — the release pull request then brings it to main. |
+| waiting for #88 | It needs #88 to be done first. Nothing to do — it starts by itself after that. |
+| waiting for another run | Only one run at a time works here, and another run is active. Nothing to do — it starts when that run is finished. |
+| waiting for another run in the same code | Another run is changing the same part of the code. Nothing to do — it goes on when that run is finished. |
+| paused — usage limit | The usage limit of the AI account is reached. Nothing to do — the Foundry tries again after the limit resets. |
+| paused — daily budget | Today's budget is used up. Nothing to do — it goes on tomorrow. |
+| checking for questions | The Foundry reads the new issues and looks for questions only you can answer. Nothing to do — an issue without questions starts after the check. |
+| starting soon | Nothing is in the way, it only waits for the watcher's next check. Nothing to do — it starts by itself. |
+| queued | It waits in the queue until a run finishes. Nothing to do — it starts by itself. |
+| working | The Foundry is working on it right now. Nothing to do — you can follow it on the run page. |
+| interrupted | The run was cut off, for example by a restart of the server. A watched issue resumes by itself at the next check, any other run you resume on its page. |
+| cancelled | Someone cancelled the run. A watched issue resumes by itself at the next check, any other run you resume on its page if you still want it. |
+| failed | A step failed and the run could not go on. Fix the cause if needed, then start over or resume the run at the failed step. |
+| watcher error | The watcher could not do its check, so its issues do not move. Look at the error on the Watchers page and fix the cause, it then tries again at the next check. |
+| restarting soon | The server waits to restart and starts nothing new until then. Nothing to do — it restarts when the active runs are done. |
+| replaced by a newer run | A newer run took over the same work. Nothing to do with this run. |
+| done | The work is finished. Nothing to do. |
+
+Other words:
+
+- **release pull request** — the pull request that brings finished work to `main`.
+- **split risk** — how risky it is to create the smaller issues without you looking, 0–100.
+
+Every record from `GET /api/next` has these as `status` and `help`. Text the Foundry quotes
+(an error message, a step's approval message, a label or code-area name) is shown as it is.
+
 ---
 
 ## 4. Write your own flows
@@ -359,11 +397,15 @@ in GitHub:
 
 | Label (default name) | Meaning |
 |---|---|
-| `factory:working` | A run is working on it |
-| `factory:needs-info` | The Foundry asked a question on the issue — reply and it continues |
-| `factory:waiting-approval` | Waiting for `/approve` or `/reject` on the issue |
-| `factory:done` | Finished |
+| `factory:working` | Working — nothing to do, it continues by itself |
+| `factory:needs-info` | Waiting for you — questions: reply on the issue, or reply `/defaults` |
+| `factory:waiting-approval` | Waiting for you — approval: reply `/approve` or `/reject` on the issue |
+| `factory:done` | Done — nothing to do |
 | `factory:failed` | Failed; the reason is commented on the issue. Remove the label to start over, or resume the run on its page to continue at the failed step |
+
+The descriptions on GitHub say the same in short. They are set when the labels are created and
+refreshed at every server start. The trigger label and the review label (`vars.review_plan_label`)
+get one too. If the review label is the same as the trigger label, the one description says both.
 
 Each watcher's card on the **Watchers** page lists the labelled issues it is *not* working on
 right now under **What happens next**, with the same lines as the Dashboard. A watcher error is
@@ -491,10 +533,10 @@ The threshold is the `auto_split_max_risk` variable (default 50).
 
 | Label | Means | What you do |
 |---|---|---|
-| `Factory_needs_info` | Questions for you — asked up front for the whole batch, or by the planner | Reply on the issue — or just **`/defaults`** to accept the recommendations. It continues by itself. |
-| `Factory_working` | Planning and coding are running (or paused for the usage limit) | Wait; follow it on the Runs page |
-| `Factory_waiting` | A risky plan waits for your decision | `/approve` or `/reject` + feedback on the issue |
-| `Factory_done` | Implemented, tested, reviewed and merged into `develop` (gitflow) or in the rolling pull request | Nothing — merge the daily release pull request (or the rolling one) when you like |
+| `Factory_needs_info` | Waiting for you — questions: asked up front for the whole batch, or by the planner | Reply on the issue — or just **`/defaults`** to accept the recommendations. It continues by itself. |
+| `Factory_working` | Working, or paused — usage limit: planning and coding are running or paused | Wait; follow it on the Runs page |
+| `Factory_waiting` | Waiting for you — risky plan / split: it waits for your decision | `/approve` or `/reject` + feedback on the issue |
+| `Factory_done` | Done: implemented, tested, reviewed and merged into `develop` (gitflow) or in the rolling pull request | Nothing — merge the release pull request (or the rolling one) when you like |
 | `Factory_ERROR` | It failed; the reason and the failing output are commented on the issue | Fix the cause if needed, then remove the label to start over, or resume the run on its page to continue at the failed step |
 
 Issues with an excluded label (e.g. `geni`) are never picked up, whatever other labels they have.
@@ -509,7 +551,7 @@ Issues with an excluded label (e.g. `geni`) are never picked up, whatever other 
 | Approve / reject a risky plan | `/approve` (+ notes), or `/reject` + what to change |
 | Retry after an error | Remove `Factory_ERROR` to start over, or resume the run on its page to continue at the failed step |
 | Stop the Foundry from touching an issue | Remove `Factory_go`, or add an excluded label |
-| Get the work into `main` | Merge the daily release pull request `develop` → `main` (gitflow), or the rolling Foundry pull request |
+| Get the work into `main` | Merge the release pull request `develop` → `main` (gitflow), or the rolling Foundry pull request |
 
 #### Why is nothing happening?
 

@@ -229,7 +229,7 @@ describe("label-driven issue pipeline", () => {
     await settle();
     expect(runOf("issue-code-daily", "7")).toBeUndefined();
     expect(w.status.lastActions[0]).toContain("not starting new work while PR #99");
-    expect(w.status.holds).toMatchObject([{ issue: 7, next: { kind: "release", action: "Merge the daily pull request #99" } }]);
+    expect(w.status.holds).toMatchObject([{ issue: 7, next: { kind: "release", action: "Merge the release pull request #99" } }]);
     expect(w.status.holds).toHaveLength(1);
 
     // … and after the merge, work continues on a fresh branch for today.

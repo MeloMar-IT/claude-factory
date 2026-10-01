@@ -8,6 +8,7 @@ import { BOT_MARKER, BOT_MARKERS, commentsAfter, isBot } from "../src/github.js"
 import { loadRun, saveRun } from "../src/engine/state.js";
 import { Scheduler } from "../src/queue/scheduler.js";
 import { parseInterval, Watcher } from "../src/queue/watcher.js";
+import { LABEL_WORDS } from "../src/words.js";
 import { claudeBin, fakeGithub } from "./helpers/fake-github.js";
 
 describe("parseInterval", () => {
@@ -64,6 +65,75 @@ describe("watcher", () => {
     expect(log).toMatch(/gh issue edit 5 .*--add-label factory:done/);
     expect(log).not.toMatch(/issue edit (3|9) /);
     expect(runFor("5").status).toBe("succeeded");
+  });
+
+  describe("label descriptions", () => {
+    const create = (name: string) => gh.ghLog().split("\n").filter((l) => l.startsWith(`gh label create ${name} `));
+
+    it("sets the trigger and status descriptions, and no review label without the var", async () => {
+      issues();
+      for (const review of [undefined, "  "]) {
+        const w = watcher(review === undefined ? {} : { vars: { review_plan_label: review } });
+        await w.tick();
+      }
+      const log = gh.ghLog();
+      expect(log).toContain(`gh label create factory:waiting-approval --repo acme/app --color 7c3aed --description ${LABEL_WORDS.waiting} --force`);
+      expect(log).toContain(`gh label create claude-factory --repo acme/app --color c2410c --description ${LABEL_WORDS.trigger} --force`);
+      expect(log).not.toContain(LABEL_WORDS.review);
+    });
+
+    it("creates the review label", async () => {
+      issues();
+      await watcher({ vars: { review_plan_label: "Factory_review_plan" } }).tick();
+      expect(gh.ghLog()).toContain(`gh label create Factory_review_plan --repo acme/app --color 0e7490 --description ${LABEL_WORDS.review} --force`);
+    });
+
+    it("uses one combined description when the review label is the trigger label", async () => {
+      issues();
+      await watcher({ vars: { review_plan_label: "claude-factory" } }).tick();
+      const l = create("claude-factory");
+      expect(l).toHaveLength(1);
+      expect(l[0]).toContain(LABEL_WORDS.triggerReview);
+      expect(gh.ghLog()).not.toContain(LABEL_WORDS.trigger);
+      expect(gh.ghLog()).not.toContain(LABEL_WORDS.review);
+    });
+
+    it("compares label names without case", async () => {
+      issues();
+      await watcher({ vars: { review_plan_label: "CLAUDE-FACTORY" } }).tick();
+      expect(create("claude-factory")).toHaveLength(1);
+      expect(create("CLAUDE-FACTORY")).toHaveLength(0);
+      const w = watcher({ vars: { review_plan_label: "Factory:Waiting-Approval" } });
+      await w.tick();
+      expect(create("Factory:Waiting-Approval")).toHaveLength(0);
+      expect(w.status.lastActions.join("\n")).toContain("keeps the status description");
+    });
+
+    it("keeps the status description when the review label is a status label", async () => {
+      issues();
+      const w = watcher({ vars: { review_plan_label: "factory:waiting-approval" } });
+      await w.tick();
+      const l = create("factory:waiting-approval");
+      expect(l).toHaveLength(1);
+      expect(l[0]).toContain(LABEL_WORDS.waiting);
+      expect(w.status.lastActions.join("\n")).toContain("keeps the status description");
+    });
+
+    it("uses custom status label names", async () => {
+      issues();
+      await watcher({ status_labels: { failed: "Factory_ERROR" } }).tick();
+      expect(gh.ghLog()).toContain(`gh label create Factory_ERROR --repo acme/app --color b91c1c --description ${LABEL_WORDS.failed} --force`);
+    });
+
+    it("creates labels once per watcher and again after a restart", async () => {
+      issues();
+      const w = watcher();
+      await w.tick();
+      await w.tick();
+      expect(create("factory:failed")).toHaveLength(1);
+      await watcher().tick();
+      expect(create("factory:failed")).toHaveLength(2);
+    });
   });
 
   it("starts an issue that has the working label but never got a run", async () => {
