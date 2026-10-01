@@ -1,4 +1,5 @@
-import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 /** `SCF_HOME || FACTORY_HOME`; an empty value counts as unset. */
@@ -47,6 +48,29 @@ export function lockHolder(lock: string): number | undefined {
   return pidAlive(pid) ? pid : undefined;
 }
 
+/**
+ * Breaks a lock that looked dead. The folder is first renamed to a unique name, so a lock that another process
+ * took in the meantime is not removed by path: when the renamed lock turns out to be alive, it is put back.
+ */
+export function breakStaleLock(lock: string): void {
+  const aside = `${lock}.stale-${process.pid}-${randomBytes(4).toString("hex")}`;
+  try {
+    renameSync(lock, aside);
+  } catch {
+    return; // gone already, or taken by someone else
+  }
+  if (lockHolder(aside) !== undefined) {
+    try {
+      renameSync(aside, lock);
+    } catch {
+      // The name was taken again. The live holder's own check ("is the lock mine?") then fails and its write is
+      // refused; deleting the folder here could not make that safer, so it is left for a person to remove.
+    }
+    return;
+  }
+  rmSync(aside, { recursive: true, force: true });
+}
+
 /** `mkdir` plus a pid file; a lock whose pid is dead is broken. Waits up to `waitMs`. */
 export function acquireLock(lock: string, waitMs = 0): boolean {
   const until = Date.now() + waitMs;
@@ -59,7 +83,7 @@ export function acquireLock(lock: string, waitMs = 0): boolean {
       if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
     }
     if (lockHolder(lock) === undefined) {
-      rmSync(lock, { recursive: true, force: true });
+      breakStaleLock(lock);
       continue;
     }
     if (Date.now() >= until) return false;
@@ -67,7 +91,14 @@ export function acquireLock(lock: string, waitMs = 0): boolean {
   }
 }
 
+/** Removes the lock unless a different live process holds it. */
 export function releaseLock(lock: string): void {
+  try {
+    const pid = Number(readFileSync(join(lock, "pid"), "utf8").trim());
+    if (pid && pid !== process.pid && pidAlive(pid)) return;
+  } catch {
+    // no pid file: remove
+  }
   rmSync(lock, { recursive: true, force: true });
 }
 
@@ -123,7 +154,10 @@ export function sameSnapshot(a: Map<string, string>, b: Map<string, string>): bo
   return true;
 }
 
-/** Every `*.json` outside runs/<id>/workspace. */
+/** Top-level files the move copies byte for byte (they may hold text that looks like a path). */
+const VERBATIM_FILES = ["users.json", "sessions.json"];
+
+/** Every `*.json` outside runs/<id>/workspace, except the top-level account files. */
 export function jsonFiles(root: string): string[] {
   const out: string[] = [];
   const walk = (dir: string, rel: string[]) => {
@@ -131,7 +165,7 @@ export function jsonFiles(root: string): string[] {
       const r = [...rel, e.name];
       if (e.isDirectory()) {
         if (!isWorkspace(r)) walk(join(dir, e.name), r);
-      } else if (e.isFile() && e.name.endsWith(".json")) out.push(join(dir, e.name));
+      } else if (e.isFile() && e.name.endsWith(".json") && !(rel.length === 0 && VERBATIM_FILES.includes(e.name))) out.push(join(dir, e.name));
     }
   };
   walk(root, []);
