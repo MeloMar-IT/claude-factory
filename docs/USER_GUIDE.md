@@ -754,8 +754,9 @@ lock files, `queue.json` and `config.yaml`) are rewritten. If `config.yaml` can'
 safely, it is kept as it was and a warning lists the values that still point to the old folder.
 
 **The backup.** `~/.claude-factory` is never changed or deleted, except for a note file
-`MOVED-TO-SPAGHETTI-CODE-FOUNDRY.txt`. Nothing there is used anymore. You can delete the folder
-once everything works.
+`MOVED-TO-SPAGHETTI-CODE-FOUNDRY.txt`. Nothing there is used anymore: your settings now live in
+`~/.spaghetti-code-foundry/config.yaml`, and the old `~/.claude-factory/config.yaml` is only a copy.
+You can delete the folder once everything works.
 
 **When the move waits.** Nothing is copied when you set `SCF_HOME` / `FACTORY_HOME`, when the new
 folder already exists (it is never overwritten), while a run is running, when free space is short
