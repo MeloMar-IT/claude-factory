@@ -336,7 +336,7 @@ steps:
     const clean = { id: "b", lastActions: [] };
     const cfg = { source: "issues", flow: "f", label: "l", every: "5m", max_per_tick: 1, enabled: true, vars: {} };
     const original = ctx.watchers.statuses;
-    ctx.watchers.statuses = (() => [{ ...cfg, id: "a", github_repo: "acme/app", status: withError }, { ...cfg, id: "b", github_repo: "acme/app", status: clean }]) as never;
+    ctx.watchers.statuses = (() => [{ ...cfg, id: "a", github_repo: "acme/app", status: withError }, { ...cfg, id: "b", github_repo: "acme/app", status: clean }, { ...cfg, id: "c", github_repo: "acme/app", enabled: false }]) as never;
     try {
       const list = (await (await json("GET", "/api/watchers")).json()) as { status: { next?: { kind: string; who: string; where: { url: string } }; holds?: { next: { kind: string } }[] } }[];
       expect(list[0]!.status.next).toMatchObject({ kind: "watcher_error", who: "Something is wrong", where: { url: "#/watchers" } });
@@ -345,6 +345,10 @@ steps:
       expect(list[0]!.status.holds![0]!.next).toMatchObject({ status: "waiting for you — questions" });
       expect(list[1]!.status.next).toBeUndefined();
       expect("next" in withError).toBe(false);
+      const states = (list as unknown as { state: { name: string; status: string; help: string } }[]).map((w) => w.state);
+      expect(states).toMatchObject([{ name: "error", status: "watcher error" }, { name: "active", status: "active" }, { name: "disabled", status: "disabled" }]);
+      for (const st of states) expect(st.help).toMatch(/^[^.!?]+[.!?] [^.!?]+[.!?]$/);
+      expect((list[2] as { status?: unknown }).status).toBeUndefined();
     } finally {
       ctx.watchers.statuses = original;
     }
@@ -385,6 +389,17 @@ steps:
     expect(admin).toContain("Error details");
     for (const js of [dashboard, admin, runs, api]) expect(js).not.toMatch(/nothing to do|waits for|a free slot|same ticket/i);
     expect(css).not.toContain(".card.waiting");
+    expect(runs).not.toContain("STATUS_LABEL");
+    expect(runs).not.toContain('"Next step"');
+    expect(runs).not.toMatch(/waiting for approval/);
+    expect(runs).toContain("nextStatus(");
+    expect(runs).toContain("STEP_TYPES");
+    expect(admin).not.toMatch(/"(disabled|active)"/);
+    expect(admin).toContain("watcherStateMark(");
+    expect(next).toContain("helpMark");
+    expect(next).not.toMatch(/mouseover|mouseenter|onMouse/);
+    expect(css).toContain(".help-text[hidden]");
+    expect(css).not.toMatch(/:hover[^{]*\.help-text/);
   });
 
   it("builds records from the watchers", async () => {

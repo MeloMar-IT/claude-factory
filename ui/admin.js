@@ -1,6 +1,6 @@
 import { api } from "./api.js";
 import { h, modal, mount, timeAgo, toast } from "./dom.js";
-import { nextList, watcherNext } from "./next.js";
+import { nextList, statusMark, watcherNext } from "./next.js";
 
 const f = (label, el, hint) => h("label", { class: "field" }, h("span", {}, label), el, hint ? h("small", {}, hint) : null);
 const input = (value, attrs = {}) => h("input", { value: value ?? "", ...attrs });
@@ -18,6 +18,11 @@ async function saveConfig(mutate, okMsg) {
 }
 
 // ── watchers ──
+
+/** The watcher as config.yaml has it: without what GET /api/watchers adds (the config rejects unknown keys). */
+export const watcherConfig = ({ status: _status, state: _state, ...cfg } = {}) => cfg;
+/** The watcher's own state with its "?". */
+export const watcherStateMark = (w) => (w.state ? statusMark(w.state, `state-${w.state.name}`) : null);
 
 const SOURCES = {
   issues: "Issues with a label → run a flow",
@@ -74,7 +79,7 @@ async function editWatcher(existing, flows) {
       }
       const list = (el) => el.value.split(",").map((x) => x.trim()).filter(Boolean);
       // Keep settings this form doesn't show (status label names, pauses, …).
-      const { status: _runtime, ...kept } = existing ?? {};
+      const kept = watcherConfig(existing ?? {});
       const next = { ...kept, id: id.value.trim(), source: source.value, flow: flow.value.trim(), github_repo: repo.value.trim(), label: label.value.trim(),
         every: every.value.trim(), max_per_tick: Number(max.value) || 1, enabled: enabled.el.checked, vars: parsedVars,
         task: source.value === "schedule" ? task.value.trim() : undefined,
@@ -134,7 +139,7 @@ export async function renderWatchers(main) {
       return h("div", { class: "card" },
         h("div", { class: "row" },
           h("b", { class: "mono" }, w.id),
-          h("span", { class: `pill ${!w.enabled ? "cancelled" : st?.lastError ? "failed" : "succeeded"}` }, !w.enabled ? "disabled" : st?.lastError ? "error" : "active"),
+          watcherStateMark(w),
           h("span", { class: "mono" }, w.github_repo),
           h("span", { class: "muted" }, describeWatcher(w)),
           h("span", { class: "spacer" }),

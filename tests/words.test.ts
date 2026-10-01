@@ -1,7 +1,7 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { NextKind } from "../src/next-step.js";
-import { KINDS, LABEL_WORDS, statusHelp, statusName, type WordFacts } from "../src/words.js";
+import { KINDS, LABEL_WORDS, statusHelp, statusName, watcherState, type WordFacts } from "../src/words.js";
 
 const BANNED = ["hold", "precheck", "area lock", "jump_only"];
 const EXPLAIN = "how risky it is to create the smaller issues without you looking, 0–100";
@@ -87,5 +87,55 @@ describe("label words", () => {
       for (const w of BANNED) expect(t.toLowerCase()).not.toContain(w);
       if (/split risk/i.test(t)) expect(t).toContain(EXPLAIN);
     }
+  });
+});
+
+describe("watcher state words", () => {
+  it("are two sentences without banned words", () => {
+    for (const name of ["active", "disabled"] as const) {
+      const s = watcherState(name);
+      expect(s.status).toBe(name);
+      expect(s.help).toMatch(/^[^.!?]+[.!?] [^.!?]+[.!?]$/);
+      for (const w of BANNED) expect(s.help.toLowerCase()).not.toContain(w);
+    }
+    expect(watcherState("error")).toEqual({ name: "error", status: statusName("watcher_error"), help: statusHelp("watcher_error") });
+  });
+
+  it("are in the guide, which mentions the ? in section 3", () => {
+    const guide = readFileSync(new URL("../docs/USER_GUIDE.md", import.meta.url), "utf8");
+    for (const name of ["active", "disabled"] as const) expect(guide).toContain(watcherState(name).help);
+    const section = guide.slice(guide.indexOf("## 3."), guide.indexOf("## 4."));
+    expect(section).toContain("**?**");
+  });
+});
+
+const shown = (src: string) => src
+  .replace(/\/\*[\s\S]*?\*\//g, "") // block comments
+  .replace(/(^|\s)\/\/.*$/gm, "$1") // line comments (not the // of a URL or a regex)
+  .replace(/<!--[\s\S]*?-->/g, "") // HTML comments
+  .replace(/class(?:=|: )(?:"[^"]*"|`[^`]*`)/g, "") // class names
+  .replace(/\bplaceholder\b/g, "") // the attribute name
+  .replace(/\.holds\b|\.jump_only\b|setKey\(step, "jump_only"/g, ""); // property names and the flow key passed to setKey
+
+describe("words in the app", () => {
+  const dir = new URL("../ui/", import.meta.url);
+  const files = readdirSync(dir).filter((f) => f.endsWith(".js") || f === "index.html");
+
+  it("scan helper keeps real text and drops names", () => {
+    expect(shown('h("li", { class: "holds" }, w.status?.holds, step.jump_only, "On hold")').toLowerCase()).toContain("hold");
+    const none = shown('{ class: "hold-link", placeholder: "x" } // hold').toLowerCase();
+    for (const w of BANNED) expect(none).not.toContain(w);
+    expect(shown('h("span", {}, "jump_only")').toLowerCase()).toContain("jump_only");
+  });
+
+  it.each(files)("%s has no internal words", (f) => {
+    const src = shown(readFileSync(new URL(f, dir), "utf8")).toLowerCase();
+    for (const w of BANNED) expect(src, `${f}: ${w}`).not.toContain(w);
+  });
+
+  it("ui/ has no glossary text of its own", () => {
+    const all = files.filter((f) => f.endsWith(".js")).map((f) => readFileSync(new URL(f, dir), "utf8")).join("\n");
+    const texts = [...KINDS.map((k) => statusHelp(k)), ...KINDS.map((k) => statusName(k)).filter((n) => n.includes(" ")), watcherState("active").help, watcherState("disabled").help];
+    for (const t of texts) expect(all, t).not.toContain(t);
   });
 });

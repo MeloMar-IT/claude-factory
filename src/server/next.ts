@@ -6,6 +6,7 @@ import { nextStep, releaseAtFor, runNextStep, trackingWatcher, type NextStep } f
 import { labelNames, parseInterval, type Hold, type WatcherStatus } from "../queue/watcher.js";
 import type { WatcherConfig } from "../config.js";
 import { supersededRuns } from "../stats.js";
+import { watcherState, type WatcherState } from "../words.js";
 import { send } from "./http.js";
 import type { ApiContext, Route } from "./server.js";
 
@@ -110,11 +111,12 @@ export function queueWithNext(ctx: ApiContext): Omit<Queue, "pending"> & { pendi
   }) };
 }
 
-/** GET /api/watchers: a watcher with an error carries its record as `status.next`. */
-export function watchersWithNext(ctx: ApiContext): (WatcherConfig & { status?: WatcherStatus & { next?: NextStep } })[] {
+/** GET /api/watchers: each watcher carries its own `state` (words for active, error, disabled); one with a problem also has its record as `status.next`. */
+export function watchersWithNext(ctx: ApiContext): (WatcherConfig & { state: WatcherState; status?: WatcherStatus & { next?: NextStep } })[] {
   return ctx.watchers.statuses().map((w) => {
     const next = w.status ? watcherProblem(w, w.status) : undefined;
-    return next && w.status ? { ...w, status: { ...w.status, next } } : w;
+    const state = watcherState(!w.enabled ? "disabled" : next?.kind === "watcher_error" ? "error" : "active");
+    return next && w.status ? { ...w, state, status: { ...w.status, next } } : { ...w, state };
   });
 }
 

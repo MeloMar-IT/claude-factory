@@ -1,6 +1,6 @@
 import { h } from "./dom.js";
 
-// Shows the next-step record from the server. No wording of its own: only fields of the record.
+// Shows the next-step record from the server. No wording of its own: only fields of the record, plus the label of the "?" button.
 
 const rank = (n) => (n.who === "You" ? 0 : n.who === "Something is wrong" ? 1 : 2);
 const whoClass = (n) => "who-" + String(n.who).toLowerCase().replace(/[^a-z]+/g, "-");
@@ -48,11 +48,34 @@ export function whereLink(where) {
     : h("a", { href: t.href, class: "hold-link" }, label);
 }
 
-/** The one renderer of a record: who, issue, title, action, why, until, link. `ref: false` leaves out issue and title. */
-export function nextParts(n, { ref = true } = {}) {
+/** A "?" button: pressing it shows `text` under the line, pressing it again hides it. Mouse, keyboard and touch. */
+export function helpMark(text) {
+  if (!text) return null;
+  const note = h("span", { class: "help-text", role: "note" }, text);
+  note.hidden = true;
+  const btn = h("button", { type: "button", class: "help-mark", "aria-label": "What does this mean?", "aria-expanded": "false", onClick: () => {
+    note.hidden = !note.hidden;
+    btn.setAttribute("aria-expanded", String(!note.hidden));
+  } }, "?");
+  // A press on the "?" or its text must not open the run (rows of the Runs list are links).
+  return h("span", { class: "help", onClick: (e) => e.stopPropagation() }, btn, note);
+}
+
+/** A status name as a pill with its "?": [pill, help]. `x` has `status` and `help` (a record, or a watcher's `state`). */
+export const statusMark = (x, cls = "", busy = false) => [
+  h("span", { class: `pill ${cls}`.trim() }, busy ? h("span", { class: "spinner", style: { width: "10px", height: "10px" } }) : null, x.status),
+  helpMark(x.help),
+];
+
+/** The status of a record. */
+export const nextStatus = (n) => statusMark(n, `${whoClass(n)} kind-${n.kind}`, n.kind === "running");
+
+/** The one renderer of a record: who, status, issue, title, action, why, until, link. `ref: false` leaves out issue and title, `status: false` the status. */
+export function nextParts(n, { ref = true, status = true } = {}) {
   const issueOk = ref && n.issue && /^[\w.-]+\/[\w.-]+$/.test(n.repo ?? "");
   return [
     h("span", { class: `pill ${whoClass(n)}` }, n.who),
+    ...(status ? nextStatus(n) : []),
     issueOk ? h("a", { href: `https://github.com/${n.repo}/issues/${n.issue}`, target: "_blank", rel: "noopener", class: "mono" }, `#${n.issue}`) : null,
     ref && n.title ? h("span", { class: "hold-title" }, n.title) : null,
     h("span", { class: "hold-action" }, n.action),
@@ -68,4 +91,4 @@ export const nextList = (records) => h("ul", { class: "holds" }, sortNext(record
 /** Run page block. */
 export const nextBlock = (n) => h("div", { class: `card next-step ${whoClass(n)}` },
   h("b", {}, "What happens next"),
-  h("div", { class: "next-parts" }, nextParts(n, { ref: false })));
+  h("div", { class: "next-parts" }, nextParts(n, { ref: false, status: false })));

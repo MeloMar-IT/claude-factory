@@ -78,7 +78,7 @@ describe("small helpers", () => {
 });
 
 describe("turnView", () => {
-  it("shows the repository, what, action, why, holds back and since", () => {
+  it("shows the repository, what, action, why, what waits for it and since", () => {
     const root = view(data([item({ unblocks: 3 }), item({ key: "k6", unblocks: 1, what: "Six" }, nextStep("approval", { repo: "o/a", issue: 6 }))]));
     const text = root.textContent;
     expect(root.all("h1")[0]!.textContent).toBe("Your turn");
@@ -86,8 +86,8 @@ describe("turnView", () => {
     expect(text).toContain("Five");
     expect(text).toContain("Answer 2 questions");
     expect(text).toContain("It has questions before it starts");
-    expect(text).toContain("Holds back 3 stories");
-    expect(text).toContain("Holds back 1 story");
+    expect(text).toContain("3 stories wait for this");
+    expect(text).toContain("1 story waits for this");
     expect(text).toContain("since ");
   });
 
