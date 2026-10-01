@@ -361,7 +361,8 @@ describe("watcher", () => {
     const w = watcher();
     await w.tick();
     await settle();
-    rewind("8", { status: "failed", reason: 'step "x" failed: exit code 1' });
+    // A failed run stops at its failed step, so it can be resumed there (the run itself had succeeded).
+    rewind("8", { status: "failed", reason: 'step "x" failed: exit code 1', state: { next: "x", steps: {}, visits: {} } });
     issues([8, "factory:failed"]);
     await w.tick();
     expect(w.status.holds).toMatchObject([{ issue: 8, next: { kind: "failed", who: "Something is wrong" } }]);
