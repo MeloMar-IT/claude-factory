@@ -54,7 +54,15 @@ export function supervise(cliPath: string, args: string[], log: (m: string) => v
  * previous check, so a build in progress is not picked up half-way) and nothing is running, exit
  * with RESTART_CODE.
  */
-export function restartOnNewBuild(o: { distDir: string; idle: () => boolean; beforeExit: () => void; log: (m: string) => void; everyMs?: number }) {
+export function restartOnNewBuild(o: {
+  distDir: string;
+  idle: () => boolean;
+  /** Called once when a new version is waiting but runs are active: stop starting new work. */
+  drain?: () => void;
+  beforeExit: () => void;
+  log: (m: string) => void;
+  everyMs?: number;
+}) {
   const started = buildStamp(o.distDir);
   let last = started;
   let told = false;
@@ -64,7 +72,10 @@ export function restartOnNewBuild(o: { distDir: string; idle: () => boolean; bef
     last = now;
     if (now === started || !stable) return;
     if (!o.idle()) {
-      if (!told) o.log("a new version is installed — restarting as soon as no run is active");
+      if (!told) {
+        o.log("a new version is installed — no new runs start; restarting when the active ones are done");
+        o.drain?.();
+      }
       told = true;
       return;
     }

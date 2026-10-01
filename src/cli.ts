@@ -266,7 +266,8 @@ async function main(argv: string[]): Promise<number> {
       restartOnNewBuild({
         distDir: dirname(fileURLToPath(import.meta.url)),
         idle: () => { const q = ctx.scheduler.queue(); return q.active.length === 0 && q.pending.length === 0; },
-        beforeExit: () => ctx.watchers.stopAll?.(),
+        drain: () => ctx.watchers.stopAll(), // watchers start again with the new version
+        beforeExit: () => ctx.watchers.stopAll(),
         log: (m) => process.stdout.write(`${new Date().toISOString()} ${m}\n`),
       });
       return new Promise<number>(() => {}); // run until killed
