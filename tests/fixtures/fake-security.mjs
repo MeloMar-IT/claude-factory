@@ -12,7 +12,10 @@ const arg = (flag) => args[args.indexOf(flag) + 1];
 const name = `${arg("-s")}\u0000${arg("-a")}`;
 const op = { "find-generic-password": "find", "add-generic-password": "add", "delete-generic-password": "delete" }[args[0]];
 if (!op) process.exit(2);
-if (process.env.FAKE_KEYCHAIN_FAIL === op) {
+// FAKE_KEYCHAIN_FAIL_ONCE: the first call of that kind fails, later ones work (a marker file next to the items remembers it).
+const once = process.env.FAKE_KEYCHAIN_FAIL_ONCE === op && !existsSync(`${file}.once`);
+if (once) writeFileSync(`${file}.once`, "");
+if (once || process.env.FAKE_KEYCHAIN_FAIL === op) {
   process.stderr.write("security: fake failure\n");
   process.exit(1);
 }

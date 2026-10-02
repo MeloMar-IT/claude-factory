@@ -67,7 +67,18 @@ describe("deleteUser", () => {
     addRepo(bob.id, "acme/web");
     deleteUser(ann.id);
     expect(listRepos(ann.id)).toEqual([]);
-    expect(listRepos(bob.id)).toEqual(["acme/web"]);
+    expect(listRepos(bob.id).map((r) => r.url)).toEqual(["https://github.com/acme/web"]);
+  });
+
+  it("removes the records and tokens of the account's repositories only", () => {
+    const token = ["github", "pat", ""].join("_") + "Zx9".repeat(12);
+    addRepo(ann.id, { url: "acme/app", method: "github-token", token });
+    addRepo(bob.id, { url: "acme/web", method: "github-token", token });
+    const bobRepo = listRepos(bob.id)[0]!;
+    expect(deleteUser(ann.id).credentials).toBe(1);
+    expect(listRepos(ann.id)).toEqual([]);
+    expect(listCredentials(ann.id)).toEqual([]);
+    expect(readSecret(bob.id, bobRepo.credentialId!)).toBe(token);
   });
 
   it("stops before anything else when repos.json cannot be read, and works once it is fixed", () => {

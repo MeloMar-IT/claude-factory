@@ -66,8 +66,10 @@ export const RULES: Rule[] = [
   r("POST", "credentials", "yes", "store a credential"),
   r("DELETE", "credentials/:id", "yes", "remove a credential"),
   r("GET", "repos", "yes", "your repositories"),
-  r("POST", "repos", "yes", "add a repository"),
-  r("DELETE", "repos/:owner/:name", "yes", "remove a repository"),
+  r("POST", "repos", "yes", "add a repository (a URL, and a token for it)"),
+  r("PUT", "repos/:id/auth", "yes", "change the method, user name, token or address of your repository"),
+  r("DELETE", "repos/:id", "yes", "remove your repository and its stored token"),
+  r("DELETE", "repos/:owner/:name", "yes", "remove a GitHub repository by name (old form)"),
 ];
 
 /** The key of a rule, e.g. "POST runs/:id/approve". */

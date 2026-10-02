@@ -236,6 +236,9 @@ function replaceKey(file: CredFile, keep: Stored[]): { next: CredFile; oldKeysLe
 
 // ---- API -------------------------------------------------------------------------------------------
 
+/** Names that start with this belong to the Foundry (a repository's token is `repo:<repository id>`). */
+export const RESERVED_PREFIX = "repo:";
+
 export interface NewCredential {
   userId: string;
   type: unknown;
@@ -247,33 +250,46 @@ export interface NewCredential {
 export function addCredential(input: NewCredential, opts: { ownerOk?: (userId: string) => boolean } = {}): PublicCredential {
   const type = checkType(input.type);
   const name = checkCredentialName(input.name);
+  if (name.toLowerCase().startsWith(RESERVED_PREFIX)) throw new CredentialError("bad-name", `a name must not start with "${RESERVED_PREFIX}"`);
   const secret = checkSecret(type, input.secret);
   const ownerOk = opts.ownerOk ?? ((id: string) => getUser(id) !== undefined);
   return withAuthLock(() => {
     if (!ownerOk(input.userId)) throw new CredentialError("no-owner", "no such account");
-    const file = read();
-    if (file.credentials.some((c) => c.userId === input.userId && c.name === name)) {
-      throw new CredentialError("duplicate", "you have a credential with that name already");
-    }
-    let keyId = file.keyId;
-    let key: Buffer;
-    let added: string | undefined;
-    if (keyId) key = keyOf(file);
-    else {
-      keyId = added = randomUUID();
-      const hex = newKey();
-      addKey(keyId, hex);
-      key = Buffer.from(hex, "hex");
-    }
-    const record = seal(
-      key,
-      { id: randomUUID(), userId: input.userId, type, name, created: new Date().toISOString(), lastUsed: null, fingerprint: fingerprintOf(secret) },
-      secret,
-    );
-    const retired = dropRetired(file.retiredKeyIds);
-    writeFile({ version: 1, keyId, retiredKeyIds: retired, credentials: [...file.credentials, record] }, added);
-    return publicCredential(record);
+    return saveCredential(input.userId, type, name, secret);
   });
+}
+
+/**
+ * Saves a credential under a chosen `id` and a reserved name. Only inside withAuthLock; the caller has checked the owner.
+ * Used for the tokens of repositories, so the record and the token can be saved without an orphan.
+ */
+export function addCredentialLocked(input: NewCredential & { id: string }): PublicCredential {
+  if (!authLockHeld()) throw new Error("addCredentialLocked must run inside withAuthLock");
+  const type = checkType(input.type);
+  const name = checkCredentialName(input.name);
+  return saveCredential(input.userId, type, name, checkSecret(type, input.secret), input.id);
+}
+
+function saveCredential(userId: string, type: CredentialType, name: string, secret: string, id: string = randomUUID()): PublicCredential {
+  const file = read();
+  if (file.credentials.some((c) => c.userId === userId && c.name === name)) {
+    throw new CredentialError("duplicate", "you have a credential with that name already");
+  }
+  if (file.credentials.some((c) => c.id === id)) throw new CredentialError("duplicate", "a credential with that id exists already");
+  let keyId = file.keyId;
+  let key: Buffer;
+  let added: string | undefined;
+  if (keyId) key = keyOf(file);
+  else {
+    keyId = added = randomUUID();
+    const hex = newKey();
+    addKey(keyId, hex);
+    key = Buffer.from(hex, "hex");
+  }
+  const record = seal(key, { id, userId, type, name, created: new Date().toISOString(), lastUsed: null, fingerprint: fingerprintOf(secret) }, secret);
+  const retired = dropRetired(file.retiredKeyIds);
+  writeFile({ version: 1, keyId, retiredKeyIds: retired, credentials: [...file.credentials, record] }, added);
+  return publicCredential(record);
 }
 
 /** The credentials of one user, without any Keychain call. */
@@ -326,7 +342,10 @@ export function removeCredentialsLocked(userId: string, id?: string): Removed {
   return { removed: gone.length, keyId: next.keyId, oldKeysLeft };
 }
 
-export const removeCredential = (userId: string, id: string): Removed => withAuthLock(() => removeCredentialsLocked(userId, id));
+/** How many old keys are still in the Keychain, after their removal failed. Only reads the file. */
+export const oldKeysLeft = (): number => read().retiredKeyIds.length;
+
+export const removeCredential =(userId: string, id: string): Removed => withAuthLock(() => removeCredentialsLocked(userId, id));
 
 export interface Rotated {
   rotated: boolean;

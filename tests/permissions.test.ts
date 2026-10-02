@@ -163,6 +163,8 @@ const EXAMPLES: Record<string, Example> = {
   "DELETE credentials/:id": { path: `credentials/${UNKNOWN}`, user: 404, admin: 404 },
   "GET repos": { path: "repos", user: 200, admin: 200 },
   "POST repos": { path: "repos", body: {}, user: 400, admin: 400 },
+  "PUT repos/:id/auth": { path: `repos/${UNKNOWN}/auth`, body: {}, user: 400, admin: 400 },
+  "DELETE repos/:id": { path: `repos/${UNKNOWN}`, user: 404, admin: 404 },
   "DELETE repos/:owner/:name": { path: "repos/nope/nope", user: 404, admin: 404 },
 };
 
@@ -180,7 +182,8 @@ describe("the table", () => {
     expect(findRule("GET", ["runs", "a", "b"])).toBeUndefined();
     expect(findRule("GET", ["runs", "a", "diff"])?.path).toBe("runs/:id/diff");
     expect(findRule("DELETE", ["repos", "a", "b"])?.path).toBe("repos/:owner/:name");
-    expect(findRule("DELETE", ["repos", "a"])).toBeUndefined();
+    expect(findRule("DELETE", ["repos", "a"])?.path).toBe("repos/:id");
+    expect(findRule("PUT", ["repos", "a", "auth"])?.path).toBe("repos/:id/auth");
   });
 
   it("has an example for every rule and a rule for every example", () => {
@@ -644,7 +647,7 @@ describe("repositories over HTTP", () => {
     expect((await call(ann, "POST", "/api/repos", { name: "acme/extra" })).status).toBe(201);
     expect((await call(ann, "POST", "/api/repos", { name: "acme/extra" })).status).toBe(409);
     for (const name of ["owner/repo", "Owner/Repo", "a/..", "nope"]) expect((await call(ann, "POST", "/api/repos", { name })).status, name).toBe(400);
-    expect((await call(ann, "GET", "/api/repos")).json()).toEqual(["acme/app", "acme/extra"]);
+    expect((await call(ann, "GET", "/api/repos")).json().map((r: { url: string }) => r.url)).toEqual(["https://github.com/acme/app", "https://github.com/acme/extra"]);
     expect((await call(cy, "GET", "/api/repos")).json()).toEqual([]);
     expect((await call(ann, "DELETE", "/api/repos/acme/extra")).status).toBe(200);
     const again = await call(ann, "DELETE", "/api/repos/acme/extra");
