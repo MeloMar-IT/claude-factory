@@ -195,17 +195,48 @@ function blockerClause(b: BlockerInfo): string {
   }
 }
 
+/** Kinds of a blocker that need the owner (an answer or a decision). */
+const NEEDS_YOU = new Set<NextKind>(["questions", "planner_questions", "approve_plan", "approve_split", "approval"]);
+
+/** The blockers that hold everything up: down every "waits for another story", each issue once. */
+function rootBlockers(bs: BlockerInfo[] | undefined, seen = new Set<number>()): BlockerInfo[] {
+  const out: BlockerInfo[] = [];
+  for (const b of bs ?? []) {
+    if (seen.has(b.issue) || b.next?.kind === "done") continue;
+    seen.add(b.issue);
+    if (b.next?.kind === "dependency" && b.next.blockers?.length) out.push(...rootBlockers(b.next.blockers, seen));
+    else out.push(b);
+  }
+  return out;
+}
+
+/** Every issue in the tree, with repeats (a shared blocker shows up once per path). */
+function treeIssues(bs: BlockerInfo[] | undefined): number[] {
+  return (bs ?? []).flatMap((b) => [b.issue, ...(b.next?.kind === "dependency" ? treeIssues(b.next.blockers) : [])]);
+}
+
 /** "#88, which is being worked on" — blockers that are done are not described. */
 function chain(bs: BlockerInfo[] | undefined, depth = 0): string {
   const list = bs ?? [];
   if (!list.length) return "";
   if (list.length > 1 && list.every((b) => !b.next)) return `${list.map((b) => `#${b.issue}`).join(", ")} (to be done first)`;
-  const one = (b: BlockerInfo): string => {
-    if (b.next?.kind === "done") return `#${b.issue}`; // done work is not described
-    if (b.next?.kind === "dependency" && depth < 3) return `#${b.issue}, which waits for ${chain(b.next.blockers, depth + 1) || "another story"}`;
-    return `#${b.issue}, ${blockerClause(b)}`;
-  };
-  return list.map(one).join(" and ");
+  // A short, straight chain reads well spelled out; a long or branching one names each issue once:
+  // the stories it waits for, then what holds them up at the root.
+  const all = treeIssues(list);
+  if (depth > 0 || (all.length <= 4 && new Set(all).size === all.length)) {
+    const one = (b: BlockerInfo): string => {
+      if (b.next?.kind === "done") return `#${b.issue}`; // done work is not described
+      if (b.next?.kind === "dependency" && depth < 3) return `#${b.issue}, which waits for ${chain(b.next.blockers, depth + 1) || "another story"}`;
+      return `#${b.issue}, ${blockerClause(b)}`;
+    };
+    return list.map(one).join(" and ");
+  }
+  const short = (b: BlockerInfo) => blockerClause(b).replace(/^which /, "");
+  const direct = list.filter((b) => b.next?.kind !== "done");
+  const shown = new Set(direct.map((b) => b.issue));
+  const parts = direct.map((b) => (b.next?.kind === "dependency" ? `#${b.issue}` : `#${b.issue} (${short(b)})`));
+  const roots = rootBlockers(direct.filter((b) => b.next?.kind === "dependency").flatMap((b) => b.next!.blockers ?? []), new Set(shown));
+  return roots.length ? `${parts.join(", ")}; held up by ${roots.map((r) => `#${r.issue} (${short(r)})`).join(", ")}` : parts.join(", ");
 }
 
 const sentence = (why: string, say: string) => `${why} — ${say}.`;
@@ -275,7 +306,9 @@ export function nextStep(kind: NextKind, base: NextBase = {}, d: NextData = {}):
       why = `${ref} waits for ${c}`;
       const all = (d.blockers ?? []).map((b) => `#${b.issue}`);
       until = all.length ? `after ${all.join(", ")}` : undefined;
-      say = "nothing to do, it starts by itself";
+      // Somewhere down the chain a story waits for the owner: say which, so it's clear where to act.
+      const yours = rootBlockers(d.blockers).filter((b) => b.next && NEEDS_YOU.has(b.next.kind)).map((b) => `#${b.issue}`);
+      say = yours.length ? `nothing to do here, it starts by itself once you've handled ${yours.join(", ")}` : "nothing to do, it starts by itself";
       break;
     }
     case "one_at_a_time": {

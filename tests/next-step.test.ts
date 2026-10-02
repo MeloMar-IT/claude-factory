@@ -383,6 +383,27 @@ describe("dependency chain", () => {
   it("a local run keeps its repository", () => {
     expect(runNextStep(run({ vars: {}, repo: "/work/app" })).repo).toBe("/work/app");
   });
+  it("a long, branching chain names every issue once and says who to act on", () => {
+    const B = { repo: "acme/app" };
+    const approve = (i: number) => runNextStep(run({ status: "waiting", waiting: { stepId: "approve_plan", message: "m", since: "x" }, vars: { github_repo: "acme/app", issue: String(i) } }), { title: "x" });
+    const asks = (i: number) => nextStep("questions", { ...B, issue: i }, { watched: true, questions: 2 });
+    const waits = (i: number, blockers: { issue: number; next?: NextStep }[]) => nextStep("dependency", { ...B, issue: i }, { watched: true, blockers });
+    // Like #21 on 2026-10-02: #16 and #19 lead, through several paths, to #61, #11 (risky plans) and #64 (questions).
+    const n61 = { issue: 61, next: approve(61) }, n11 = { issue: 11, next: approve(11) }, n64 = { issue: 64, next: asks(64) };
+    const n62 = { issue: 62, next: waits(62, [n61]) };
+    const n9 = { issue: 9, next: waits(9, [n61, n62]) };
+    const n66 = { issue: 66, next: waits(66, [n64]) };
+    const n15 = { issue: 15, next: waits(15, [n11, n64, n66]) };
+    const n16 = { issue: 16, next: waits(16, [n9, n15]) };
+    const n17 = { issue: 17, next: waits(17, [n64, n66]) };
+    const n18 = { issue: 18, next: waits(18, [n17]) };
+    const n19 = { issue: 19, next: waits(19, [n11, n18]) };
+    const n = nextStep("dependency", { ...B, issue: 21 }, { watched: true, blockers: [n16, n19] });
+    expect(n.why).toBe("#21 waits for #16, #19; held up by #61 (waits for your decision on its risky plan), #11 (waits for your decision on its risky plan), #64 (waits for answers)");
+    for (const i of [61, 11, 64]) expect(n.why.split(`#${i} `).length - 1).toBe(1); // each once
+    expect(n.text).toContain("it starts by itself once you've handled #61, #11, #64");
+  });
+
   it("shows a decision of a blocker", () => {
     const b = runNextStep(run({ status: "waiting", waiting: { stepId: "approve_plan", message: "m", since: "x" } }), { title: "x" });
     expect(dep([{ issue: 4, next: b }]).why).toContain("which waits for your decision on its risky plan");
