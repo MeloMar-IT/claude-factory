@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { stepLogFile } from "../engine/execute.js";
 import { buildHistory, runProgress, runTiming, withWaitLeft, type DurationHistory } from "../estimate.js";
 import type { RunSummary } from "../engine/state.js";
+import { issueRank, issueRecord } from "../issue-record.js";
 import { nextStep, releaseAtFor, runNextStep, trackingWatcher, type NextStep } from "../next-step.js";
 import { labelNames, parseInterval, type Hold, type WatcherStatus } from "../queue/watcher.js";
 import type { WatcherConfig } from "../config.js";
@@ -288,13 +289,12 @@ export function collectNext(ctx: ApiContext, list: RunSummary[]) {
       const data = { watched: true, issueUrl: `https://github.com/${t.watcher.github_repo}/issues/${i.issue}` };
       let e: Entry;
       const queuedJob = i.runId ? q.pending.find((p) => p.runId === i.runId) : undefined;
-      if (run && isLive) e = { next: next(run), since: runSince(run) };
-      else if (queuedJob && !run) e = { next: waitLeft(nextStep(queuedJob.waitingFor ? "one_at_a_time" : "queued", base, { ...data, blockingRun: queuedJob.waitingFor })) };
-      else if (hold) e = holdEntry(t, hold);
-      else if (run) e = { next: next(run), since: runSince(run) };
-      else if (i.done) e = { next: nextStep("done", base, data) };
-      else e = { next: nextStep(ctx.restart ? "restart" : "starting", base, { ...data, restartWhy }) };
-      issues.push({ ...e, watcher: t.watcher.id, runId: i.runId, key: `${base.repo}#${i.issue}`, rank: isLive ? 0 : i.done ? 2 : 1 });
+      const rec = issueRecord({ base, data, run, live: isLive, queuedJob, hold: hold?.next, done: i.done, restart: !!ctx.restart, restartWhy, nextOf: next });
+      if (rec.source === "live" || rec.source === "run") e = { next: rec.next, since: runSince(run!) };
+      else if (rec.source === "queued") e = { next: waitLeft(rec.next) };
+      else if (rec.source === "hold") e = holdEntry(t, hold!);
+      else e = { next: rec.next };
+      issues.push({ ...e, watcher: t.watcher.id, runId: i.runId, key: `${base.repo}#${i.issue}`, rank: issueRank(isLive, !!i.done) });
     }
   }
 

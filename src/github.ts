@@ -31,6 +31,10 @@ export interface Comment {
   author: { login: string };
   body: string;
   createdAt: string;
+  /** Link to the comment (…#issuecomment-<id>); gh reports it. */
+  url?: string;
+  /** Did the account `gh` acts as write it? */
+  viewerDidAuthor?: boolean;
 }
 
 export interface Issue {
@@ -42,6 +46,27 @@ export interface Issue {
 }
 
 export const isBot = (c: { body: string }) => BOT_MARKERS.some((m) => c.body.includes(m));
+
+/** Last line of the status comment: the one comment per issue the Foundry keeps up to date. */
+export const STATUS_MARKER = "<!-- claude-factory status -->";
+const STATUS_MARKERS: readonly string[] = [STATUS_MARKER, "<!-- spaghetti-code-foundry status -->"];
+
+/** A status comment has its marker as the last line; a comment that only quotes the marker is not one. */
+export function isStatusComment(c: { body: string }): boolean {
+  const last = c.body.split("\n").map((l) => l.trim()).filter(Boolean).at(-1);
+  return last !== undefined && STATUS_MARKERS.includes(last);
+}
+
+/** The numeric id in a comment link (…#issuecomment-123). */
+export function commentId(url: string | undefined): string | undefined {
+  return /#issuecomment-(\d+)\s*$/.exec(url?.trim() ?? "")?.[1];
+}
+
+const normal = (t: string) => t.replace(/\r\n/g, "\n").trim();
+/** Is this the same comment text? Line ends and trailing white space do not count; no text is never the same. */
+export function sameBody(a: string | undefined, b: string | undefined): boolean {
+  return a !== undefined && b !== undefined && normal(a) === normal(b);
+}
 
 export async function issueComments(repo: string, issue: number | string, timeoutMs?: number): Promise<Comment[]> {
   const r = await ghJson<{ comments: Comment[] }>(["issue", "view", String(issue), "--repo", repo, "--json", "comments,labels"], undefined, timeoutMs);
@@ -70,9 +95,87 @@ export async function ghLogin(timeoutMs?: number): Promise<string> {
   return (await gh(["api", "user", "--jq", ".login"], undefined, timeoutMs)).trim();
 }
 
-/** Posts a comment; the text goes through stdin (not a shell, not the process list). */
-export async function commentOnIssue(repo: string, issue: number, body: string, timeoutMs?: number): Promise<void> {
-  await gh(["issue", "comment", String(issue), "--repo", repo, "--body-file", "-"], undefined, timeoutMs, body);
+/** Posts a comment; the text goes through stdin (not a shell, not the process list). Returns the id of the new comment when gh prints its link. */
+export async function commentOnIssue(repo: string, issue: number, body: string, timeoutMs?: number): Promise<string | undefined> {
+  const out = await gh(["issue", "comment", String(issue), "--repo", repo, "--body-file", "-"], undefined, timeoutMs, body);
+  return commentId(out.split("\n").map((l) => l.trim()).filter(Boolean).at(-1));
+}
+
+export interface UpsertOptions {
+  /** The comment id from an earlier call: edit it without reading the issue. */
+  id?: string;
+  /** Post a new comment when the issue has none of ours. */
+  create: boolean;
+  timeoutMs?: number;
+  /** Time (ms since epoch) after which no call is made: the call rejects with "out of time". */
+  deadline?: number;
+  /** The login gh acts as, when known (saves a call). */
+  login?: string;
+}
+export interface UpsertResult {
+  id?: string;
+  /** Created or edited. */
+  changed: boolean;
+  /** A new comment was posted. */
+  created?: boolean;
+  /** Extra status comments of ours that were deleted. */
+  removed: number;
+  /** Extra status comments of ours that could not be deleted. */
+  left: number;
+  login?: string;
+}
+
+const MAX_REMOVE = 5;
+
+/**
+ * Keeps one status comment of ours on an issue: edits it, or creates it. Ours means: marker on the last line and
+ * written by the account gh acts as. Extra ones of ours (an older one exists) are deleted, best effort.
+ * Rejects when a needed call fails, the comment has no link, or the deadline has passed.
+ */
+export async function upsertStatusComment(repo: string, issue: number, body: string, o: UpsertOptions): Promise<UpsertResult> {
+  let login = o.login;
+  const limit = () => {
+    const left = o.deadline === undefined ? undefined : o.deadline - Date.now();
+    if (left !== undefined && left <= 0) throw new Error("out of time");
+    return left === undefined ? o.timeoutMs : Math.min(o.timeoutMs ?? left, left);
+  };
+  const edit = async (id: string) => {
+    await gh(["api", `repos/${repo}/issues/comments/${id}`, "-X", "PATCH", "--input", "-"], undefined, limit(), JSON.stringify({ body }));
+  };
+  if (o.id) {
+    await edit(o.id);
+    return { id: o.id, changed: true, removed: 0, left: 0, login };
+  }
+  const comments = await issueComments(repo, issue, limit());
+  const ours: Comment[] = [];
+  for (const c of comments) {
+    if (!isStatusComment(c)) continue;
+    if (c.viewerDidAuthor === undefined) login ??= await ghLogin(limit());
+    if (c.viewerDidAuthor === true || (c.viewerDidAuthor === undefined && c.author.login === login)) ours.push(c);
+  }
+  if (!ours.length) {
+    if (!o.create) return { changed: false, removed: 0, left: 0, login };
+    const id = await commentOnIssue(repo, issue, body, limit());
+    return { id, changed: true, created: true, removed: 0, left: 0, login };
+  }
+  const first = ours[0]!;
+  const id = commentId(first.url);
+  if (!id) throw new Error("the status comment has no link, so it cannot be edited");
+  const changed = !sameBody(first.body, body);
+  if (changed) await edit(id);
+  let removed = 0;
+  let left = 0;
+  for (const extra of ours.slice(1)) {
+    const eid = commentId(extra.url);
+    if (!eid || removed + left >= MAX_REMOVE) { left++; continue; }
+    try {
+      await gh(["api", `repos/${repo}/issues/comments/${eid}`, "-X", "DELETE"], undefined, limit());
+      removed++;
+    } catch {
+      left++;
+    }
+  }
+  return { id, changed, removed, left, login };
 }
 
 /** The human comments posted after the latest comment matching `after` (or all, if none matches). */
