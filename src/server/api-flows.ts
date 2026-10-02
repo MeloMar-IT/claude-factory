@@ -1,7 +1,10 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { effectiveVars } from "../engine/runner.js";
 import { blockDir, listBlocks, parseBlock } from "../flow/blocks.js";
-import { flowDir, listFlows, parseFlow, type FlowScope } from "../flow/load.js";
+import { flowDir, flowFiles, listFlows, parseFlow, type FlowScope } from "../flow/load.js";
+import { stampVersion, userFlow, type UserFlow } from "../flow/publish.js";
+import type { Flow } from "../flow/schema.js";
 import { generateFlow } from "./generate.js";
 import { publishedFlows } from "./permissions.js";
 import { HttpError, NAME_RE, readJson, send, str } from "./http.js";
@@ -18,7 +21,18 @@ export const flowRoutes: Route = async ({ opts }, req, res, seg, method, user) =
     const name = seg[1];
     if (name !== undefined && !NAME_RE.test(name)) throw new HttpError(400, "invalid flow name");
     if (!name && method === "GET") {
-      if (user.role !== "admin") return send(res, 200, publishedFlows(opts.repo).map((f) => ({ name: f.name, description: f.description ?? "" }))), true;
+      if (user.role !== "admin") {
+        const out: UserFlow[] = [];
+        for (const f of publishedFlows(opts.repo)) {
+          try {
+            const flow = parseFlow(readFileSync(f.path, "utf8"), f.path);
+            out.push(userFlow(f.name, flow, effectiveVars(flow, resolve(opts.repo))));
+          } catch {
+            // A flow that no longer parses is left out.
+          }
+        }
+        return send(res, 200, out), true;
+      }
       return send(res, 200, listFlows(opts.repo)), true;
     }
     if (!name) throw new HttpError(405, "method not allowed");
@@ -34,10 +48,23 @@ export const flowRoutes: Route = async ({ opts }, req, res, seg, method, user) =
       const flow = parseFlow(yaml);
       if (flow.name !== name) throw new HttpError(400, `flow name "${flow.name}" must match "${name}"`);
       const dir = flowDir(scope, opts.repo);
-      mkdirSync(dir, { recursive: true });
       const path = join(dir, `${name}.yaml`);
-      writeFileSync(path, yaml);
-      return send(res, 200, { name, path, scope }), true;
+      const stored: Flow[] = [];
+      let overwritten: Flow | undefined;
+      for (const p of flowFiles(name, opts.repo)) {
+        try {
+          const f = parseFlow(readFileSync(p, "utf8"), p);
+          stored.push(f);
+          if (p === path) overwritten = f;
+        } catch {
+          // A file that does not parse is left out.
+        }
+      }
+      const stamped = stampVersion(yaml, flow, stored, overwritten);
+      if (stamped.yaml !== yaml) parseFlow(stamped.yaml);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(path, stamped.yaml);
+      return send(res, 200, { name, path, scope, yaml: stamped.yaml, ...(stamped.version !== undefined ? { version: stamped.version } : {}) }), true;
     }
     if (method === "DELETE") {
       if (!listing) throw new HttpError(404, `flow "${name}" not found`);

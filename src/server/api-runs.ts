@@ -8,7 +8,8 @@ import { ownsRepo } from "../auth/repos.js";
 import { effectiveVars } from "../engine/runner.js";
 import type { RunSummary } from "../engine/state.js";
 import { parseFlow, resolveFlowPath } from "../flow/load.js";
-import type { Flow } from "../flow/schema.js";
+import { isPublished, userVars } from "../flow/publish.js";
+import { isVarName, type Flow } from "../flow/schema.js";
 import { guardedRepos } from "./api-repos.js";
 import { publishedFlows } from "./permissions.js";
 import { HttpError, NAME_RE, readJson, send, str } from "./http.js";
@@ -45,7 +46,7 @@ export const runRoutes: Route = async (ctx, req, res, seg, method, user) => {
     const task = str(body, "task", false).trim();
     const vars: Record<string, string> = {};
     for (const [k, v] of Object.entries((body.vars as Record<string, unknown>) ?? {})) {
-      if (!NAME_RE.test(k) || typeof v !== "string") throw new HttpError(400, `invalid var "${k}"`);
+      if (!isVarName(k) || typeof v !== "string") throw new HttpError(400, `invalid var "${k}"`);
       vars[k] = v;
     }
     let flow: Flow;
@@ -64,15 +65,21 @@ export const runRoutes: Route = async (ctx, req, res, seg, method, user) => {
       const listing = publishedFlows(opts.repo).find((f) => f.name === name);
       if (!listing) throw new HttpError(404, "flow not found");
       flow = parseFlow(readFileSync(listing.path, "utf8"), listing.path);
+      if (!isPublished(flow)) throw new HttpError(404, "flow not found");
       repo = resolve(opts.repo);
       if (!existsSync(repo)) throw new HttpError(400, "the server's folder was not found");
-      // The folder's own settings are read now and kept with the job, so the check below is about the variables the run uses.
-      runVars = effectiveVars(flow, repo, vars, (m) => opts.log?.(m));
+      // The folder's own settings are read now and kept with the job; the user may fill in the published inputs only.
+      const set = userVars(flow, effectiveVars(flow, repo, {}, (m) => opts.log?.(m)), vars);
+      if (!set.ok) throw new HttpError(set.status, set.error);
+      runVars = set.vars;
       const given = vars.github_repo;
       if (given === undefined) {
         // A repository from the flow or the folder is fine only when it is one of the user's own.
         const dflt = runVars.github_repo;
-        if (dflt !== undefined && !guardedRepos(ctx, () => ownsRepo(user.id, dflt))) throw new HttpError(403, 'set the var "github_repo" to one of your repositories');
+        if (dflt !== undefined && !guardedRepos(ctx, () => ownsRepo(user.id, dflt))) {
+          const input = flow.publish?.vars.github_repo?.mode === "input";
+          throw new HttpError(403, input ? 'set the var "github_repo" to one of your repositories' : "this flow works on a repository that is not one of yours");
+        }
       } else if (given === "" || given.toLowerCase() === "owner/repo") {
         throw new HttpError(403, 'set the var "github_repo" to one of your repositories');
       } else if (!guardedRepos(ctx, () => ownsRepo(user.id, given))) {

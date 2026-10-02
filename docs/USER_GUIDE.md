@@ -299,6 +299,13 @@ how steps connect: grey = next, green = on success, red dashed = on failure, pur
 - **✨ Draft flow with Claude** — describe what you want and Claude writes the YAML.
   **Ask Claude** changes the open flow the same way.
 - **+ From library** inserts a block from the [Library](#the-block-library).
+- **Publish to users** — choose whether users may start this flow ("Available to users"), the
+  name and description they see, and for each variable whether it is *hidden* (your value is
+  used), *fixed* (shown, cannot be changed) or *user fills in* (with a label, help text,
+  "Required" and a default). Tick **Own default** to give the input its own default, even an
+  empty one; unticked, it uses the flow's value. The version goes up by itself when you save a
+  change. A published flow cannot have sub-flow steps, and a shell step must read an input as
+  `$FACTORY_VAR_NAME`, not `{{vars.name}}`.
 
 ### Let any AI write a flow
 
@@ -402,6 +409,8 @@ or per repository in `<repo>/.claude-factory/config.yaml`:
 vars:
   test_cmd: ./gradlew test
 ```
+
+The editor keeps empty values (`issue: ""`), so a variable you have just added stays.
 
 ### The block library
 
@@ -911,15 +920,32 @@ A name is `owner/name` with letters, digits, `-`, `_` and `.`. The placeholder `
 names like `a/..` are refused. Case does not matter when names are compared. If `repos.json`
 cannot be read, the calls answer "the repository list is not working; see the server log".
 
-**Which flows a user may start.** A user starts a saved flow by name (`POST /api/runs {"flow":
-"<name>", "task": "…", "vars": {…}}`), never by `yaml` (403 "only an admin can run a flow that
-is not saved") and never in a folder of their choice (403 "only an admin can choose the folder").
-`GET /api/flows` shows a user only the name and description of the valid flows with a plain name.
-If the flow uses `github_repo`, it must be one of the user's repositories: give it in `vars`
-(403 `"<name>" is not one of your repositories`). When none is given and the flow or the
-folder's own settings name a repository that is not the user's, the answer is 403 `set the var
-"github_repo" to one of your repositories`. A flow without `github_repo` runs in the server's
-default folder. A user's run keeps the variables it had when it was queued.
+**Which flows a user may start.** A user starts a *published* flow by name (`POST /api/runs
+{"flow": "<name>", "task": "…", "vars": {…}}`), never by `yaml` (403 "only an admin can run a
+flow that is not saved") and never in a folder of their choice (403 "only an admin can choose
+the folder"). A flow is published when its `publish:` section has `enabled: true` (see "The
+editor"). Built-in flows are not published; save a copy and publish it. After an upgrade users
+see no flows until you publish some. An unpublished flow answers 404.
+
+`GET /api/flows` shows a user the published, valid flows as `{name, title, description,
+version, fields}`. `fields` lists the variables that are *fixed* (shown with their value) or
+*user fills in* (with label, help text, default and whether it is required); hidden variables
+are not listed. In `vars` a user may set only the inputs (403 `you cannot set the var "<name>"`
+for any other). A required input that is empty gives 400 `fill in "<label>"`. Hidden and fixed
+variables keep the value of the flow or of the folder's own settings.
+
+If the flow uses `github_repo`, it must be one of the user's repositories: when it is an input,
+give it in `vars` (403 `"<name>" is not one of your repositories`). When none is given and the
+flow or the folder's own settings name a repository that is not the user's, the answer is 403
+`set the var "github_repo" to one of your repositories` (or, when `github_repo` is not an input,
+`this flow works on a repository that is not one of yours`). A flow without `github_repo` runs
+in the server's default folder. A user's run keeps the variables it had when it was queued.
+
+**Versions.** Each save of a published flow sets `publish.version`: 1 the first time, then one
+more for each change (compared with every same-named copy, in all places). Saving it unchanged
+keeps the number; turning the flow off and on again raises it. A run keeps the flow it started
+with, even if you save a new version while it waits, and the run page shows "Flow version". If
+you edit a flow file by hand, raise the number yourself.
 
 **Trust.** Roles limit the API and the pages. They do not limit what a run can do. A user who can
 start a run can run commands as your Mac user (through the task and variables such as
@@ -945,7 +971,7 @@ e-mail if you need one.
 | `POST /api/providers/test` | yes | no | test a provider |
 | `GET /api/evals` | yes | no | eval reports |
 | `GET /api/stats` | yes | no | statistics |
-| `GET /api/flows` | yes | yes | list flows (a user sees the published names only) |
+| `GET /api/flows` | yes | yes | list flows (a user sees the published flows only) |
 | `GET /api/flows/:name` | yes | no | read a flow |
 | `PUT /api/flows/:name` | yes | no | save a flow |
 | `DELETE /api/flows/:name` | yes | no | delete a flow |
@@ -956,7 +982,7 @@ e-mail if you need one.
 | `POST /api/generate` | yes | no | write a flow with AI |
 | `GET /api/queue` | yes | no | the queue of all runs |
 | `GET /api/runs` | yes | yes | list runs (a user sees their own) |
-| `POST /api/runs` | yes | yes | start a run (a user: a saved flow and own repositories) |
+| `POST /api/runs` | yes | yes | start a run (a user: a published flow and own repositories) |
 | `GET /api/runs/:id` | yes | own runs | read a run |
 | `POST /api/runs/:id/cancel` | yes | own runs | cancel a run |
 | `POST /api/runs/:id/resume` | yes | own runs | resume a run |
