@@ -13,7 +13,8 @@ const Role = z.enum(["admin", "user"]);
 const Base = { time: z.iso.datetime(), by: z.union([z.literal("cli"), z.uuid()]), userId: z.uuid() };
 
 export const AuditEntrySchema = z.discriminatedUnion("action", [
-  z.object({ ...Base, action: z.enum(["create", "password", "block", "unblock", "delete"]) }).strict(),
+  z.object({ ...Base, action: z.enum(["create", "password", "unblock", "delete"]) }).strict(),
+  z.object({ ...Base, action: z.literal("block"), stopWork: z.boolean().optional() }).strict(),
   z.object({ ...Base, action: z.literal("role"), oldRole: Role, newRole: Role }).strict(),
 ]);
 
@@ -21,7 +22,8 @@ export type AuditEntry = z.infer<typeof AuditEntrySchema>;
 
 /** What a store call tells the log: the entry without the time and the actor. */
 export type AuditEvent =
-  | { action: "create" | "password" | "block" | "unblock" | "delete"; userId: string }
+  | { action: "create" | "password" | "unblock" | "delete"; userId: string }
+  | { action: "block"; userId: string; stopWork?: boolean }
   | { action: "role"; userId: string; oldRole: "admin" | "user"; newRole: "admin" | "user" };
 
 export interface PreparedAudit {
@@ -40,6 +42,7 @@ export function prepareAuditLocked(by: string, event: AuditEvent): PreparedAudit
     by,
     action: event.action,
     userId: event.userId,
+    ...(event.action === "block" ? { stopWork: event.stopWork === true } : {}),
     ...("oldRole" in event ? { oldRole: event.oldRole, newRole: event.newRole } : {}),
   };
   if (!AuditEntrySchema.safeParse(entry).success) throw new Error("audit: the entry is not valid");

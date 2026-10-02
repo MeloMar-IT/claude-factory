@@ -124,7 +124,7 @@ export const runRoutes: Route = async (ctx, req, res, seg, method, user) => {
     const lockKey = runVars.github_repo && (runVars.issue || runVars.pr) ? `${runVars.github_repo}#${runVars.issue || runVars.pr}` : undefined;
     const runId = scheduler.submit(
       { kind: "run", flow, task, repo, vars: runVars, ...(admin ? {} : { frozenVars: true }) },
-      { lockKey, source: "ui", owner: user.id },
+      { lockKey, source: "ui", owner: user.id, queuedBy: user.id },
     );
     return send(res, 201, { runId, queued: scheduler.isQueued(runId) }), true;
   }
@@ -148,7 +148,7 @@ export const runRoutes: Route = async (ctx, req, res, seg, method, user) => {
       action === "resume"
         ? { kind: "resume", runId: id, from }
         : { kind: "resume", runId: id, decision: { approved: action === "approve", by: "ui", note: str(body, "note", false) || undefined } },
-      { lockKey, source: `ui ${action}` },
+      { lockKey, source: `ui ${action}`, queuedBy: user.id },
     );
     return send(res, 202, { runId: id }), true;
   }

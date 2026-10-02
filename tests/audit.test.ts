@@ -173,3 +173,21 @@ describe("openAppendLocked", () => {
     expect(readFileSync(join(home, "x.jsonl"), "utf8")).toBe(long + "\n");
   });
 });
+
+describe("block lines and stopWork", () => {
+  it("a block line has exactly time, by, action, userId, stopWork", () => {
+    add("cli", { action: "block", userId: id(), stopWork: true });
+    add("cli", { action: "block", userId: id() });
+    const l = lines().map((x) => JSON.parse(x) as Record<string, unknown>);
+    expect(Object.keys(l[0]!)).toEqual(["time", "by", "action", "userId", "stopWork"]);
+    expect(l[0]!.stopWork).toBe(true);
+    expect(l[1]!.stopWork).toBe(false);
+  });
+
+  it("a block line from before still parses; stopWork on another action is refused", () => {
+    const base = { time: new Date().toISOString(), by: "cli", userId: id() };
+    expect(AuditEntrySchema.safeParse({ ...base, action: "block" }).success).toBe(true);
+    expect(AuditEntrySchema.safeParse({ ...base, action: "block", stopWork: false }).success).toBe(true);
+    expect(AuditEntrySchema.safeParse({ ...base, action: "unblock", stopWork: true }).success).toBe(false);
+  });
+});

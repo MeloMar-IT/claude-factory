@@ -145,6 +145,34 @@ describe("scf user (child process)", () => {
           .map((l) => JSON.parse(l) as Record<string, unknown>)
       : [];
 
+  it("block --stop-work asks the server to stop the work; unblock removes the request", () => {
+    create();
+    create("zeb@example.com", [], PW2);
+    const r = run(["user", "block", "zeb@example.com", "--stop-work"], "");
+    expect(r.code).toBe(0);
+    expect(r.out).toContain("blocked zeb@example.com and asked the server to stop its work");
+    const zeb = () => (stored().users as unknown as { email: string; stopWork?: string }[]).find((u) => u.email === "zeb@example.com")!;
+    expect(zeb().stopWork).toMatch(/^[0-9a-f-]{36}$/);
+    expect(auditLines().at(-1)).toMatchObject({ action: "block", stopWork: true });
+    expect(run(["user", "unblock", "zeb@example.com"], "").code).toBe(0);
+    expect(zeb().stopWork).toBeUndefined();
+    expect(run(["user", "block", "zeb@example.com"], "").out).toBe("blocked zeb@example.com\n");
+    expect(auditLines().at(-1)).toMatchObject({ action: "block", stopWork: false });
+  });
+
+  it("--stop-work is refused on the other commands", () => {
+    create();
+    for (const sub of ["unblock", "delete"]) {
+      const r = run(["user", sub, "ann@example.com", "--stop-work"], "");
+      expect(r.code).toBe(1);
+      expect(r.err).toContain("unexpected option --stop-work");
+      expect(r.err).toContain("usage: scf user");
+    }
+    const l = run(["user", "list", "--stop-work"], "");
+    expect(l.code).toBe(1);
+    expect(l.err).toContain("usage: scf user");
+  });
+
   it("`role` changes the role and protects the last admin", () => {
     create();
     create("bob@example.com", []);
@@ -226,7 +254,7 @@ describe("scf user (child process)", () => {
     for (const l of lines) {
       expect(l.by).toBe("cli");
       expect(l.userId).toBe(id);
-      expect(Object.keys(l)).toHaveLength(l.action === "role" ? 6 : 4);
+      expect(Object.keys(l)).toHaveLength(l.action === "role" ? 6 : l.action === "block" ? 5 : 4);
     }
     expect(lines[2]).toMatchObject({ oldRole: "user", newRole: "admin" });
     const text = readFileSync(auditFile(), "utf8");

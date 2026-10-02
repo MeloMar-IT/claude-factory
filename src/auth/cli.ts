@@ -17,11 +17,12 @@ export const USER_USAGE = `usage: scf user create [--admin] [--name n] [--email 
        scf user list                                      List accounts
        scf user password <e-mail>                         Set a new password
        scf user role <e-mail> admin|user                  Change the role of an account
-       scf user block <e-mail> | scf user unblock <e-mail>
+       scf user block <e-mail> [--stop-work] | scf user unblock <e-mail>
+                                                          --stop-work also cancels its running runs and runs that wait for approval
        scf user delete <e-mail>                           Delete an account and wipe its stored credentials
 The password is asked twice on a terminal, or read from the first line of stdin.`;
 
-const ALLOWED: Record<string, string[]> = { create: ["admin", "name", "email"], list: [], password: [], role: [], block: [], unblock: [], delete: [] };
+const ALLOWED: Record<string, string[]> = { create: ["admin", "name", "email"], list: [], password: [], role: [], block: ["stop-work"], unblock: [], delete: [] };
 
 export function terminalIo(stdin: NodeJS.ReadStream = process.stdin, stderr: NodeJS.WriteStream = process.stderr): UserIo {
   const cancelled = () => new Error("cancelled");
@@ -172,8 +173,9 @@ export async function userCommand(args: { positionals: string[]; values: Record<
     case "unblock": {
       const u = accountByEmail(operands[0]!);
       const status = sub === "block" ? "blocked" : "active";
-      await setStatus(u.id, status, BY);
-      io.out(`${status === "blocked" ? "blocked" : "unblocked"} ${u.email}`);
+      const stopWork = args.values["stop-work"] === true;
+      await setStatus(u.id, status, { ...BY, stopWork });
+      io.out(`${status === "blocked" ? "blocked" : "unblocked"} ${u.email}${stopWork ? " and asked the server to stop its work" : ""}`);
       return 0;
     }
     case "delete": {
