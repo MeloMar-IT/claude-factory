@@ -79,6 +79,7 @@ describe("account files in the move", () => {
     const body = JSON.stringify({ version: 1, users: [{ name: `${from}/x` }] });
     for (const f of ["users.json", "sessions.json", "credentials.json"]) writeFileSync(join(from, f), body, { mode: 0o600 });
     writeFileSync(join(from, "queue.json"), body);
+    writeFileSync(join(from, "audit.jsonl"), `{"note":"${from}/x"}\n`, { mode: 0o600 });
     mkdirSync(join(from, "runs", "r9"), { recursive: true });
     writeFileSync(join(from, "runs", "r9", "users.json"), body);
     writeFileSync(join(from, "runs", "r9", "run.json"), JSON.stringify({ runId: "r9", status: "succeeded" }));
@@ -87,6 +88,8 @@ describe("account files in the move", () => {
       expect(readFileSync(join(to, f))).toEqual(Buffer.from(body));
       expect(statSync(join(to, f)).mode & 0o777).toBe(0o600);
     }
+    expect(readFileSync(join(to, "audit.jsonl"), "utf8")).toBe(`{"note":"${from}/x"}\n`);
+    expect(statSync(join(to, "audit.jsonl")).mode & 0o777).toBe(0o600);
     expect(readFileSync(join(to, "queue.json"), "utf8")).toContain(to);
     expect(readFileSync(join(to, "runs", "r9", "users.json"), "utf8")).toContain(to);
   });

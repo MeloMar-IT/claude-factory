@@ -43,6 +43,7 @@ Usage:
                                                  Create an account (the first one: --admin)
   scf user list                                  List accounts
   scf user password <e-mail>                     Set a new password
+  scf user role <e-mail> admin|user              Change the role of an account
   scf user block <e-mail> | unblock <e-mail>     Block or unblock an account
   scf user delete <e-mail>                       Delete an account and wipe its stored credentials
   scf credential rotate-key | check              Re-encrypt stored credentials; check the macOS Keychain
