@@ -22,6 +22,8 @@ export interface QueuedJob {
   source?: string;
   /** The id of the account that queued it. */
   owner?: string;
+  /** The id of the account that queued it (UI). Absent for watchers, the CLI and older versions. */
+  queuedBy?: string;
   /** Set for one_per_repo flows: only one active job per repo key. */
   repoLock?: string;
   enqueuedAt: string;
@@ -44,12 +46,33 @@ export interface SchedulerOptions {
   claudeBin?: string;
   /** Where pending jobs are saved so they survive restarts. */
   queueFile?: string;
+  /** False when the account is blocked or gone: the jobs it queued wait. Without it, no job is held. */
+  accountActive?: (accountId: string) => boolean;
   onFinished?: (summary: RunSummary, job: QueuedJob) => void;
   /** Makes a run id (default: newRunId). Tests use it to force a clash. */
   newId?: () => string;
 }
 
 const ID_TRIES = 20;
+
+export interface AccountInfo {
+  id: string;
+  blocked: boolean;
+}
+export interface AccountCancelCounts {
+  queued: number;
+  running: number;
+  waiting: number;
+}
+export interface AccountCancelled extends AccountCancelCounts {
+  accountId: string;
+  why: "blocked" | "deleted";
+}
+
+/** The account that queued a job. Old entries have no `queuedBy`: a UI run was queued by its owner. */
+export function queuerOf(q: QueuedJob): string | undefined {
+  return q.queuedBy ?? (q.job.kind === "run" && q.source === "ui" ? q.owner : undefined);
+}
 
 /**
  * Runs jobs with a global concurrency limit and per-key locks. Pending jobs are
@@ -94,7 +117,7 @@ export class Scheduler {
     return typeof q?.owner === "string" ? q.owner : undefined;
   }
 
-  submit(job: Job, meta: { lockKey?: string; source?: string; owner?: string } = {}): string {
+  submit(job: Job, meta: { lockKey?: string; source?: string; owner?: string; queuedBy?: string } = {}): string {
     const runId = job.kind === "run" ? this.freeId() : job.runId;
     if (job.kind === "resume" && (this.isActive(runId) || this.isQueued(runId))) throw new Error(`run ${runId} is already queued or running`);
     const repoLock = this.repoLockFor(job);
@@ -148,9 +171,62 @@ export class Scheduler {
   private cancelWaiting(runId: string): boolean {
     const summary = cancelWaitingRun(this.o.runsDir, runId, this.o.config());
     if (!summary) return false;
+    // A run that is still finishing (its "waiting" notify command runs) shows the new state too.
+    const live = this.active.get(runId);
+    if (live) live.summary = structuredClone(summary);
     // Viewers that watched the run while it was active are kept in `recent`; later ones are pending listeners.
-    for (const fn of [...(this.recent.get(runId)?.listeners ?? []), ...(this.pendingListeners.get(runId) ?? [])]) fn({ type: "update", summary });
+    for (const fn of [...(live?.listeners ?? []), ...(this.recent.get(runId)?.listeners ?? []), ...(this.pendingListeners.get(runId) ?? [])]) fn({ type: "update", summary });
     return true;
+  }
+
+  /**
+   * Cancels the work of one account and returns the counts. Never pumps and never takes the account lock: it may run
+   * inside withAuthLock. Queued jobs the account queued are dropped; with `stopWork` also the jobs for runs it owns,
+   * its running runs are aborted and its runs that wait for approval are cancelled.
+   */
+  cancelAccount(accountId: string, opts: { stopWork?: boolean } = {}): AccountCancelCounts {
+    const counts: AccountCancelCounts = { queued: 0, running: 0, waiting: 0 };
+    const keep = this.pending.filter((q) => !(queuerOf(q) === accountId || (opts.stopWork && this.ownerOf(q.runId) === accountId)));
+    counts.queued = this.pending.length - keep.length;
+    if (counts.queued) {
+      this.pending = keep;
+      this.persist();
+    }
+    if (!opts.stopWork) return counts;
+    for (const [runId, a] of this.active) {
+      if (this.ownerOf(runId) !== accountId || a.controller.signal.aborted) continue;
+      if (a.summary !== undefined && a.summary.status !== "running") continue;
+      a.controller.abort();
+      counts.running++;
+    }
+    for (const b of listRunBriefs(this.o.runsDir)) {
+      if (b.status !== "waiting" || b.owner !== accountId || !/^[\w-]+$/.test(b.dirName)) continue;
+      const live = this.active.get(b.dirName);
+      if (live && live.summary?.status !== "waiting") continue; // a resume is running; the active step handled it
+      try {
+        const s = loadRun(this.o.runsDir, b.dirName);
+        if (!s || s.runId !== b.dirName || s.owner !== accountId || s.status !== "waiting") continue;
+        if (this.cancelWaiting(b.dirName)) counts.waiting++;
+      } catch {
+        // a run.json that cannot be read is left alone
+      }
+    }
+    return counts;
+  }
+
+  /** Drops the queued jobs of accounts that are blocked or gone. Returns the accounts where something was dropped. */
+  enforceAccounts(accounts: AccountInfo[]): AccountCancelled[] {
+    const byId = new Map(accounts.map((a) => [a.id, a]));
+    const out: AccountCancelled[] = [];
+    for (const id of new Set(this.pending.map(queuerOf))) {
+      if (id === undefined) continue;
+      const acc = byId.get(id);
+      if (acc && !acc.blocked) continue;
+      const c = this.cancelAccount(id);
+      if (c.queued) out.push({ accountId: id, why: acc ? "blocked" : "deleted", ...c });
+    }
+    this.pump();
+    return out;
   }
 
   queue() {
@@ -246,11 +322,26 @@ export class Scheduler {
 
   private pump() {
     const limit = this.o.config().concurrency;
+    const states = new Map<string, boolean>();
+    const held = (q: QueuedJob) => {
+      const id = queuerOf(q);
+      if (id === undefined || !this.o.accountActive) return false;
+      let ok = states.get(id);
+      if (ok === undefined) {
+        try {
+          ok = this.o.accountActive(id);
+        } catch {
+          ok = false;
+        }
+        states.set(id, ok);
+      }
+      return !ok;
+    };
     for (let i = 0; i < this.pending.length && this.active.size < limit; ) {
       const q = this.pending[i]!;
       const active = [...this.active.values()].map((a) => a.queued);
       const locked = (q.lockKey && active.some((a) => a.lockKey === q.lockKey)) || (q.repoLock && active.some((a) => a.repoLock === q.repoLock));
-      if (locked) {
+      if (locked || held(q)) {
         i++;
         continue;
       }

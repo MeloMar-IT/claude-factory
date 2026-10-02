@@ -880,10 +880,23 @@ another admin first", changes nothing and exits 1. Change a role with
 `scf user role <e-mail> admin|user`. `scf user list` shows the last sign-in of each account
 ("never" when there is none).
 
+**What a block or delete stops.** A blocked or deleted account cannot start anything new. The jobs it
+queued are cancelled (the server checks every 2 seconds; a block made while the server was down is
+handled at the next start, before any job starts). A job it queued never starts, also after a
+restart. Its running runs finish, and runs that wait for approval stay as they are. An admin can
+still resume, approve or reject such a run, and that job runs. `scf user block <e-mail> --stop-work`
+also cancels the account's running runs and its runs that wait for approval; workspaces are kept.
+The server acts on `--stop-work` once, when it sees it (about 2 seconds, or at the next start), and
+it covers every run the account owns at that moment. An admin's resume made in that gap is
+cancelled too. `scf user unblock` restarts nothing and removes a stop-work request the server has
+not handled yet. Watchers of the account keep working: disable the watcher or change its owner. The
+server log says how many runs it cancelled, with the account id only.
+
 **Audit log.** Every `scf user` action that changes something (`create`, `password`, `role`,
 `block`, `unblock`, `delete`) adds one line to `audit.jsonl` in the data folder (mode `0600`), for
 example `{"time":"2026-10-02T09:46:46.000Z","by":"cli","action":"role","userId":"<id>","oldRole":"user","newRole":"admin"}`.
-Only a role change has `oldRole` and `newRole`. No line holds a name, e-mail, password, hash or
+Only a role change has `oldRole` and `newRole`. A `block` line has `stopWork` (`true` when
+`--stop-work` was given). No line holds a name, e-mail, password, hash or
 token, and a failed action is not logged. If the file cannot be written, the command stops before
 it changes anything. In the rare case that the line cannot be added after the change (for example a
 full disk), the command says so and exits 1. The file is a record, not a protection: anyone who runs
@@ -1231,7 +1244,7 @@ The command is `scf`. `factory` still works as an alias and prints a short note.
 | `scf user list` | List accounts with the last sign-in (never shows passwords or hashes) |
 | `scf user role <e-mail> admin\|user` | Change the role of an account (not the last admin); counts from the next call |
 | `scf user password <e-mail>` | Set a new password and sign the account out |
-| `scf user block <e-mail>` / `scf user unblock <e-mail>` | Block (and sign out) or unblock an account (not the last admin) |
+| `scf user block <e-mail> [--stop-work]` / `scf user unblock <e-mail>` | Block (and sign out) or unblock an account (not the last admin). Queued jobs are cancelled; `--stop-work` also cancels running and waiting runs |
 | `scf user delete <e-mail>` | Delete an account, its sessions and its stored credentials (not the last admin) |
 | `scf credential rotate-key` | Re-encrypt all stored credentials under a new key |
 | `scf credential check` | Check that the macOS Keychain can store, read and remove the key |

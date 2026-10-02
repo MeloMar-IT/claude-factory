@@ -4,6 +4,15 @@ Changes that are merged but not yet in a release go under **Unreleased**. Newest
 
 ## Unreleased
 
+- Blocking or deleting an account stops its work (#61).
+  - **What is cancelled.** The jobs the account queued are dropped; its running runs finish; runs that wait for approval stay. The server checks every 2 seconds (`accountSweepMs`) and at start, before any job starts. A job queued by a blocked or deleted account never starts, also after a restart. Deleting an account does the same.
+  - **`scf user block <e-mail> --stop-work`** also cancels the account's running runs and its runs that wait for approval. Workspaces are kept. The server handles the request once and removes it; `scf user unblock` removes a request that was not handled yet and restarts nothing.
+  - **Admins** can still resume, approve or reject a blocked account's run, and that job runs. An admin's action made before the server handles a `--stop-work` request is cancelled with the rest.
+  - **Formats.** New optional `stopWork` on an account in `users.json` (only while a request waits for the server; an older build rejects a `users.json` that has it) and optional `queuedBy` in `queue.json`. Old files load unchanged.
+  - **Audit.** A `block` line in `audit.jsonl` has `stopWork` (true or false). Older block lines still parse.
+  - **Log.** `account <id> blocked|deleted: cancelled <q> queued, 0 running, 0 waiting` and `account <id> stop-work: cancelled <q> queued, <r> running, <w> waiting`. Account ids only; no names, e-mails or paths.
+  - **Code.** `Scheduler.cancelAccount` and `enforceAccounts`, the `accountActive` option, new `src/server/account-work.ts`, `takeStopWork` in `src/auth/users.ts`.
+  - **Not included.** The UI (Part 4). Watchers of a blocked account keep working: disable the watcher or change its owner.
 - Account rules and audit log (#60).
   - **`scf user role <e-mail> admin|user`** changes the role. It counts from the next API call; the account stays signed in.
   - **Last admin.** The only admin that is not blocked cannot be demoted, blocked or deleted. The command says "make another admin first", changes nothing and exits 1. **Changed:** blocking the only admin was allowed before, and a blocked admin no longer counts as another admin when deleting.
