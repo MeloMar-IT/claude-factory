@@ -1,6 +1,6 @@
 import { api } from "./api.js";
 import { h, mount, timeAgo, toast } from "./dom.js";
-import { needsYou, nextBlock, nextStatus, whereLink } from "./next.js";
+import { needsYou, nextBlock, nextStatus, whenParts, whereLink } from "./next.js";
 import { STEP_TYPES } from "./step-types.js";
 
 const money = (n) => (n ? `$${n.toFixed(4)}` : "—");
@@ -14,14 +14,16 @@ export const runRow = (r) => h("tr", { class: "link", onClick: () => (location.h
   h("td", {}, r.next ? nextStatus(r.next) : null),
   h("td", {}, h("b", {}, r.flow), what(r) ? h("div", { class: "muted mono", style: { fontSize: "11.5px" } }, what(r)) : null),
   h("td", { class: "task", title: r.task }, r.task || h("span", { class: "muted" }, "—"),
-    r.next ? h("div", { class: "muted", title: r.next.text }, r.next.text) : null),
-  h("td", { class: "mono" }, r.history.length),
+    r.next ? h("div", { class: "muted", title: r.next.text }, r.next.text) : null,
+    r.next && whenParts(r.next).length ? h("div", { class: "next-parts timing" }, whenParts(r.next)) : null),
+  h("td", { class: "mono" }, r.history?.length ?? 0),
   h("td", { class: "mono" }, money(r.totalCostUsd)),
   h("td", { class: "muted" }, timeAgo(r.startedAt)));
 
 /** A queued job: its status with "?", id, details, link and a Remove button. */
 export const queueRow = (p, onRemove) => h("div", { class: "row" },
   p.next ? nextStatus(p.next) : null, h("span", { class: "mono" }, p.runId), h("span", { class: "muted" }, [p.kind, p.source, p.next?.text].filter(Boolean).join(" · ")),
+  ...(p.next ? whenParts(p.next) : []),
   p.next ? whereLink(p.next.where) : null,
   h("span", { class: "spacer" }),
   h("button", { class: "small", onClick: onRemove }, "Remove"));

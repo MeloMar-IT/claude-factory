@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { stepLogFile } from "../engine/execute.js";
+import { buildHistory, runProgress, runTiming, withWaitLeft, type DurationHistory } from "../estimate.js";
 import type { RunSummary } from "../engine/state.js";
 import { nextStep, releaseAtFor, runNextStep, trackingWatcher, type NextStep } from "../next-step.js";
 import { labelNames, parseInterval, type Hold, type WatcherStatus } from "../queue/watcher.js";
@@ -31,6 +32,47 @@ function closedHold(tracked: { status: WatcherStatus }[], runId: string): NextSt
   return tracked.flatMap((t) => t.status.holds ?? []).find((h) => h.next.kind === "closed_elsewhere" && h.next.runId === runId)?.next;
 }
 
+const HISTORY_RUNS = 500;
+const HISTORY_TTL_MS = 5 * 60_000;
+const histories = new WeakMap<ApiContext, { at: number; history: DurationHistory }>();
+
+/** Durations of the newest runs; built at most every 5 minutes because it reads many run files. */
+export function historyFor(ctx: ApiContext): DurationHistory {
+  const have = histories.get(ctx);
+  if (have && Date.now() - have.at < HISTORY_TTL_MS) return have.history;
+  const history = buildHistory(ctx.scheduler.list(HISTORY_RUNS));
+  histories.set(ctx, { at: Date.now(), history });
+  return history;
+}
+
+export function forgetHistory(ctx: ApiContext): void {
+  histories.delete(ctx);
+}
+
+/** Adds "(about N min left)" to `until` when every run the record waits for is running and has an estimate. */
+function waitLeftFor(ctx: ApiContext): (rec: NextStep) => NextStep {
+  return (rec) => {
+    const ids = rec.kind === "dependency"
+      ? (rec.blockers ?? []).flatMap((b) => (b.next?.kind === "running" && b.next.runId ? [b.next.runId] : []))
+      : rec.afterRun ? [rec.afterRun] : [];
+    if (!ids.length) return rec;
+    if (ids.length < (rec.kind === "dependency" ? (rec.blockers ?? []).length : 1)) return rec;
+    if (ids.some((id) => !ctx.scheduler.isActive(id))) return rec;
+    // Jobs behind the same run wait for each other too: only the first one can say how long.
+    if (rec.kind === "one_at_a_time" && rec.runId) {
+      const pending = ctx.scheduler.queue().pending;
+      const mine = pending.findIndex((p) => p.runId === rec.runId);
+      if (pending.slice(0, Math.max(mine, 0)).some((p) => p.waitingFor === rec.afterRun)) return rec;
+    }
+    const lefts = ids.map((id) => {
+      const run = ctx.scheduler.get(id);
+      return run && !areaWait(run) ? runTiming(run, historyFor(ctx))?.leftMs : undefined;
+    });
+    if (lefts.some((l) => l === undefined)) return rec;
+    return withWaitLeft(rec, Math.max(...(lefts as number[])));
+  };
+}
+
 /**
  * Builds the record of any run. Reads the context when called, so do not keep the returned
  * function across requests or events.
@@ -42,6 +84,7 @@ export function nextFor(ctx: ApiContext, runs?: RunSummary[]): (run: RunSummary)
   let list = runs;
   const load = () => (list ??= ctx.scheduler.list(200));
   let replaced: Set<string> | undefined;
+  const waitLeft = waitLeftFor(ctx);
   return (run) => {
     const v = run.vars ?? {};
     const queued = pending.find((p) => p.runId === run.runId);
@@ -70,7 +113,10 @@ export function nextFor(ctx: ApiContext, runs?: RunSummary[]): (run: RunSummary)
     }
     // The watcher's hold for the same run and reason knows more (pull request, question count).
     const hold = tracked.flatMap((t) => t.status.holds ?? []).find((h) => h.next.runId === run.runId && h.next.kind === rec.kind);
-    return hold?.next ?? rec;
+    const out = waitLeft(hold?.next ?? rec);
+    if (out.kind === "done" || out.kind === "superseded") return out;
+    const timing = out.kind === "running" && run.status === "running" ? runTiming(run, historyFor(ctx)) : runProgress(run);
+    return timing ? { ...out, timing } : out;
   };
 }
 
@@ -105,18 +151,22 @@ export function queueWithNext(ctx: ApiContext): Omit<Queue, "pending"> & { pendi
   const q = ctx.scheduler.queue();
   const next = nextFor(ctx);
   const tracked = ctx.watchers.tracked();
+  const waitLeft = waitLeftFor(ctx);
   return { ...q, pending: q.pending.map((p) => {
     const run = ctx.scheduler.get(p.runId);
-    return { ...p, next: run ? next(run) : closedHold(tracked, p.runId) ?? jobNext(p) };
+    return { ...p, next: run ? next(run) : closedHold(tracked, p.runId) ?? waitLeft(jobNext(p)) };
   }) };
 }
 
-/** GET /api/watchers: each watcher carries its own `state` (words for active, error, disabled); one with a problem also has its record as `status.next`. */
+/** GET /api/watchers: each watcher carries its own `state` (words for active, error, disabled); one with a problem also has its record as `status.next`. Holds are copies that may say how long the run they wait for still needs. */
 export function watchersWithNext(ctx: ApiContext): (WatcherConfig & { state: WatcherState; status?: WatcherStatus & { next?: NextStep } })[] {
+  const waitLeft = waitLeftFor(ctx);
   return ctx.watchers.statuses().map((w) => {
     const next = w.status ? watcherProblem(w, w.status) : undefined;
     const state = watcherState(!w.enabled ? "disabled" : next?.kind === "watcher_error" ? "error" : "active");
-    return next && w.status ? { ...w, state, status: { ...w.status, next } } : { ...w, state };
+    if (!w.status) return { ...w, state };
+    const holds = w.status.holds?.map((h) => ({ ...h, next: waitLeft(h.next) }));
+    return { ...w, state, status: { ...w.status, ...(holds ? { holds } : {}), ...(next ? { next } : {}) } };
   });
 }
 
@@ -140,6 +190,7 @@ export const runSince = (run: RunSummary): string => run.waiting?.since ?? run.f
  */
 export function collectNext(ctx: ApiContext, list: RunSummary[]) {
   const next = nextFor(ctx, list);
+  const waitLeft = waitLeftFor(ctx);
   const q = ctx.scheduler.queue();
   const tracked = ctx.watchers.tracked();
   const restartWhy = ctx.restart?.why;
@@ -150,7 +201,7 @@ export function collectNext(ctx: ApiContext, list: RunSummary[]) {
     const by = t.status.pausedBy;
     // A hold about a run is as old as the run's wait; "seen" starts again after a restart.
     const run = h.next.runId ? list.find((r) => r.runId === h.next.runId) : undefined;
-    return { next: h.next, since: h.since ?? (run ? runSince(run) : undefined), seen: h.seen, watcher: t.watcher.id, prTitle: by && by.url === h.next.where.url ? by.title : undefined };
+    return { next: waitLeft(h.next), since: h.since ?? (run ? runSince(run) : undefined), seen: h.seen, watcher: t.watcher.id, prTitle: by && by.url === h.next.where.url ? by.title : undefined };
   };
   const watchers: Entry[] = [];
   for (const t of tracked) {
@@ -175,7 +226,7 @@ export function collectNext(ctx: ApiContext, list: RunSummary[]) {
       let e: Entry;
       const queuedJob = i.runId ? q.pending.find((p) => p.runId === i.runId) : undefined;
       if (run && isLive) e = { next: next(run), since: runSince(run) };
-      else if (queuedJob && !run) e = { next: nextStep(queuedJob.waitingFor ? "one_at_a_time" : "queued", base, { ...data, blockingRun: queuedJob.waitingFor }) };
+      else if (queuedJob && !run) e = { next: waitLeft(nextStep(queuedJob.waitingFor ? "one_at_a_time" : "queued", base, { ...data, blockingRun: queuedJob.waitingFor })) };
       else if (hold) e = holdEntry(t, hold);
       else if (run) e = { next: next(run), since: runSince(run) };
       else if (i.done) e = { next: nextStep("done", base, data) };
@@ -188,7 +239,7 @@ export function collectNext(ctx: ApiContext, list: RunSummary[]) {
     const out = list.map(next);
     for (const p of q.pending) {
       if (byRun.has(p.runId) || p.kind !== "run") continue;
-      out.push(closedHold(tracked, p.runId) ?? jobNext(p));
+      out.push(closedHold(tracked, p.runId) ?? waitLeft(jobNext(p)));
     }
     return out;
   };

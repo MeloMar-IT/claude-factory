@@ -68,6 +68,65 @@ steps:
   });
 });
 
+describe("step start time", () => {
+  const TWO = `
+name: t
+workspace: inplace
+steps:
+  - {id: a, type: shell, run: 'true'}
+  - {id: b, type: shell, run: 'true'}
+`;
+  const collect = (snaps: Array<ReturnType<typeof structuredClone<import("../src/engine/state.js").RunSummary>>>) => (s: import("../src/engine/state.js").RunSummary) => { snaps.push(structuredClone(s)); };
+
+  it("records when the current step started", async () => {
+    const snaps: Parameters<ReturnType<typeof collect>>[0][] = [];
+    const s = await runFlow(parseFlow(TWO), { task: "t", repo, runsDir, claudeBin, config: baseConfig(), onUpdate: collect(snaps) });
+    const a = snaps.find((x) => x.status === "running" && x.state.next === "a" && x.history.length === 0 && x.stepStartedAt);
+    const b = snaps.find((x) => x.state.next === "b" && x.history.length === 1 && x.stepStartedAt);
+    expect(a).toBeDefined();
+    expect(b).toBeDefined();
+    expect(Date.parse(b!.stepStartedAt!)).toBeGreaterThanOrEqual(Date.parse(a!.stepStartedAt!));
+    for (const x of snaps) {
+      if (!x.stepStartedAt) continue;
+      expect(["a", "b"].indexOf(x.state.next!)).toBe(x.history.length);
+    }
+    expect(snaps.some((x) => x.state.next === "a" && x.history.length === 1 && !x.stepStartedAt)).toBe(true);
+    expect(s.stepStartedAt).toBeUndefined();
+    expect(JSON.parse(readFileSync(join(s.runDir, "run.json"), "utf8")).stepStartedAt).toBeUndefined();
+  });
+
+  it("has none at an approval", async () => {
+    const s = await start(`
+name: t
+workspace: inplace
+steps:
+  - {id: a, type: shell, run: 'true'}
+  - {id: gate, type: approval, message: "Go?"}
+`);
+    expect(s.status).toBe("waiting");
+    expect(JSON.parse(readFileSync(join(s.runDir, "run.json"), "utf8")).stepStartedAt).toBeUndefined();
+  });
+
+  it("a resume does not show an old step time", async () => {
+    const s = await start(`
+name: t
+workspace: inplace
+steps:
+  - {id: a, type: shell, run: 'true'}
+  - {id: b, type: shell, run: 'test -f ok'}
+`);
+    expect(s.status).toBe("failed");
+    const old = "2020-01-01T00:00:00.000Z";
+    saveRun({ ...s, stepStartedAt: old });
+    writeFileSync(join(repo, "ok"), "");
+    const snaps: Parameters<ReturnType<typeof collect>>[0][] = [];
+    const r = await resume(s.runId, { onUpdate: collect(snaps) });
+    expect(r.status).toBe("succeeded");
+    expect(snaps.length).toBeGreaterThan(0);
+    expect(snaps.some((x) => x.stepStartedAt === old)).toBe(false);
+  });
+});
+
 describe("approvals", () => {
   const FLOW = `
 name: t

@@ -70,7 +70,24 @@ export const statusMark = (x, cls = "", busy = false) => [
 /** The status of a record. */
 export const nextStatus = (n) => statusMark(n, `${whoClass(n)} kind-${n.kind}`, n.kind === "running");
 
-/** The one renderer of a record: who, status, issue, title, action, why, until, link. `ref: false` leaves out issue and title, `status: false` the status. */
+/** "Continues: …" when the record says when it continues. */
+export const untilPart = (n) => (n.until ? h("span", { class: "muted" }, `Continues: ${n.until}`) : null);
+
+/** Progress, estimate and the slow hint of a record's `timing`. The texts come from the server. */
+export function timingParts(n) {
+  const t = n.timing;
+  if (!t) return [];
+  return [
+    t.progress ? h("span", { class: "muted" }, t.progress) : null,
+    t.estimate ? h("span", { class: "muted estimate" }, t.estimate) : null,
+    t.note ? h("span", { class: "slow-note" }, t.note) : null,
+  ].filter(Boolean);
+}
+
+/** When it continues and how long it takes, for one-line lists. */
+export const whenParts = (n) => [untilPart(n), ...timingParts(n)].filter(Boolean);
+
+/** The one renderer of a record: who, status, issue, title, action, why, until, timing, link. `ref: false` leaves out issue and title, `status: false` the status. */
 export function nextParts(n, { ref = true, status = true } = {}) {
   const issueOk = ref && n.issue && /^[\w.-]+\/[\w.-]+$/.test(n.repo ?? "");
   return [
@@ -80,7 +97,8 @@ export function nextParts(n, { ref = true, status = true } = {}) {
     ref && n.title ? h("span", { class: "hold-title" }, n.title) : null,
     h("span", { class: "hold-action" }, n.action),
     h("span", { class: "muted" }, n.why),
-    n.until ? h("span", { class: "muted" }, `Continues: ${n.until}`) : null,
+    untilPart(n),
+    ...timingParts(n),
     whereLink(n.where),
   ];
 }

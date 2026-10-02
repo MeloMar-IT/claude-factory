@@ -135,6 +135,7 @@ export async function resumeRun(opts: ResumeOptions): Promise<RunSummary> {
   const decision = opts.decision && summary.waiting ? { ...opts.decision, stepId: summary.waiting.stepId } : undefined;
   Object.assign(summary, { status: "running" as RunStatus, reason: undefined, finishedAt: undefined, resumes: (summary.resumes ?? 0) + 1 });
   summary.pid = process.pid;
+  summary.stepStartedAt = undefined; // an old step time must not show on the resumed run
   claimRunStart(opts.runsDir, () => saveRun(summary));
   summary.state.visits = {}; // fresh loop budget
   return drive(summary, opts, config, { startAt: from, decision });
@@ -245,6 +246,7 @@ async function finish(summary: RunSummary, opts: CommonOptions, config: Config, 
   summary.reason = r.reason;
   summary.state.next = r.next;
   if (r.outcome !== "waiting") summary.waiting = undefined;
+  summary.stepStartedAt = undefined;
   summary.finishedAt = new Date().toISOString();
   saveRun(summary);
   opts.onUpdate?.(summary);
@@ -310,6 +312,10 @@ async function loop(engine: Engine, scope: Scope, startAt: string | null, runsDi
     const startedAt = new Date();
     const logFile = newLogFile(engine, scope.prefix + step.id);
     let res: StepResult;
+    if (top && step.type !== "approval") {
+      summary.stepStartedAt = startedAt.toISOString();
+      engine.save();
+    }
 
     if (step.type === "approval") {
       const d = engine.decision;
@@ -333,6 +339,7 @@ async function loop(engine: Engine, scope: Scope, startAt: string | null, runsDi
       }
       res = applyChecks(step, res);
     }
+    if (top) summary.stepStartedAt = undefined; // recordStep saves it
     recordStep(step, scope, engine, res, startedAt, logFile, visit);
     lastOutput = res.output;
     if (res.limited) {
