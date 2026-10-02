@@ -1,6 +1,6 @@
 import { watcherOwner } from "../auth/run-owner.js";
 import type { WatcherConfig } from "../config.js";
-import { spentToday, type RunSummary } from "../engine/state.js";
+import { loadRun, saveRun, spentToday, type RunSummary } from "../engine/state.js";
 import { errorLine, explainError } from "../errors.js";
 import { loadFlow } from "../flow/load.js";
 import { canWrite, commentsAfter, ensureLabel, gh, ghJson, isBot, issueComments, setLabels, type Comment, type Issue } from "../github.js";
@@ -630,6 +630,7 @@ export class Watcher {
     if (toCheck.length) await this.precheck(toCheck, holds, budgetLeft);
     let tidyError: Error | undefined;
     await this.tidyClosed(runs, holds).catch((e: Error) => { tidyError = e; });
+    await this.endWaitsOfClosedIssues(new Set(issues.map((i) => i.number))).catch((e: Error) => { tidyError ??= e; });
     if (paused && !holds.some((x) => x.next.kind === "release")) holds.unshift(this.held("release", undefined, { pr: paused }));
     alive();
     const before = new Map((this.status.holds ?? []).map((h) => [holdKey(h), h.seen]));
@@ -669,6 +670,30 @@ export class Watcher {
       const done = run?.status === "succeeded" && run.history.at(-1)?.id !== "create_split";
       await setLabels(this.repo, issue.number, done ? this.L.done : undefined, [...this.allStatus, ...this.cfg.remove_on_done].filter((l) => names.includes(l)));
       this.act(`#${issue.number} (closed) label → ${done ? this.L.done : "none"}`);
+    }
+  }
+
+  /**
+   * A run that waits for a person (questions, a decision) whose issue was closed on GitHub has nothing
+   * left to wait for: end it, so it no longer shows up as needing attention. Any flow, also old ones.
+   */
+  private async endWaitsOfClosedIssues(openListed: Set<number>) {
+    const candidates = [...this.latestRuns("issue", true).values()].filter((r) =>
+      (r.status === "stopped" || r.status === "waiting") && !openListed.has(Number(r.vars.issue)) &&
+      !this.d.scheduler.isActive(r.runId) && !this.d.scheduler.isQueued(r.runId));
+    for (const r of candidates.slice(0, 10)) {
+      let state: string;
+      try {
+        state = (await ghJson<{ state: string }>(["issue", "view", r.vars.issue!, "--repo", this.repo, "--json", "state"])).state;
+      } catch {
+        continue; // can't tell now; the next check tries again
+      }
+      if (state.toUpperCase() !== "CLOSED") continue;
+      const s = loadRun(this.d.runsDir, r.runId);
+      if (!s || (s.status !== "stopped" && s.status !== "waiting")) continue;
+      Object.assign(s, { status: "cancelled", reason: "the issue was closed on GitHub — nothing left to do", waiting: undefined, finishedAt: s.finishedAt ?? new Date().toISOString() });
+      saveRun(s);
+      this.act(`#${r.vars.issue} is closed → ended its run ${r.runId}, which waited for a person`);
     }
   }
 

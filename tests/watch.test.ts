@@ -148,6 +148,25 @@ describe("watcher", () => {
     expect(gh.ghLog()).toMatch(/gh issue edit 4 .*--add-label factory:done/);
   });
 
+  it("ends a run that waits for answers when its issue is closed on GitHub", async () => {
+    process.env.FAKE_PLAN = "Which DB?\nPLAN_STATUS: NEEDS_INFO";
+    issues([4]);
+    const w = watcher();
+    await w.tick();
+    await settle();
+    expect(runFor("4").status).toBe("stopped");
+    // Someone closes #4 on GitHub (e.g. after splitting it by hand): it leaves the open list.
+    issues();
+    process.env.FAKE_GH_FRESH = JSON.stringify([{ number: 4, state: "CLOSED" }]);
+    await w.tick();
+    await settle();
+    const ended = runFor("4");
+    expect(ended.status).toBe("cancelled");
+    expect(ended.reason).toBe("the issue was closed on GitHub — nothing left to do");
+    // An issue that is open (just not labelled) keeps its waiting run.
+    delete process.env.FAKE_GH_FRESH;
+  });
+
   it("asks for info, then resumes the same run once someone answers", async () => {
     process.env.FAKE_PLAN = "Which DB?\nPLAN_STATUS: NEEDS_INFO";
     issues([4]);
