@@ -548,13 +548,35 @@ export function firstLine(n: Pick<NextStep, "who" | "action" | "why">): string {
 /** firstLine() of the fixed record of a comment kind. */
 export function commentFirst(kind: CommentKind): string { return firstLine(commentRecord(kind)); }
 
-/** Step environment: FACTORY_NEXT_<KIND> and FACTORY_FIRST_<KIND> for every comment kind, plus FACTORY_FIRST_NOTHING. */
+/** Comments that report something (plan, result, split, daily report): the fixed first line of each. */
+export const REPORT_KINDS = ["info", "merge_pr", "open_pr", "start_coding", "ships", "look", "merge_release", "draft", "start_parts"] as const;
+export type ReportKind = (typeof REPORT_KINDS)[number];
+
+const you = (action: string) => ({ who: "You" as const, action, why: "" });
+const foundry = (why = "") => ({ who: "Foundry" as const, action: "", why });
+const REPORTS: Record<ReportKind, Pick<NextStep, "who" | "action" | "why">> = {
+  info: foundry(),
+  merge_pr: you("Review and merge the pull request"),
+  open_pr: you("Open a pull request from the branch"),
+  start_coding: you("Add the code label to start coding"),
+  ships: foundry("It goes to main with the release pull request"),
+  look: you("Look at the changes"),
+  merge_release: you("Merge the release pull request when you like"),
+  draft: you("Fix the failed checks; the release pull request stays a draft until they pass"),
+  start_parts: you("Start the new issues when you want them built"),
+};
+
+/** firstLine() of the fixed record of a report kind. */
+export function reportFirst(kind: ReportKind): string { return firstLine(REPORTS[kind]); }
+
+/** Step environment: FACTORY_NEXT_<KIND> and FACTORY_FIRST_<KIND> for every comment kind, plus FACTORY_FIRST_<REPORT> for every report kind and FACTORY_FIRST_NOTHING. */
 export function nextStepEnv(): Record<string, string> {
   return {
     ...Object.fromEntries(COMMENT_KINDS.flatMap((k) => [
       [`FACTORY_NEXT_${k.toUpperCase()}`, commentText(k)],
       [`FACTORY_FIRST_${k.toUpperCase()}`, commentFirst(k)],
     ])),
+    ...Object.fromEntries(REPORT_KINDS.map((k) => [`FACTORY_FIRST_${k.toUpperCase()}`, reportFirst(k)])),
     FACTORY_FIRST_NOTHING: firstLine(nextStep("running")),
   };
 }

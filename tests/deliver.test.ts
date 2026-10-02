@@ -9,7 +9,7 @@ import { loadFlow, parseFlow } from "../src/flow/load.js";
 import { Scheduler } from "../src/queue/scheduler.js";
 import { Watcher } from "../src/queue/watcher.js";
 import { buildStamp, RESTART_CODE, supervise } from "../src/supervise.js";
-import { commentFirst, commentText, firstLine, nextStepEnv, runNextStep } from "../src/next-step.js";
+import { commentFirst, commentText, firstLine, nextStepEnv, reportFirst, runNextStep } from "../src/next-step.js";
 import { claudeBin, closing, fakeGithub, first, flowPath } from "./helpers/fake-github.js";
 
 // The simpler pipeline: one label (Factory_go) → questions up front → plan + risk gate + code in one
@@ -163,18 +163,29 @@ describe("deliver pipeline", () => {
     expect(log).not.toContain("### Depends on\nPart A");
     expect(log).toContain("🤖 **Spaghetti Code Foundry** split this issue into 2 issues");
     expect(log).toContain("<!-- claude-factory split run=");
+    const split = gh.comments().find((c) => c.body.includes("split this issue into"))!.body;
+    expect(split.split("\n").slice(0, 3)).toEqual([reportFirst("info"), "", "🤖 **Spaghetti Code Foundry** split this issue into 2 issues, built in this order:"]);
+    expect(closing(split)).toEqual(["Closing this one in favour of them.", `<!-- claude-factory split run=${run.runId} -->`]);
     expect(log).toContain("split by Spaghetti Code Foundry.");
     expect(log).toMatch(/gh issue close 5 --repo acme\/app --reason not planned/);
     expect(log).not.toMatch(/gh issue edit 5 .*--add-label Factory_done/); // closed in favour of the parts, not "done"
   });
 
+  const OLD = "🤖 **claude-factory** split this issue into";
+  const NEW = "🤖 **Spaghetti Code Foundry** split this issue into";
+  const OLD_MARK = "<!-- claude-factory split run=r1 -->";
+  const NEW_MARK = "<!-- spaghetti-code-foundry split run=r1 -->";
+  const LEAD = "**Nothing needed from you**\n\n";
   it.each([
-    ["old heading, old marker", "🤖 **claude-factory** split this issue into", "<!-- claude-factory split run=r1 -->"],
-    ["new heading, old marker", "🤖 **Spaghetti Code Foundry** split this issue into", "<!-- claude-factory split run=r1 -->"],
-    ["new heading, new marker", "🤖 **Spaghetti Code Foundry** split this issue into", "<!-- spaghetti-code-foundry split run=r1 -->"],
-  ])("treats an earlier finished split as done (%s)", (_name, head, mark) => {
+    ["old heading, old marker", OLD, OLD_MARK, ""],
+    ["new heading, old marker", NEW, OLD_MARK, ""],
+    ["new heading, new marker", NEW, NEW_MARK, ""],
+    ["first line, old heading, old marker", OLD, OLD_MARK, LEAD],
+    ["first line, new heading, old marker", NEW, OLD_MARK, LEAD],
+    ["first line, new heading, new marker", NEW, NEW_MARK, LEAD],
+  ])("treats an earlier finished split as done (%s)", (_name, head, mark, lead) => {
     process.env.FAKE_GH_PARENT = JSON.stringify({ title: "Add a feature", body: "", labels: [],
-      comments: [{ author: { login: "bot" }, body: `${head} 2 issues, built in this order:\n\n- #101 Part A\n- #102 Part B\n\nClosing this one in favour of them.\n\n${mark}` }] });
+      comments: [{ author: { login: "bot" }, body: `${lead}${head} 2 issues, built in this order:\n\n- #101 Part A\n- #102 Part B\n\nClosing this one in favour of them.\n\n${mark}` }] });
     const r = spawnSync(process.execPath, [resolve("tools/create-split")], { input: SPLIT(20), encoding: "utf8",
       env: { ...process.env, FACTORY_VAR_GITHUB_REPO: REPO, FACTORY_VAR_ISSUE: "5", FACTORY_RUN_ID: "again" } });
     expect(r.status).toBe(0);
@@ -182,6 +193,29 @@ describe("deliver pipeline", () => {
     const log = gh.ghLog();
     expect(log).not.toContain("created issue");
     expect(log).not.toContain("issue close");
+  });
+
+  const runSplit = (extra: Record<string, string> = {}) =>
+    spawnSync(process.execPath, [resolve("tools/create-split")], { input: SPLIT(20), encoding: "utf8",
+      env: { ...process.env, FACTORY_VAR_GITHUB_REPO: REPO, FACTORY_VAR_ISSUE: "5", FACTORY_RUN_ID: "r1", ...extra } });
+
+  it("recognises its own comment with the first line on a second run", () => {
+    expect(runSplit({ FACTORY_FIRST_INFO: reportFirst("info") }).status).toBe(0);
+    const posted = gh.comments().find((c) => c.body.includes("split this issue into"))!;
+    expect(posted.body.split("\n")[0]).toBe(reportFirst("info"));
+    process.env.FAKE_GH_PARENT = JSON.stringify({ title: "Add a feature", body: "", labels: [], comments: [{ author: { login: "bot" }, body: posted.body }] });
+    const b = runSplit();
+    expect(b.status).toBe(0);
+    expect(b.stdout).toContain("already split: #101 #102");
+    expect(gh.ghLog().match(/created issue/g)).toHaveLength(2);
+  });
+
+  it("does not take a heading in the middle of a line as a finished split", () => {
+    process.env.FAKE_GH_PARENT = JSON.stringify({ title: "Add a feature", body: "", labels: [],
+      comments: [{ author: { login: "bot" }, body: `I saw "${NEW}" somewhere\n${OLD_MARK}` }] });
+    const r = runSplit();
+    expect(r.stdout).not.toContain("already split");
+    expect(gh.ghLog()).toContain("created issue");
   });
 
   it("isn't fooled by a comment that only mentions the split marker, and moves dependents onto the parts", async () => {
