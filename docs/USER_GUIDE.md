@@ -400,7 +400,7 @@ In **agent prompts** you can use:
 **Shell commands** may only template trusted values (`{{vars.*}}`, `{{workdir}}`, `{{run.*}}`).
 Task text and step outputs could contain anything, so shell steps read them from environment
 variables instead: `$FACTORY_TASK`, `$FACTORY_OUT_<STEP_ID>`, `$FACTORY_VAR_<NAME>`,
-`$FACTORY_RUN_ID`, `$FACTORY_BRANCH`, `$FACTORY_NEXT_<REASON>`, `$FACTORY_FIRST_<REASON>`, `$FACTORY_FIRST_NOTHING` (also as `$SCF_…`).
+`$FACTORY_RUN_ID`, `$FACTORY_BRANCH`, `$FACTORY_NEXT_<REASON>`, `$FACTORY_FIRST_<REASON>`, `$FACTORY_FIRST_NOTHING`, `$FACTORY_FIRST_INFO` and the other report lines (also as `$SCF_…`).
 
 An agent step can **continue the session** of an earlier agent step ("Continue session of"), so
 it remembers the conversation.
@@ -708,6 +708,14 @@ see at once what to do. For a risky plan it looks like this:
 …
 _The plan is risky and waits for your decision — …_
 ```
+
+A comment that only reports something says so too. In the ticket flows (`github-issue`, `github-pr`,
+`github-auto`) the plan comment starts with `**Nothing needed from you**`. The result comment starts
+with `**What you need to do:** Review and merge the pull request.` when there is a pull request, else
+with `**What you need to do:** Open a pull request from the branch.` The comment that lists the new
+issues after a split starts with `**Nothing needed from you**`. In `github-auto` it starts with
+`**What you need to do:** Start the new issues when you want them built.` when the new issues are not
+picked up by themselves (`auto_subtasks` is `no`).
 
 In `issue-deliver` and `issue-gitflow`, a plan that starts coding by itself starts with
 `**Nothing needed from you** — it is being worked on.` The server gives

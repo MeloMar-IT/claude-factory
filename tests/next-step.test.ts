@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { WatcherSchema } from "../src/config.js";
 import type { RunSummary } from "../src/engine/state.js";
 import { statusName } from "../src/words.js";
-import { briefFailure, COMMENT_KINDS, commentFirst, commentText, firstLine, countQuestions, nextStep, nextStepEnv, releaseAtFor, releaseWatchersFor, runClosedIssue, runNextStep, trackingWatcher, type NextKind, type NextStep } from "../src/next-step.js";
+import { briefFailure, COMMENT_KINDS, REPORT_KINDS, reportFirst, commentFirst, commentText, firstLine, countQuestions, nextStep, nextStepEnv, releaseAtFor, releaseWatchersFor, runClosedIssue, runNextStep, trackingWatcher, type NextKind, type NextStep } from "../src/next-step.js";
 
 const run = (over: Partial<RunSummary> = {}) =>
   ({
@@ -21,7 +21,9 @@ describe("comment sentences", () => {
   it("has exactly the FACTORY_NEXT_ and FACTORY_FIRST_ variables, equal to the record", () => {
     const env = nextStepEnv();
     expect(Object.keys(env).sort()).toEqual([
-      "FACTORY_FIRST_APPROVAL", "FACTORY_FIRST_APPROVE_PLAN", "FACTORY_FIRST_APPROVE_SPLIT", "FACTORY_FIRST_NOTHING", "FACTORY_FIRST_PLANNER_QUESTIONS", "FACTORY_FIRST_QUESTIONS",
+      "FACTORY_FIRST_APPROVAL", "FACTORY_FIRST_APPROVE_PLAN", "FACTORY_FIRST_APPROVE_SPLIT", "FACTORY_FIRST_DRAFT", "FACTORY_FIRST_INFO", "FACTORY_FIRST_LOOK",
+      "FACTORY_FIRST_MERGE_PR", "FACTORY_FIRST_MERGE_RELEASE", "FACTORY_FIRST_NOTHING", "FACTORY_FIRST_OPEN_PR", "FACTORY_FIRST_PLANNER_QUESTIONS", "FACTORY_FIRST_QUESTIONS",
+      "FACTORY_FIRST_SHIPS", "FACTORY_FIRST_START_CODING", "FACTORY_FIRST_START_PARTS",
       "FACTORY_NEXT_APPROVAL", "FACTORY_NEXT_APPROVE_PLAN", "FACTORY_NEXT_APPROVE_SPLIT", "FACTORY_NEXT_PLANNER_QUESTIONS", "FACTORY_NEXT_QUESTIONS",
     ]);
     expect(env.FACTORY_FIRST_NOTHING).toBe(firstLine(nextStep("running")));
@@ -30,7 +32,8 @@ describe("comment sentences", () => {
       expect(f).toBe(commentFirst(k));
       expect(f).toBe(firstLine(nextStep(k, base, data)));
     }
-    for (const [k, v] of Object.entries(env)) if (k.startsWith("FACTORY_FIRST_")) expect(v).toMatch(/^\*\*[^\n\\`$"]*\.$/);
+    for (const [k, v] of Object.entries(env)) if (k.startsWith("FACTORY_FIRST_")) expect(v).toMatch(/^\*\*[^\n\\`$"]*(?:\.|\*\*)$/);
+    for (const k of REPORT_KINDS) expect(env[`FACTORY_FIRST_${k.toUpperCase()}`]).toBe(reportFirst(k));
     for (const k of COMMENT_KINDS) {
       const v = env[`FACTORY_NEXT_${k.toUpperCase()}`]!;
       expect(v).toBe(nextStep(k, base, data).text);
@@ -43,6 +46,20 @@ describe("comment sentences", () => {
     expect(commentFirst("approve_plan")).toBe("**What you need to do:** Reply /approve or /reject.");
     expect(commentFirst("planner_questions")).toBe("**What you need to do:** Answer the questions.");
     expect(nextStepEnv().FACTORY_FIRST_NOTHING).toBe("**Nothing needed from you** — it is being worked on.");
+  });
+
+  it.each([
+    ["info", "**Nothing needed from you**"],
+    ["merge_pr", "**What you need to do:** Review and merge the pull request."],
+    ["open_pr", "**What you need to do:** Open a pull request from the branch."],
+    ["start_coding", "**What you need to do:** Add the code label to start coding."],
+    ["ships", "**Nothing needed from you** — it goes to main with the release pull request."],
+    ["look", "**What you need to do:** Look at the changes."],
+    ["merge_release", "**What you need to do:** Merge the release pull request when you like."],
+    ["draft", "**What you need to do:** Fix the failed checks; the release pull request stays a draft until they pass."],
+    ["start_parts", "**What you need to do:** Start the new issues when you want them built."],
+  ] as const)("words the report first line %s", (kind, text) => {
+    expect(reportFirst(kind)).toBe(text);
   });
 
   it("names the replies", () => {
