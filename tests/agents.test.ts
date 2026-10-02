@@ -214,6 +214,13 @@ steps:
     expect(s.state.next).toBe("b");
   });
 
+  it("recognises every wording of a plan limit (usage, session, weekly)", async () => {
+    const { isLimitError } = await import("../src/agents/targets.js");
+    for (const m of ["You've hit your limit · resets 3pm", "You've hit your usage limit", "You've hit your session limit · resets 4:20pm (Europe/Amsterdam)", "Weekly limit reached", "5-hour limit reached"]) {
+      expect(isLimitError(m, ""), m).toBe(true);
+    }
+  });
+
   it("does not treat a long answer that mentions quota as a limit", async () => {
     const long = "x".repeat(500);
     const s = await start(`
