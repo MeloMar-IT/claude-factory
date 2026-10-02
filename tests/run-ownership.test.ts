@@ -36,6 +36,8 @@ afterAll(() => {
 
 const WALK = `name: walk
 workspace: empty
+publish:
+  enabled: true
 steps:
   - {id: say, type: shell, run: "echo hi"}
   - {id: gate, type: approval, message: "Go?"}
@@ -43,6 +45,8 @@ steps:
 const SLOW = `name: slow
 workspace: empty
 one_per_repo: true
+publish:
+  enabled: true
 steps:
   - {id: a, type: shell, run: "sleep 2"}
 `;
