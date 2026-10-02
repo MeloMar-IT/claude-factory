@@ -3,7 +3,7 @@ import { runClaude } from "../steps/claude.js";
 import { runCodex, type CodexSandbox } from "../steps/codex.js";
 import { DEFAULT_PERMISSION_MODE, stepEnv, type Engine, type Scope, type StepResult } from "../engine/execute.js";
 import { render } from "../engine/template.js";
-import { BUILTIN_PROVIDERS, claudeProviderEnv, fallbackTargets, isAuthError, isLimitError, LOCAL_KINDS, resolveTarget, type Target } from "./targets.js";
+import { BUILTIN_PROVIDERS, claudeProviderEnv, fallbackTargets, isAuthError, isLimitError, isTransientError, LOCAL_KINDS, resolveTarget, type Target } from "./targets.js";
 
 const WRITE_TOOL = /^(Edit|Write|MultiEdit|NotebookEdit|Bash)\b/;
 
@@ -100,16 +100,27 @@ export async function runAgentStep(step: ClaudeStep, scope: Scope, engine: Engin
   }
   const fallbacks = config.router.fallback_on.includes("rate_limit") ? fallbackTargets(config) : [];
   const tried = new Set<string>();
+  let blips = 0;
   for (;;) {
     tried.add(target.label);
     const r = await runOn(target, step, scope, engine, logFile, timeoutMs);
     if (r.ok || engine.signal?.aborted) return r;
+    // The service was briefly unavailable (overloaded, "at capacity", a network blip): wait and try
+    // the same step again a few times before treating it as a limit.
+    if (isTransientError(r.error, r.output) && !isAuthError(r.error, r.output) && blips < TRANSIENT_RETRIES.length) {
+      const wait = TRANSIENT_RETRIES[blips++]!;
+      engine.log(`    ↻ ${target.label}: ${(r.error || r.output).trim().split("\n")[0]!.slice(0, 120)} — trying again in ${Math.round(wait / 1000)}s`);
+      engine.summary.totalCostUsd += r.costUsd ?? 0;
+      if (!(await pause(wait, engine.signal))) return r;
+      continue;
+    }
     // Signed out: pause like a usage limit (the run is tried again by itself) instead of failing.
     if (isAuthError(r.error, r.output)) {
       const cli = target.agent === "codex" ? 'run "codex login"' : 'run "claude" in a terminal and type /login';
       return { ...r, limited: true, error: `signed out — the ${target.agent === "codex" ? "Codex" : "Claude Code"} login has expired. Sign in again: ${cli}. The run continues by itself after that.` };
     }
-    if (!isLimitError(r.error, r.output)) return r;
+    // Still unavailable after the retries: pause the run like a limit (it is tried again later).
+    if (!isLimitError(r.error, r.output) && !isTransientError(r.error, r.output)) return r;
     const next = fallbacks.find((t) => !tried.has(t.label));
     // No model left to try: the loop pauses the run until the limit resets.
     if (!next) return { ...r, limited: true, error: `usage limit reached: ${r.output.trim().split("\n")[0] || r.error}` };
@@ -131,4 +142,16 @@ export function agentEnv(spec: string | undefined): Record<string, string> {
     if (m && !/^(PATH|HOME|FACTORY_.*|SCF_.*|ANTHROPIC_.*|OPENAI_.*|GH_TOKEN|GITHUB_TOKEN)$/.test(m[1]!)) env[m[1]!] = m[2]!;
   }
   return env;
+}
+
+/** Waits before each retry of a briefly unavailable service (1 and 3 minutes; tests set them short). */
+const TRANSIENT_RETRIES = (process.env.FACTORY_TRANSIENT_RETRY_MS ?? "60000,180000").split(",").map(Number);
+
+/** Sleeps, unless the run is cancelled meanwhile (then false). */
+function pause(ms: number, signal?: AbortSignal): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) return resolve(false);
+    const t = setTimeout(() => resolve(true), ms);
+    signal?.addEventListener("abort", () => (clearTimeout(t), resolve(false)), { once: true });
+  });
 }

@@ -188,6 +188,19 @@ steps:
     expect(r.state.visits.b ?? 0).toBe(0);
   });
 
+  it("tries a step again when the service is briefly at capacity, instead of failing the story", async () => {
+    const marker = join(mkdtempSync(join(tmpdir(), "cap-")), "seen");
+    const flow = `
+name: t
+workspace: inplace
+steps:
+  - {id: review, type: claude, agent: codex, prompt: "CODEX_CAPACITY_ONCE ${marker}\\nSAY looks fine"}
+`;
+    const s = await runFlow(parseFlow(flow), { task: "t", repo, runsDir, claudeBin, config: cfg() });
+    expect(s.status).toBe("succeeded");
+    expect(s.history[0]!.output).toContain("looks fine");
+  });
+
   it("pauses the run when the agent is signed out, and says how to sign in", async () => {
     const flow = `
 name: t
