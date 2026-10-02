@@ -3,7 +3,7 @@ import { spentToday, type RunSummary } from "../engine/state.js";
 import { errorLine, explainError } from "../errors.js";
 import { loadFlow } from "../flow/load.js";
 import { canWrite, commentsAfter, ensureLabel, gh, ghJson, isBot, issueComments, setLabels, type Comment, type Issue } from "../github.js";
-import { countQuestions, runClosedIssue, LIMIT_RETRY_MS, nextStep, runNextStep, type NextData, type BlockerInfo, type NextKind, type NextStep } from "../next-step.js";
+import { countQuestions, firstLine, runClosedIssue, LIMIT_RETRY_MS, nextStep, runNextStep, type NextData, type BlockerInfo, type NextKind, type NextStep } from "../next-step.js";
 import { LABEL_WORDS } from "../words.js";
 import { dependencies, openDependencies } from "./deps.js";
 import type { Scheduler } from "./scheduler.js";
@@ -32,21 +32,23 @@ export function labelNames(cfg: WatcherConfig): LabelNames {
 }
 
 /**
- * The failure comment on an issue: what happened, why, what to do, then the raw text under Details.
+ * The failure comment on an issue: what to do first, then what happened and why, then the raw text under Details.
  * `factoryWhat` (the record's "The Foundry failed, not the code: …") is set when the Foundry itself failed:
  * the first line says so and it replaces the What and Why lines.
  */
-export function failureComment(s: RunSummary, action: string, factoryWhat?: string): string {
+export function failureComment(s: RunSummary, next: NextStep): string {
+  const factoryWhat = next.cause === "factory" ? next.why : undefined;
   const e = explainError(s.reason);
   const failed = [...s.history].reverse().find((h) => !h.ok);
   const tail = (failed?.output || failed?.error || "").trim().slice(-3000);
   const raw = [e.detail, tail].filter(Boolean).join("\n\n");
   return [
+    firstLine(next),
+    "",
     factoryWhat ? "🤖 **Spaghetti Code Foundry** itself failed on this issue, not the code." : "🤖 **Spaghetti Code Foundry** could not finish this issue.",
     "",
     `- **What happened:** ${factoryWhat ?? e.what}.`,
     ...(factoryWhat ? [] : [`- **Why:** ${e.why.charAt(0).toUpperCase()}${e.why.slice(1)}.`]),
-    `- **What you can do:** ${action}.`,
     failed ? `\nLast failing step: \`${failed.id}\`${failed.visit > 1 ? ` (attempt ${failed.visit})` : ""}` : "",
     raw ? `\n<details><summary>Details</summary>\n\n\`\`\`\n${raw.replace(/`{3,}/g, (m) => "ˋ".repeat(m.length))}\n\`\`\`\n</details>` : "",
     `\n<!-- claude-factory run=${s.runId} -->`,
@@ -389,7 +391,7 @@ export class Watcher {
   /** Tell the issue why the run failed, with the tail of the failing step's output. */
   private async commentFailure(issue: number, s: RunSummary) {
     const next = this.failedHold({ number: issue, title: "" }, s, s.reason).next;
-    const body = failureComment(s, next.action, next.cause === "factory" ? next.why : undefined);
+    const body = failureComment(s, next);
     await gh(["issue", "comment", String(issue), "--repo", this.repo, "--body", body]);
   }
 

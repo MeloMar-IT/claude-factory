@@ -10,7 +10,7 @@ import { dockerCommand } from "../src/engine/guards.js";
 import { liveLogFile, saveRun } from "../src/engine/state.js";
 import { mirrorEnvPrefixes, withScfAliases } from "../src/engine/template.js";
 import { notifyRun } from "../src/notify.js";
-import { COMMENT_KINDS, commentText, nextStep, runNextStep } from "../src/next-step.js";
+import { COMMENT_KINDS, commentFirst, commentText, firstLine, nextStep, runNextStep } from "../src/next-step.js";
 import { parseFlow } from "../src/flow/load.js";
 import { classifyFailure } from "../src/failure.js";
 
@@ -47,6 +47,21 @@ steps:
 `);
     expect(s.status).toBe("succeeded");
     const want = COMMENT_KINDS.map(commentText);
+    expect(s.history[0]!.output.trim().split("\n")).toEqual(want);
+    expect(s.history[1]!.output.trim().split("\n")).toEqual(want);
+  });
+
+  it("gives shell steps FACTORY_FIRST_… and SCF_FIRST_… with the module's first lines", async () => {
+    const printFirst = (prefix: string) => [...names, "NOTHING"].map((n) => `echo "$${prefix}_FIRST_${n}"`).join("; ");
+    const s = await start(`
+name: t
+workspace: inplace
+steps:
+  - {id: f, type: shell, run: '${printFirst("FACTORY")}'}
+  - {id: s, type: shell, run: '${printFirst("SCF")}'}
+`);
+    expect(s.status).toBe("succeeded");
+    const want = [...COMMENT_KINDS.map(commentFirst), firstLine(nextStep("running"))];
     expect(s.history[0]!.output.trim().split("\n")).toEqual(want);
     expect(s.history[1]!.output.trim().split("\n")).toEqual(want);
   });

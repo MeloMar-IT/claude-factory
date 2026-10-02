@@ -217,6 +217,7 @@ these environment variables instead (always quote them: `"$FACTORY_TASK"`):
 | `$FACTORY_BASE_SHA` | The commit the run started from (`git diff $FACTORY_BASE_SHA` = everything the run changed) |
 | `$FACTORY_TOOLS` | Folder with helper scripts (below) |
 | `$FACTORY_NEXT_<REASON>` | The closing "what to do next" sentence for a comment on the issue. `<REASON>` is `QUESTIONS`, `PLANNER_QUESTIONS`, `APPROVE_PLAN`, `APPROVE_SPLIT` or `APPROVAL`; e.g. `$FACTORY_NEXT_APPROVAL` is "It waits for your approval — reply /approve or /reject." The sentence is fixed per reason. Write `"_${FACTORY_NEXT_APPROVAL}_"` with braces when `_` follows |
+| `$FACTORY_FIRST_<REASON>`, `$FACTORY_FIRST_NOTHING` | The bold first line of a comment on the issue. `<REASON>` is the same five as above; e.g. `$FACTORY_FIRST_APPROVE_PLAN` is `**What you need to do:** Reply /approve or /reject.` `$FACTORY_FIRST_NOTHING` is for a comment that needs no answer: `**Nothing needed from you** — it is being worked on.` Print it first, then an empty line (`echo "$FACTORY_FIRST_APPROVAL"; echo`), and always quote it because it contains `*` |
 | `$FACTORY_LEARNINGS_FILE` | File where lessons for this repository are kept |
 
 Every `FACTORY_…` variable is also set as `SCF_…` (e.g. `$SCF_TASK`); the built-in flows use `FACTORY_…`.

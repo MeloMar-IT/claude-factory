@@ -385,7 +385,7 @@ In **agent prompts** you can use:
 **Shell commands** may only template trusted values (`{{vars.*}}`, `{{workdir}}`, `{{run.*}}`).
 Task text and step outputs could contain anything, so shell steps read them from environment
 variables instead: `$FACTORY_TASK`, `$FACTORY_OUT_<STEP_ID>`, `$FACTORY_VAR_<NAME>`,
-`$FACTORY_RUN_ID`, `$FACTORY_BRANCH`, `$FACTORY_NEXT_<REASON>` (also as `$SCF_…`).
+`$FACTORY_RUN_ID`, `$FACTORY_BRANCH`, `$FACTORY_NEXT_<REASON>`, `$FACTORY_FIRST_<REASON>`, `$FACTORY_FIRST_NOTHING` (also as `$SCF_…`).
 
 An agent step can **continue the session** of an earlier agent step ("Continue session of"), so
 it remembers the conversation.
@@ -502,7 +502,7 @@ in GitHub:
 | `factory:needs-info` | Waiting for you — questions: reply on the issue, or reply `/defaults` |
 | `factory:waiting-approval` | Waiting for you — approval: reply `/approve` or `/reject` on the issue |
 | `factory:done` | Done — nothing to do |
-| `factory:failed` | Failed; what happened, why and what you can do are commented on the issue, with the failing output. Remove the label to start over, or resume the run on its page to continue at the failed step. If the Foundry itself failed, the comment says so and names the fix |
+| `factory:failed` | Failed; the comment on the issue starts with what you need to do, then says what happened and why, with the failing output. Remove the label to start over, or resume the run on its page to continue at the failed step. If the Foundry itself failed, the comment says so and names the fix |
 
 The descriptions on GitHub say the same in short. They are set when the labels are created and
 refreshed at every server start. The trigger label and the review label (`vars.review_plan_label`)
@@ -614,7 +614,7 @@ Every plan gets a score from 0 to 100 from Opus, and Codex gives its own; the hi
 | **76–100** | security or trust (signing, secrets, auth), installing/updating/deleting software or user data, irreversible steps, privacy — or assumptions the planner couldn't verify |
 
 **Above 75 a human decides:** the plan is posted with the score and the reason, and the run waits
-(label `Factory_waiting`). The comment ends with: "The plan is risky and waits for your decision —
+(label `Factory_waiting`). The comment starts with `**What you need to do:** Reply /approve or /reject.` and ends with: "The plan is risky and waits for your decision —
 reply /approve to start coding (optionally with notes), or /reject followed by what to change — it
 then plans again." Your feedback goes into the new plan. Only people with write access to the
 repository can approve. (The threshold is the `risk_threshold`
@@ -632,7 +632,7 @@ reinterpreting scope, or anything that needs your decision, is high).
   in order — comments the list on the original and closes it. The new issues then go through the
   questions check and are built like any other.
 - **Above 50**, or the issue has `Factory_review_plan`: the split is posted on the issue and waits
-  (`Factory_waiting`). The comment ends with: "The issue is split into smaller ones and waits for
+  (`Factory_waiting`). The comment starts with `**What you need to do:** Reply /approve or /reject.` and ends with: "The issue is split into smaller ones and waits for
   your decision — reply /approve and the Foundry creates these issues and closes this one, or
   /reject followed by what to change."
 - **You already agreed** to a split in a comment ("split it"): it creates the issues without asking.
@@ -647,7 +647,7 @@ The threshold is the `auto_split_max_risk` variable (default 50).
 | `Factory_working` | Working, or paused — usage limit: planning and coding are running or paused | Wait; follow it on the Runs page |
 | `Factory_waiting` | Waiting for you — risky plan / split: it waits for your decision | `/approve` or `/reject` + feedback on the issue |
 | `Factory_done` | Done: implemented, tested, reviewed and merged into `develop` (gitflow) or in the rolling pull request | Nothing — merge the release pull request (or the rolling one) when you like |
-| `Factory_ERROR` | It failed; what happened, why and what you can do are commented on the issue, with the failing output | Fix the cause if needed, then remove the label to start over, or resume the run on its page to continue at the failed step. If the Foundry itself failed, the comment says so and names the fix |
+| `Factory_ERROR` | It failed; the comment on the issue starts with what you need to do, then says what happened and why, with the failing output | Fix the cause if needed, then remove the label to start over, or resume the run on its page to continue at the failed step. If the Foundry itself failed, the comment says so and names the fix |
 
 Issues with an excluded label (e.g. `geni`) are never picked up, whatever other labels they have.
 
@@ -680,7 +680,19 @@ limit, the daily budget, a code area that another run uses, or an interruption. 
 sentences are in the failure comment on the issue and in notifications, and they also end the
 Foundry's comments that ask you something (questions, a risky plan, a split, the push approval).
 The comment has the fixed sentence; the Dashboard may add the number of questions or what is being
-approved. The server gives
+approved. Every comment that needs you starts with one bold line, `**What you need to do:** …`, so you
+see at once what to do. For a risky plan it looks like this:
+
+```
+**What you need to do:** Reply /approve or /reject.
+
+🤖 **Spaghetti Code Foundry plan**
+…
+_The plan is risky and waits for your decision — …_
+```
+
+In `issue-deliver` and `issue-gitflow`, a plan that starts coding by itself starts with
+`**Nothing needed from you** — it is being worked on.` The server gives
 them for every run and issue at `GET /api/next` (and as `next` on each run). The usual reasons:
 
 - **It needs you:** a question (`Factory_needs_info`), a risky plan (`Factory_waiting`) or an
@@ -1049,6 +1061,8 @@ coding model (`qwen3-coder`, `gpt-oss`) and use **Try a model** on the Models pa
 
 **A run stopped with "daily budget reached".** It continues automatically the next day, or when
 you raise the budget and resume it.
+
+The failure comment starts with what you need to do.
 
 **The Foundry failed, not the code.** The run says so when an agent command was blocked, a
 marker could not be read, a push hit a protected branch or a setting is broken. Do what the

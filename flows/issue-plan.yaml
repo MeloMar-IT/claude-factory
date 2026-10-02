@@ -180,7 +180,8 @@ steps:
         TOO_BIG) head="thinks this issue is too big for one change and proposes splitting it:" ;;
         *) echo "planning failed: no PLAN_STATUS line"; exit 1 ;;
       esac
-      { echo "🤖 **Spaghetti Code Foundry** $head"; echo
+      { echo "$FACTORY_FIRST_PLANNER_QUESTIONS"; echo
+        echo "🤖 **Spaghetti Code Foundry** $head"; echo
         printf '%s\n' "$out" | sed '/^PLAN_STATUS:/d'
         echo; echo "_${FACTORY_NEXT_PLANNER_QUESTIONS}_"
         echo; echo "<!-- claude-factory run=$FACTORY_RUN_ID -->"; } \

@@ -6,8 +6,8 @@ import { readdirSync, readFileSync } from "node:fs";
 import { learningsFile, resumeRun, runFlow } from "../src/engine/runner.js";
 import { listBlocks, parseBlock } from "../src/flow/blocks.js";
 import { loadFlow, parseFlow } from "../src/flow/load.js";
-import { commentText, nextStepEnv } from "../src/next-step.js";
-import { closing, fakeGithub } from "./helpers/fake-github.js";
+import { commentFirst, commentText, nextStepEnv } from "../src/next-step.js";
+import { closing, fakeGithub, first } from "./helpers/fake-github.js";
 
 describe("block library", () => {
   it("all built-in blocks are valid", () => {
@@ -44,7 +44,11 @@ describe("comment wording comes from the next-step module", () => {
 
   it("only uses variables the engine sets", () => {
     const known = Object.keys(nextStepEnv());
-    for (const f of files) for (const m of text(f).matchAll(/FACTORY_NEXT_[A-Z]+(?:_[A-Z]+)*/g)) expect(known, `${f}: ${m[0]}`).toContain(m[0]);
+    for (const f of files) for (const m of text(f).matchAll(/FACTORY_(?:NEXT|FIRST)_[A-Z]+(?:_[A-Z]+)*/g)) expect(known, `${f}: ${m[0]}`).toContain(m[0]);
+  });
+
+  it("have no first-line wording of their own", () => {
+    for (const f of files) expect(text(f), f).not.toMatch(/What you need to do|Nothing needed from you/);
   });
 
   const stepRun = (file: string, id: string) => {
@@ -62,6 +66,35 @@ describe("comment wording comes from the next-step module", () => {
       expect(stepRun(`flows/${f}.yaml`, "split_gate")).toContain("${FACTORY_NEXT_APPROVE_SPLIT}");
     }
     expect(text("tools/post-questions")).toContain("FACTORY_NEXT_QUESTIONS");
+  });
+
+  it("are described in the guides", () => {
+    expect(text("docs/USER_GUIDE.md")).toContain(commentFirst("approve_plan"));
+    expect(text("docs/USER_GUIDE.md")).toContain(nextStepEnv().FACTORY_FIRST_NOTHING);
+    expect(text("docs/FLOW_AUTHORING.md")).toContain("FACTORY_FIRST_");
+  });
+
+  it("print the first line before anything else", () => {
+    const before = (run: string, echo: string, label: string) => {
+      const at = run.indexOf(echo);
+      const mark = run.search(/🤖|✋/);
+      expect(at, `${label}: ${echo}`).toBeGreaterThanOrEqual(0);
+      expect(at, label).toBeLessThan(mark);
+    };
+    before(stepRun("blocks/plan.yaml", "ask_for_info"), 'echo "$FACTORY_FIRST_PLANNER_QUESTIONS"', "plan/ask_for_info");
+    before(stepRun("blocks/request-approval.yaml", "request_approval"), 'echo "$FACTORY_FIRST_APPROVAL"', "request-approval");
+    for (const f of ["github-issue", "github-pr", "github-auto"]) before(stepRun(`flows/${f}.yaml`, "ask_for_info"), 'echo "$FACTORY_FIRST_PLANNER_QUESTIONS"', f);
+    before(stepRun("flows/github-pr.yaml", "request_approval"), 'echo "$FACTORY_FIRST_APPROVAL"', "github-pr/request_approval");
+    for (const f of ["issue-plan", "issue-deliver", "issue-gitflow"]) before(stepRun(`flows/${f}.yaml`, "send_back"), 'echo "$FACTORY_FIRST_PLANNER_QUESTIONS"', `${f}/send_back`);
+    for (const f of ["issue-deliver", "issue-gitflow"]) {
+      before(stepRun(`flows/${f}.yaml`, "split_gate"), 'echo "$FACTORY_FIRST_APPROVE_SPLIT"', `${f}/split_gate`);
+      const gate = stepRun(`flows/${f}.yaml`, "risk_gate");
+      before(gate, 'echo "$first"', `${f}/risk_gate`);
+      expect(gate).toContain('first="$FACTORY_FIRST_APPROVE_PLAN"');
+      expect(gate).toContain('first="$FACTORY_FIRST_NOTHING"');
+    }
+    expect(text("tools/post-questions")).toMatch(/const comment = \[\s*\.\.\.\(first \? \[first, ""\]/);
+    expect(text("tools/post-questions")).toContain("FACTORY_FIRST_QUESTIONS");
   });
 });
 
@@ -115,6 +148,7 @@ describe("github-issue flow (fake gh + claude)", { timeout: 30_000 }, () => {
     const log = ghLog();
     expect(log).toContain("🤖 **Spaghetti Code Foundry** needs more information before it can work on this ticket:");
     const c = gh.comments().at(-1)!;
+    expect(c.body.split("\n").slice(0, 3)).toEqual([commentFirst("planner_questions"), "", "🤖 **Spaghetti Code Foundry** needs more information before it can work on this ticket:"]);
     expect(closing(c.body)).toEqual([`_${commentText("planner_questions")}_`, `<!-- claude-factory run=${s.runId} -->`]);
     expect(log).toContain("Which database should be used?");
     expect(log).not.toContain("PLAN_STATUS");
@@ -146,6 +180,9 @@ describe("github-pr flow (fake gh + claude)", () => {
     });
     expect(s.reason).toMatch(/Push the changes for acme\/app#7/);
     expect(s.status).toBe("waiting");
+    const approval = gh.comments().at(-1)!.body;
+    expect(first(approval)).toBe(commentFirst("approval"));
+    expect(approval.split("\n").filter((l) => l.trim())[1]).toMatch(/^✋ \*\*Spaghetti Code Foundry is ready to push\*\* branch/);
     expect(closing(gh.comments().at(-1)!.body)).toEqual([`_${commentText("approval")}_`, `<!-- claude-factory run=${s.runId} approval -->`]);
     expect(gh.ghLog()).toContain("✋ **Spaghetti Code Foundry is ready to push** branch");
     expect(gh.ghLog()).toContain(`<!-- claude-factory run=${s.runId} approval -->`);
