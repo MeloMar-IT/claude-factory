@@ -7,7 +7,7 @@ import { learningsFile, resumeRun, runFlow } from "../src/engine/runner.js";
 import { listBlocks, parseBlock } from "../src/flow/blocks.js";
 import { loadFlow, parseFlow } from "../src/flow/load.js";
 import { commentFirst, commentText, nextStepEnv } from "../src/next-step.js";
-import { closing, fakeGithub, first } from "./helpers/fake-github.js";
+import { closing, fakeGithub, first, flowPath } from "./helpers/fake-github.js";
 
 describe("block library", () => {
   it("all built-in blocks are valid", () => {
@@ -27,6 +27,7 @@ describe("comment wording comes from the next-step module", () => {
   const files = [
     ...readdirSync("blocks").filter((f) => f.endsWith(".yaml")).map((f) => join("blocks", f)),
     ...readdirSync("flows").filter((f) => f.endsWith(".yaml")).map((f) => join("flows", f)),
+    ...readdirSync("tests/fixtures/flows").filter((f) => f.endsWith(".yaml")).map((f) => join("tests/fixtures/flows", f)),
     "tools/post-questions",
   ];
   const text = (f: string) => readFileSync(f, "utf8");
@@ -60,10 +61,10 @@ describe("comment wording comes from the next-step module", () => {
   it("uses the right variable in the right step", () => {
     expect(stepRun("blocks/plan.yaml", "ask_for_info")).toContain("${FACTORY_NEXT_PLANNER_QUESTIONS}");
     expect(stepRun("blocks/request-approval.yaml", "request_approval")).toContain("${FACTORY_NEXT_APPROVAL}");
-    for (const f of ["issue-plan", "issue-deliver", "issue-gitflow"]) expect(stepRun(`flows/${f}.yaml`, "send_back")).toContain("${FACTORY_NEXT_PLANNER_QUESTIONS}");
+    for (const f of ["issue-plan", "issue-deliver", "issue-gitflow"]) expect(stepRun(flowPath(f), "send_back")).toContain("${FACTORY_NEXT_PLANNER_QUESTIONS}");
     for (const f of ["issue-deliver", "issue-gitflow"]) {
-      expect(stepRun(`flows/${f}.yaml`, "risk_gate")).toContain("${FACTORY_NEXT_APPROVE_PLAN}");
-      expect(stepRun(`flows/${f}.yaml`, "split_gate")).toContain("${FACTORY_NEXT_APPROVE_SPLIT}");
+      expect(stepRun(flowPath(f), "risk_gate")).toContain("${FACTORY_NEXT_APPROVE_PLAN}");
+      expect(stepRun(flowPath(f), "split_gate")).toContain("${FACTORY_NEXT_APPROVE_SPLIT}");
     }
     expect(text("tools/post-questions")).toContain("FACTORY_NEXT_QUESTIONS");
   });
@@ -83,12 +84,12 @@ describe("comment wording comes from the next-step module", () => {
     };
     before(stepRun("blocks/plan.yaml", "ask_for_info"), 'echo "$FACTORY_FIRST_PLANNER_QUESTIONS"', "plan/ask_for_info");
     before(stepRun("blocks/request-approval.yaml", "request_approval"), 'echo "$FACTORY_FIRST_APPROVAL"', "request-approval");
-    for (const f of ["github-issue", "github-pr", "github-auto"]) before(stepRun(`flows/${f}.yaml`, "ask_for_info"), 'echo "$FACTORY_FIRST_PLANNER_QUESTIONS"', f);
-    before(stepRun("flows/github-pr.yaml", "request_approval"), 'echo "$FACTORY_FIRST_APPROVAL"', "github-pr/request_approval");
-    for (const f of ["issue-plan", "issue-deliver", "issue-gitflow"]) before(stepRun(`flows/${f}.yaml`, "send_back"), 'echo "$FACTORY_FIRST_PLANNER_QUESTIONS"', `${f}/send_back`);
+    for (const f of ["github-issue", "github-pr", "github-auto"]) before(stepRun(flowPath(f), "ask_for_info"), 'echo "$FACTORY_FIRST_PLANNER_QUESTIONS"', f);
+    before(stepRun(flowPath("github-pr"), "request_approval"), 'echo "$FACTORY_FIRST_APPROVAL"', "github-pr/request_approval");
+    for (const f of ["issue-plan", "issue-deliver", "issue-gitflow"]) before(stepRun(flowPath(f), "send_back"), 'echo "$FACTORY_FIRST_PLANNER_QUESTIONS"', `${f}/send_back`);
     for (const f of ["issue-deliver", "issue-gitflow"]) {
-      before(stepRun(`flows/${f}.yaml`, "split_gate"), 'echo "$FACTORY_FIRST_APPROVE_SPLIT"', `${f}/split_gate`);
-      const gate = stepRun(`flows/${f}.yaml`, "risk_gate");
+      before(stepRun(flowPath(f), "split_gate"), 'echo "$FACTORY_FIRST_APPROVE_SPLIT"', `${f}/split_gate`);
+      const gate = stepRun(flowPath(f), "risk_gate");
       before(gate, 'echo "$first"', `${f}/risk_gate`);
       expect(gate).toContain('first="$FACTORY_FIRST_APPROVE_PLAN"');
       expect(gate).toContain('first="$FACTORY_FIRST_NOTHING"');
@@ -208,7 +209,7 @@ describe("github-pr flow (fake gh + claude)", () => {
 
 describe("generated ticket flows", () => {
   const flows = ["github-issue", "github-pr", "github-auto"];
-  const text = (f: string) => readFileSync(`flows/${f}.yaml`, "utf8");
+  const text = (f: string) => readFileSync(flowPath(f), "utf8");
 
   it("say the new name and write the old marker only", () => {
     for (const f of flows) {

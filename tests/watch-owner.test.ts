@@ -8,7 +8,7 @@ import { ConfigSchema, WatcherSchema } from "../src/config.js";
 import { parseFlow } from "../src/flow/load.js";
 import { Scheduler } from "../src/queue/scheduler.js";
 import { Watcher } from "../src/queue/watcher.js";
-import { claudeBin, fakeGithub } from "./helpers/fake-github.js";
+import { claudeBin, fakeGithub, oldFlowFor } from "./helpers/fake-github.js";
 
 describe("watcher run owner", () => {
   let gh: ReturnType<typeof fakeGithub>;
@@ -20,7 +20,7 @@ describe("watcher run owner", () => {
   const cfg = (concurrency: number) => ({ ...ConfigSchema.parse({ protected_branches: [] }), concurrency });
   const start = (over: Record<string, unknown>, concurrency: number) => {
     const scheduler = new Scheduler({ runsDir: runsDir(), config: () => cfg(concurrency), claudeBin });
-    const w = new Watcher(WatcherSchema.parse({ id: "w", github_repo: "acme/app", vars: { test_cmd: "true" }, ...over }), { scheduler, runsDir: runsDir(), repo: gh.tmp, log: () => {} });
+    const w = new Watcher(WatcherSchema.parse({ id: "w", github_repo: "acme/app", vars: { test_cmd: "true" }, ...over, flow: oldFlowFor(over) }), { scheduler, runsDir: runsDir(), repo: gh.tmp, log: () => {} });
     return { scheduler, w };
   };
   const queuedOwners = (s: Scheduler) => s.queue().pending.map((p) => s.ownerOf(p.runId));
@@ -94,7 +94,7 @@ describe("watcher run owner", () => {
     const id = scheduler.submit({ kind: "run", flow, task: "", repo: gh.tmp, vars: {} }, { owner: admin.id });
     await scheduler.wait(id);
     expect(scheduler.ownerOf(id)).toBe(admin.id);
-    const resumer = new Watcher(WatcherSchema.parse({ id: "w", github_repo: "acme/app", owner: "ann@example.com" }), { scheduler, runsDir: runsDir(), repo: gh.tmp, log: () => {} });
+    const resumer = new Watcher(WatcherSchema.parse({ id: "w", github_repo: "acme/app", owner: "ann@example.com", flow: "github-issue" }), { scheduler, runsDir: runsDir(), repo: gh.tmp, log: () => {} });
     (resumer as unknown as { resume: (i: number, r: string, why: string, d?: unknown) => void }).resume(4, id, "approved", { approved: true, by: "x" });
     await scheduler.idle();
     expect(scheduler.ownerOf(id)).toBe(admin.id);

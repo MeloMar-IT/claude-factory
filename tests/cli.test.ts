@@ -108,7 +108,7 @@ describe("names that stay", () => {
   });
 
   it("the feature flow header uses the product name", () => {
-    const text = readFileSync("flows/feature.yaml", "utf8");
+    const text = readFileSync("tests/fixtures/flows/feature.yaml", "utf8"); // retired; kept as test material
     expect(text.split("\n")[0]).toContain("Spaghetti Code Foundry flow");
     expect(text).toContain("factory new my-flow");
   });

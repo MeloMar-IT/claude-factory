@@ -496,17 +496,15 @@ running (see [Keep it running](#keep-it-running)). GitHub access uses the `gh` C
 
 | Source | Starts a run when… | Default flow |
 |---|---|---|
-| **Issues** | an open issue has the trigger label | `github-issue` |
-| **Review comments** | someone comments on a Foundry PR (branch `factory/*`) | `pr-feedback` |
-| **CI failures** | the latest CI run of a workflow on the default branch failed | `ci-fix` |
-| **Schedule** | it is time for the chore (every N, or once a day at a set time) | `chore` |
+| **Issues** | an open issue has the trigger label | `issue-gitflow` (or `issue-plan` / `issue-code-daily` for the human-in-the-loop pipeline) |
+| **Schedule** | it is time (every N, or once a day at a set time) | `release-daily` |
+| *Review comments* | someone comments on a Foundry PR (branch `factory/*`) | none shipped — name your own flow |
+| *CI failures* | the latest CI run of a workflow on the default branch failed | none shipped — name your own flow |
 
 ![Add a watcher](images/watcher-form.png)
 
-For a **schedule**, the chore text becomes the run's task; presets cover dependency updates,
-flaky tests, test coverage, docs and lint. The `chore` flow opens a pull request only if
-something changed. Intervals: `30s`, `5m`, `1h`, `7d`; or set **Once a day at** `17:00` with a
-time zone.
+For a **schedule**, the text becomes the run's task. Intervals: `30s`, `5m`, `1h`, `7d`; or set
+**Once a day at** `17:00` with a time zone.
 
 ### How issue watchers use labels
 
@@ -592,7 +590,7 @@ lines. `PATH`, tokens and the Foundry's own variables can't be set this way.
 
 ### The label pipeline: one label → plan + code → one pull request
 
-The built-in flows `epic-questions`, `issue-deliver` and `daily-pr` form a pipeline that you
+The built-in flows `epic-questions`, `issue-gitflow` and `release-daily` form a pipeline that you
 drive with **one label**. You only step in for three things: answering questions (asked all at
 once, up front), approving **risky** plans, and merging the pull request. (Label names below are
 the ones from the example configuration; yours are whatever you set in the watcher.)
@@ -709,7 +707,7 @@ see at once what to do. For a risky plan it looks like this:
 _The plan is risky and waits for your decision — …_
 ```
 
-In `issue-deliver` and `issue-gitflow`, a plan that starts coding by itself starts with
+In `issue-gitflow`, a plan that starts coding by itself starts with
 `**Nothing needed from you** — it is being worked on.` The server gives
 them for every run and issue at `GET /api/next` (and as `next` on each run). The usual reasons:
 
@@ -774,21 +772,21 @@ flowchart LR
   don't count) is split into smaller issues instead — automatically when the split risk is low
   (`max_files`, `max_code_lines`).
 
-**One rolling pull request — flow `issue-deliver`, with `daily-pr`**
+#### The human-in-the-loop pipeline
 
-- All work goes to one branch, `factory/daily-YYYY-MM-DD` (named after the day it started); every
-  issue is one commit `Resolve #N: title`. Nothing is ever pushed to `main`.
-- The **pull request is opened with the first finished issue** and grows as more are finished —
-  coding never waits for a merge. Merge it whenever you like; after that, work continues on a
-  fresh branch from `main`.
-- Every day at **17:00** the Foundry runs the full tests and build on it and comments the result
-  on the pull request. While they fail, the pull request is a draft.
+For work where you want to see and approve **every** plan before any code is written:
+`issue-plan` (label `Factory_ready`) plans the issue and posts the plan; you read it and add
+`Factory_code`; `issue-code-daily` codes it on the day's branch; `daily-pr` opens the day's pull
+request to `main` at 17:00, and no new coding starts while it is open.
 
-#### Older two-label pipeline
+#### Which flows ship
 
-The flows `issue-plan` (label `Factory_ready`) and `issue-code-daily` (label `Factory_code`) still
-exist: plan first, you approve every plan by adding `Factory_code`, and coding pauses while the
-daily pull request is open. Use them if you want to see every plan before any code is written.
+Only the two pipelines and what supports them: `epic-questions`, `issue-gitflow` and
+`release-daily` (gitflow), and `issue-plan`, `issue-code-daily` and `daily-pr` (human in the
+loop). Build anything else yourself in the editor, with **✨ Draft flow with Claude**, or with any
+AI assistant ([Let any AI write a flow](#let-any-ai-write-a-flow)). **A flow that a watcher uses —
+enabled or disabled, or as its questions check — or that another flow runs as a step can't be
+deleted**; the Foundry says which watchers or flows use it.
 
 ### Keep it running
 
@@ -826,14 +824,14 @@ it; paused runs continue the next day. Flows can also cap one run (`limits.max_c
   writes a PEM around a key it generates is fine. For a false positive, add
   `factory:allow-secret` to the line or a pattern to `.claude-factory/secret-allow` in the
   repository.
-- **Risk gate** — in `issue-deliver`, every plan gets a risk score (0–100) from Opus and from
+- **Risk gate** — in `issue-gitflow`, every plan gets a risk score (0–100) from Opus and from
   Codex; above 75 (`risk_threshold`) a human must `/approve` it before any code is written. See
   [The risk score](#the-risk-score).
 - **Sandboxing** — *Sandbox agents' shell commands* limits what agents' shell commands can
   write to the run's workspace. Shell steps marked **Run in Docker** (like the test steps) run
   in the Docker image you set, with only the workspace mounted.
-- **Approval steps** in flows let you decide before anything irreversible happens (e.g.
-  `require_approval=yes` for `github-pr`).
+- **Approval steps** in flows let you decide before anything irreversible happens (the risk gate
+  and the split approval are approval steps).
 
 **Notifications** — macOS notifications and a Slack webhook tell you only when something new
 lands in **Your turn** (a question, a risky plan or split, a release pull request, a failure, a

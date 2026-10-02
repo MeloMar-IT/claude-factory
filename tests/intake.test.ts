@@ -1,11 +1,11 @@
 import { execFileSync } from "node:child_process";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runFlow } from "../src/engine/runner.js";
 import { loadFlow } from "../src/flow/load.js";
-import { claudeBin, fakeGithub } from "./helpers/fake-github.js";
+import { claudeBin, fakeGithub, flowPath } from "./helpers/fake-github.js";
 
 describe("github-auto (triage routes)", () => {
   let gh: ReturnType<typeof fakeGithub>;
@@ -115,7 +115,7 @@ describe("jira-ticket and linear-ticket flows", () => {
   });
 
   it("jira: reads the ticket, comments plan and result as ADF, pushes the branch", async () => {
-    const s = await runFlow(loadFlow("jira-ticket", repo).flow, {
+    const s = await runFlow(loadFlow(resolve(flowPath("jira-ticket")), repo).flow, {
       task: "", repo, runsDir: join(gh.tmp, "runs"), claudeBin, vars: { ticket: "PROJ-9", test_cmd: "test -f feature.txt" },
     });
     expect(s.reason).toBeUndefined();
@@ -135,7 +135,7 @@ describe("jira-ticket and linear-ticket flows", () => {
   });
 
   it("linear: reads the ticket and comments via GraphQL", async () => {
-    const s = await runFlow(loadFlow("linear-ticket", repo).flow, {
+    const s = await runFlow(loadFlow(resolve(flowPath("linear-ticket")), repo).flow, {
       task: "", repo, runsDir: join(gh.tmp, "runs"), claudeBin, vars: { ticket: "ENG-9", test_cmd: "test -f feature.txt" },
     });
     expect(s.reason).toBeUndefined();
@@ -150,7 +150,7 @@ describe("jira-ticket and linear-ticket flows", () => {
   });
 
   it("rejects a malicious ticket key", async () => {
-    const s = await runFlow(loadFlow("jira-ticket", repo).flow, {
+    const s = await runFlow(loadFlow(resolve(flowPath("jira-ticket")), repo).flow, {
       task: "", repo, runsDir: join(gh.tmp, "runs"), claudeBin, vars: { ticket: "X-1/../../admin" },
     });
     expect(s.status).toBe("failed");

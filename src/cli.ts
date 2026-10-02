@@ -48,12 +48,12 @@ Usage:
   scf user delete <e-mail>                       Delete an account and wipe its stored credentials
   scf credential rotate-key | check              Re-encrypt stored credentials; check the macOS Keychain
   scf service install|uninstall|status          Keep \`scf serve\` running as a macOS login agent
-  scf watch [flow] --var github_repo=o/r         Every 5 min, run the flow (default github-issue) on
+  scf watch [flow] --var github_repo=o/r         Every 5 min, run the flow (default issue-gitflow) on
         [--every 5m] [--label claude-factory]    each open issue with the label; results are marked
         [--max 1] [--once] [--source …]          with factory:* status labels; resumes runs when
                                                  questions are answered or /approve is commented.
                                                  --source pr-feedback: review comments on factory PRs
-                                                 --source ci-failures: CI red on the default branch → ci-fix
+                                                 --source ci-failures: CI red on the default branch (name a flow)
                                                  --source schedule --every 7d --task "…": chore → PR
 
 Run options:
@@ -78,6 +78,39 @@ function parseVars(pairs: string[] = []): Record<string, string> {
   }
   return vars;
 }
+
+/** The starting point for `scf new` (see docs/FLOW_AUTHORING.md for everything a flow can do). */
+const NEW_FLOW_TEMPLATE = `# A flow: steps run top to bottom; jumps make loops. See docs/FLOW_AUTHORING.md.
+name: my-flow
+description: Implement the task, test it, fix failures
+workspace: worktree
+one_per_repo: true
+defaults:
+  model: claude-sonnet-5-5
+  permission_mode: acceptEdits
+vars:
+  test_cmd: npm test
+steps:
+  - id: implement
+    type: claude
+    prompt: |
+      {{task}}
+      Add tests. Do not commit.
+  - id: test
+    type: shell
+    run: "{{vars.test_cmd}}"
+    on_success: end
+    on_failure: fix
+  - id: fix
+    type: claude
+    jump_only: true
+    resume: implement
+    max_visits: 3
+    prompt: |
+      The tests fail. Fix the code (never weaken or delete tests).
+      {{steps.test.output}}
+    on_success: test
+`;
 
 const STATUS_LINE: Record<RunSummary["status"], string> = {
   succeeded: "✔ succeeded",
@@ -214,7 +247,7 @@ async function main(argv: string[]): Promise<number> {
       const dir = values.global ? join(FACTORY_HOME, "flows") : join(repo, ".claude-factory", "flows");
       const dest = join(dir, `${arg}.yaml`);
       if (existsSync(dest)) throw new Error(`${dest} already exists`);
-      const template = readFileSync(resolveFlowPath(values.from ?? "feature", repo), "utf8");
+      const template = values.from ? readFileSync(resolveFlowPath(values.from, repo), "utf8") : NEW_FLOW_TEMPLATE;
       mkdirSync(dir, { recursive: true });
       writeFileSync(dest, template.replace(/^name:.*$/m, `name: ${arg}`));
       process.stdout.write(`created ${dest}\nedit it, then: scf run ${arg} --task "..."\n`);
@@ -228,7 +261,7 @@ async function main(argv: string[]): Promise<number> {
       const cfg = WatcherSchema.parse({
         id: "cli",
         source: values.source ?? "issues",
-        flow: arg ?? DEFAULT_FLOWS[(values.source ?? "issues") as keyof typeof DEFAULT_FLOWS] ?? "github-issue",
+        flow: arg ?? DEFAULT_FLOWS[(values.source ?? "issues") as keyof typeof DEFAULT_FLOWS] ?? (() => { throw new Error(`--source ${values.source}: name the flow to run (there is no default for it)`); })(),
         github_repo,
         label: values.label ?? "claude-factory",
         every: values.every ?? "5m",

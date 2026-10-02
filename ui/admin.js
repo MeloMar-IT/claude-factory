@@ -51,12 +51,15 @@ export const watcherConfig =({ status: _status, state: _state, ...cfg } = {}) =>
 export const watcherStateMark = (w) => (w.state ? statusMark(w.state, `state-${w.state.name}`) : null);
 
 const SOURCES = {
-  issues: "Issues with a label → run a flow",
-  "pr-feedback": "Review comments on Foundry PRs → pr-feedback",
-  "ci-failures": "CI red on the default branch → ci-fix PR",
-  schedule: "On a schedule → run a chore (PR if anything changed)",
+  issues: "Issues with a label → run a flow (default issue-gitflow)",
+  schedule: "On a schedule → run a flow (default release-daily)",
 };
-const DEFAULT_FLOWS = { issues: "github-issue", "pr-feedback": "pr-feedback", "ci-failures": "ci-fix", schedule: "chore" };
+// No shipped flow for these any more; still shown for a watcher that already uses them.
+const OLD_SOURCES = {
+  "pr-feedback": "Review comments on Foundry PRs → your flow",
+  "ci-failures": "CI red on the default branch → your flow",
+};
+const DEFAULT_FLOWS = { issues: "issue-gitflow", schedule: "release-daily" };
 const CHORES = [
   ["Dependencies", "Update dependencies that have known security vulnerabilities (npm audit / pip-audit / cargo audit etc.) to the smallest fixed version. Do not do major upgrades."],
   ["Flaky tests", "Run the test suite 3 times. If any test fails only sometimes, find why it is flaky and make it deterministic. Do not delete or skip tests."],
@@ -65,7 +68,7 @@ const CHORES = [
   ["Lint / TODOs", "Run the linter and fix the warnings that are safe to fix. Resolve TODO/FIXME comments that are quick and clearly specified."],
 ];
 const describeWatcher = (w) => {
-  const flow = w.flow === "github-issue" ? DEFAULT_FLOWS[w.source] : w.flow;
+  const flow = w.flow === "default" ? DEFAULT_FLOWS[w.source] ?? "(no flow)" : w.flow;
   return {
     issues: `issues labelled “${w.label}” → ${flow}`,
     "pr-feedback": `PR review comments → ${flow}`,
@@ -75,7 +78,7 @@ const describeWatcher = (w) => {
 };
 
 async function editWatcher(existing, flows) {
-  const w = existing ?? { id: "", source: "issues", flow: "github-issue", github_repo: "", label: "claude-factory", every: "5m", max_per_tick: 1, enabled: true, vars: {} };
+  const w = existing ?? { id: "", source: "issues", flow: "issue-gitflow", github_repo: "", label: "claude-factory", every: "5m", max_per_tick: 1, enabled: true, vars: {} };
   return modal(existing ? `Edit watcher ${w.id}` : "Add a watcher", (close) => {
     const id = input(w.id, { class: "mono", placeholder: "my-repo", disabled: !!existing });
     const repo = input(w.github_repo, { class: "mono", placeholder: "owner/repo" });
@@ -84,7 +87,7 @@ async function editWatcher(existing, flows) {
       if (Object.values(DEFAULT_FLOWS).includes(flow.value)) flow.value = DEFAULT_FLOWS[source.value];
       if (source.value === "schedule" && /^\d+(s|m)$/.test(every.value)) every.value = "7d";
       showFor();
-    } }, Object.entries(SOURCES).map(([v, label]) => h("option", { value: v, selected: w.source === v }, label)));
+    } }, Object.entries({ ...SOURCES, ...(OLD_SOURCES[w.source] ? { [w.source]: OLD_SOURCES[w.source] } : {}) }).map(([v, label]) => h("option", { value: v, selected: w.source === v }, label)));
     const task = h("textarea", { rows: 3, placeholder: "What the chore should do each time", value: w.task ?? "" });
     const branch = input(w.branch ?? "", { class: "mono", placeholder: "default branch" });
     const exclude = input((w.exclude_labels ?? []).join(", "), { class: "mono", placeholder: "e.g. geni, wontfix" });

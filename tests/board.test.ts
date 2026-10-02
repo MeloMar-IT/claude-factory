@@ -1,3 +1,4 @@
+import { flowPath } from "./helpers/fake-github.js";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -53,7 +54,7 @@ const FLOWS: Record<string, Groups> = {
 describe("phasesOf", () => {
   for (const [name, groups] of Object.entries(FLOWS)) {
     it(`puts every step of ${name} in its phase`, () => {
-      const flow = parseFlow(readFileSync(join("flows", `${name}.yaml`), "utf8"), name);
+      const flow = parseFlow(readFileSync(flowPath(name), "utf8"), name);
       const ids = flow.steps.map((s) => s.id);
       expect(groups.map(([, id]) => id)).toEqual(ids); // a renamed or new step fails here
       expect(phasesOf(ids)).toEqual(groups.map(([p]) => p));

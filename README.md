@@ -88,19 +88,10 @@ describe the flow you want; check the result with `scf validate`.
 
 | Flow | What it does |
 |---|---|
-| `quick` | One agent pass, then tests with one fix attempt |
-| `feature` | Plan → implement → test/fix loop → review → commit (commented format reference) |
-| `cross-review` | Claude codes, Codex reviews, Claude fixes |
-| `github-issue` | Issue → plan (or questions) → code → tests → review → push → report on the issue |
-| `github-pr` | Like `github-issue`, then PR → wait for CI and fix it → learn |
-| `github-auto` | Triage first: small fix, full feature, split into sub-issues, or ask |
-| `epic-questions`, `issue-gitflow`, `release-daily` | Gitflow pipeline: questions up front; per issue plan (risk gate, size limit with automatic splitting) and code on a feature branch, merged into `develop` by the Foundry — in parallel for different code areas; once a day one PR `develop` → `main` |
-| `epic-questions`, `issue-deliver`, `daily-pr` | One-label pipeline: questions up front, plan (with a risk score — a human approves above 75) and code in one run, one rolling PR with a daily report |
-| `issue-plan`, `issue-code-daily` | Older two-label pipeline: approve every plan, pause while the daily PR is open |
-| `pr-feedback` | Address review comments on a Foundry PR |
-| `ci-fix` | Fix CI that is red on the default branch |
-| `chore` | Scheduled maintenance; opens a PR only if something changed |
-| `jira-ticket`, `linear-ticket` | Tickets from Jira or Linear, code in the local repo |
+| `epic-questions` → `issue-gitflow` → `release-daily` | **Gitflow pipeline** (one label, `Factory_go`): questions up front; per issue a plan (risk gate, size limit with automatic splitting) and code on a feature branch, merged into `develop` by the Foundry — in parallel for different code areas; once a day one PR `develop` → `main` |
+| `issue-plan` → `issue-code-daily` → `daily-pr` | **Human-in-the-loop pipeline** (two labels): the plan is posted first and you approve every plan (`Factory_code`) before any code is written; a daily PR, and no new coding while it is open |
+
+Write your own flows in the editor or with any AI assistant ([FLOW_AUTHORING.md](docs/FLOW_AUTHORING.md)); `scf new <name>` starts from a small template. A flow that a watcher uses (also a disabled one) can't be deleted.
 
 ## Development
 

@@ -265,7 +265,7 @@ describe("watchers across the move", () => {
     mkdirSync(join(old, "runs"), { recursive: true });
     const make = (runsDir: string) => {
       const scheduler = new Scheduler({ runsDir, config: () => config, claudeBin });
-      const watcher = new Watcher(WatcherSchema.parse({ id: "w", github_repo: "acme/app", vars: { test_cmd: "test -f feature.txt" } }), {
+      const watcher = new Watcher(WatcherSchema.parse({ id: "w", github_repo: "acme/app", flow: "github-issue", vars: { test_cmd: "test -f feature.txt" } }), {
         scheduler, runsDir, repo: gh.tmp, log: () => {},
       });
       return { scheduler, watcher };

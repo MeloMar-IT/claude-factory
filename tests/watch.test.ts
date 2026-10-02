@@ -11,7 +11,7 @@ import { failureComment, parseInterval, Watcher } from "../src/queue/watcher.js"
 import { watcherProblem } from "../src/server/next.js";
 import { firstLine } from "../src/next-step.js";
 import { LABEL_WORDS } from "../src/words.js";
-import { claudeBin, fakeGithub, first } from "./helpers/fake-github.js";
+import { claudeBin, fakeGithub, first, oldFlowFor } from "./helpers/fake-github.js";
 
 describe("parseInterval", () => {
   it("parses units and defaults to minutes", () => {
@@ -40,7 +40,7 @@ describe("watcher", () => {
   afterEach(() => gh.restore());
 
   const watcher = (over: Record<string, unknown> = {}) =>
-    new Watcher(WatcherSchema.parse({ id: "w", github_repo: "acme/app", vars: { test_cmd: "test -f feature.txt" }, ...over }), {
+    new Watcher(WatcherSchema.parse({ id: "w", github_repo: "acme/app", vars: { test_cmd: "test -f feature.txt" }, ...over, flow: oldFlowFor(over) }), {
       scheduler, runsDir: join(gh.tmp, "runs"), repo: gh.tmp, log: (l) => lines.push(l),
     });
   const issues = (...list: [number, string?][]) => {
@@ -724,7 +724,7 @@ describe("watcher", () => {
   it("the manager keeps what it tracked after stopAll, until sync", async () => {
     const { WatcherManager } = await import("../src/queue/watchers.js");
     issues([3, "factory:done"], [5]);
-    const cfg = ConfigSchema.parse({ protected_branches: [], watchers: [{ id: "w", github_repo: "acme/app", every: "1h", vars: { test_cmd: "true" } }] });
+    const cfg = ConfigSchema.parse({ protected_branches: [], watchers: [{ id: "w", github_repo: "acme/app", flow: "github-issue", every: "1h", vars: { test_cmd: "true" } }] });
     const m = new WatcherManager({ scheduler, runsDir: join(gh.tmp, "runs"), repo: gh.tmp, config: () => cfg, log: () => {} });
     m.sync();
     await m.runNow("w"); // returns at once when the tick started by sync() is still running

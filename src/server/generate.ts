@@ -13,7 +13,7 @@ export const FLOW_GUIDE_PATH = join(flowDir("builtin", ""), "..", "docs", "FLOW_
 
 export function flowGuide(): string {
   if (existsSync(FLOW_GUIDE_PATH)) return readFileSync(FLOW_GUIDE_PATH, "utf8");
-  return readFileSync(join(flowDir("builtin", ""), "feature.yaml"), "utf8"); // older installs
+  throw new Error(`the flow-writing guide is missing: ${FLOW_GUIDE_PATH}`);
 }
 
 function extractYaml(text: string): string {
