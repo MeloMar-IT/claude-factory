@@ -285,7 +285,10 @@ describe("roles in the page", () => {
     expect(auth.isAdmin(undefined)).toBe(false);
   });
 
-  it("userHash keeps the Runs pages and sends everything else to the list", () => {
+  it("userHash keeps the Runs pages and My repositories and sends everything else to the list", () => {
+    expect(auth.userHash("#/repos")).toBe("#/repos");
+    expect(auth.userHash("#/repos/x")).toBe("#/runs");
+    expect(auth.userHash("#/reposx")).toBe("#/runs");
     expect(auth.userHash("#/runs")).toBe("#/runs");
     expect(auth.userHash("#/runs/abc")).toBe("#/runs/abc");
     expect(auth.userHash("#/runs/abc/x")).toBe("#/runs");
@@ -300,6 +303,7 @@ describe("roles in the page", () => {
     replace.mockClear();
     expect(auth.allowedHash(false, "#/runs/abc", replace)).toBe("#/runs/abc");
     expect(auth.allowedHash(true, "#/settings", replace)).toBe("#/settings");
+    expect(auth.allowedHash(false, "#/repos", replace)).toBe("#/repos");
     expect(replace).not.toHaveBeenCalled();
   });
 

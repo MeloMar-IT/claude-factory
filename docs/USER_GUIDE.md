@@ -55,12 +55,13 @@ brings you back to the sign-in form.
 | **Flows** | Your flows and the built-in ones: edit, create, run |
 | **Library** | Reusable blocks of steps to drop into flows |
 | **Runs** | Everything that ran or is running; the ones that need you on top |
+| **My repositories** | The repositories you work in, and how the Foundry signs in to them |
 | **Watchers** | Automatic runs from GitHub issues, PR comments, red CI, or a schedule |
 | **Models** | Which agents and models are available, and which model runs which step |
 | **Dashboard** | Spend, success rate, where runs fail, eval results |
 | **Settings** | Budget, safety, notifications, bot identity, disk clean-up |
 
-An account with the role `user` sees only **Runs**.
+An account with the role `user` sees only **Runs** and **My repositories**.
 
 Everything the UI does is also available from the command line (see [section 9](#9-command-line)).
 
@@ -962,9 +963,9 @@ Every account has a role, `admin` or `user`. The server checks it on every call.
 not in the table below answers 404, also for an admin.
 
 - **An admin** may make every call and sees every page.
-- **A user** sees only the **Runs** page and may use the calls marked `yes` or `own runs` in the
+- **A user** sees only the **Runs** and **My repositories** pages and may use the calls marked `yes` or `own runs` in the
   table. Every other call answers `403 {"error":"not allowed for your role"}`. Pages other than
-  Runs are not drawn; the address bar goes back to `#/runs`.
+  Runs and My repositories are not drawn; the address bar goes back to `#/runs`.
 
 **What a user does not see.** The server cuts these from every answer a user gets, so the page
 cannot show them: costs, tokens, budgets and prices; the model, provider and agent; step output
@@ -994,6 +995,18 @@ show as "n runs ahead of you", without ids.
 
 **Answering a run.** On a run that waits, a user can approve or reject it with a note
 (`POST /api/runs/<id>/approve` or `/reject` with `{"note": "…"}`). The note reaches the run.
+
+**The My repositories page.** `#/repos` is in the top bar for every account. It lists your repositories
+with the URL, how the Foundry signs in (the authentication method) and the connection status, which is
+"Not tested yet" until the connection test exists. **Add repository** asks for the URL and the method:
+a GitHub fine-grained personal access token (give it these repository permissions, each "Read and write":
+Contents, Issues and Pull requests), or an HTTPS user name + token for other git hosts. The token is typed
+in a password field and is never shown again. **Change authentication** keeps the stored token if you leave
+the token empty; a new method needs a new token. **Remove** asks first and deletes the stored token too.
+Errors from the server show in the dialog in plain words. A failed removal shows above the list, with
+**Try again** when the server asks for it (an old key is still in the Keychain). A repository without a
+method shows "Needs authentication" for a user. An admin can also choose "The server's own access". The page
+has no per-repository settings.
 
 **Repositories.** Every account has its own list of GitHub repositories, kept in `repos.json` in
 the data folder (mode `0600`). A repository is a record: `id`, `owner` (account id), `url`, `method`
@@ -1055,7 +1068,7 @@ start a run can run commands as your Mac user (through the task and variables su
 account only to people you would give an admin account. To switch user runs off, change the rule
 `POST runs` to `no` in `src/server/permissions.ts`.
 
-**After an upgrade.** Existing accounts with the role `user` lose access to everything but Runs.
+**After an upgrade.** Existing accounts with the role `user` lose access to everything but Runs and My repositories.
 Change a role with `scf user role <e-mail> admin|user`, or create an admin with
 `scf user create --admin` under another e-mail.
 
@@ -1113,7 +1126,7 @@ Change a role with `scf user role <e-mail> admin|user`, or create an admin with
 | `DELETE /api/repos/:owner/:name` | yes | yes | remove a GitHub repository by name (old form) |
 
 **What comes later.** Runs that use a user's stored credentials or a repository's token, changing
-your own password in the UI, and pages for users (starting runs, repositories).
+your own password in the UI, a connection test for repositories, SSH deploy keys, the GitHub App, and pages for users (starting runs).
 
 ### Access from other computers
 

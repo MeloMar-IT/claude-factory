@@ -11,7 +11,7 @@ async function req(method, url, body) {
   const data = await r.json().catch(() => ({}));
   // the session ended (expired, revoked, password changed): start again at the sign-in page
   if (r.status === 401 && !url.startsWith("/api/session")) location.reload();
-  if (!r.ok) throw new Error(data.error || `${r.status} ${r.statusText}`);
+  if (!r.ok) throw Object.assign(new Error(data.error || `${r.status} ${r.statusText}`), { status: r.status });
   return data;
 }
 
@@ -42,6 +42,10 @@ export const api = {
   rejectRun: (id, note) => req("POST", `/api/runs/${enc(id)}/reject`, { note }),
   transcript: (id, n) => req("GET", `/api/runs/${enc(id)}/transcript/${n}`),
   diff: (id) => req("GET", `/api/runs/${enc(id)}/diff`),
+  repos: () => req("GET", "/api/repos"),
+  addRepo: (body) => req("POST", "/api/repos", body),
+  setRepoAuth: (id, body) => req("PUT", `/api/repos/${enc(id)}/auth`, body),
+  removeRepo: (id) => req("DELETE", `/api/repos/${enc(id)}`),
   queue: () => req("GET", "/api/queue"),
   config: () => req("GET", "/api/config"),
   saveConfig: (config) => req("PUT", "/api/config", config),

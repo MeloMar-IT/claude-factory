@@ -78,7 +78,7 @@ body > * { flex: none; }
 .user { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12.5px; white-space: nowrap; }
 .signed-out .top nav, .signed-out .repo, .signed-out aside, .signed-out .since, .signed-out .health { display: none; }
 .signed-out .layout { grid-template-columns: 1fr; }
-.role-user .top nav a:not([data-nav="runs"]), .role-user .repo, .role-user aside { display: none; }
+.role-user .top nav a:not([data-nav="runs"]):not([data-nav="repos"]), .role-user .repo, .role-user aside { display: none; }
 .role-user .layout { grid-template-columns: 1fr; }
 .auth-card { max-width: 380px; margin: 60px auto; }
 aside { border-right: 1px solid var(--border); padding: 16px 12px; background: var(--panel); }
