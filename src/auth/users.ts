@@ -139,6 +139,10 @@ export const findUserByEmail = (email: string): User | undefined => {
 /** True when any admin exists, blocked or not. */
 export const hasAdmin = (): boolean => listUsers().some((u) => u.role === "admin");
 
+/** The admin account that was created first, blocked or not. Undefined when there is none. */
+export const firstAdmin = (): User | undefined =>
+  listUsers().filter((u) => u.role === "admin").sort((a, b) => Date.parse(a.created) - Date.parse(b.created))[0];
+
 export function publicUser(u: User): PublicUser {
   const { passwordHash: _hash, ...rest } = u;
   return rest;

@@ -158,6 +158,48 @@ export function queueWithNext(ctx: ApiContext): Omit<Queue, "pending"> & { pendi
   }) };
 }
 
+/** A record for a user: another account's run is not named, linked or described. */
+export function ownRecord(rec: NextStep, mine: (runId: string) => boolean): NextStep {
+  let out = rec;
+  if (out.afterRun && !mine(out.afterRun)) {
+    const { afterRun: _gone, ...rest } = out;
+    out = { ...rest, where: { label: "Runs page", url: "#/runs" } };
+  }
+  if (out.blockers) {
+    // Every blocker is cut to its issue number: what it waits for in turn may be another account's run.
+    const blockers = out.blockers.map((b) => ({ issue: b.issue }));
+    const again = nextStep("dependency", { repo: out.repo, issue: out.issue, title: out.title, runId: out.runId }, { blockers });
+    out = { ...out, blockers, why: again.why, text: again.text };
+  }
+  return out;
+}
+
+/**
+ * Logs and step output say "waiting for run <id> (areas)" while a run waits for a code area. For a user, the id of a run
+ * that is not theirs is taken out, wherever it appears (log lines, step output, reasons, transcripts).
+ */
+export function hideForeign<T>(value: T, mine: (runId: string) => boolean): T {
+  const text = JSON.stringify(value);
+  if (text === undefined || !text.includes("waiting for run ")) return value;
+  return JSON.parse(text.replace(/waiting for run ([\w-]+)/g, (all, id: string) => (mine(id) ? all : "waiting for another run"))) as T;
+}
+
+/** GET /api/queue for a user: their own queued jobs, each with the number of other accounts' jobs in front of it. */
+export function ownQueue(ctx: ApiContext, userId: string): { pending: (PendingJob & { next: NextStep; ahead: number })[]; active: Queue["active"]; concurrency: number } {
+  const q = queueWithNext(ctx);
+  const mine = (id: string) => ctx.scheduler.ownerOf(id) === userId;
+  const pending: (PendingJob & { next: NextStep; ahead: number })[] = [];
+  let ahead = 0;
+  for (const p of q.pending) {
+    if (!mine(p.runId)) {
+      ahead++;
+      continue;
+    }
+    pending.push({ ...p, waitingFor: p.waitingFor && mine(p.waitingFor) ? p.waitingFor : undefined, next: ownRecord(p.next, mine), ahead });
+  }
+  return { pending, active: q.active.filter((a) => mine(a.runId)), concurrency: q.concurrency };
+}
+
 /** GET /api/watchers: each watcher carries its own `state` (words for active, error, disabled); one with a problem also has its record as `status.next`. Holds are copies that may say how long the run they wait for still needs. */
 export function watchersWithNext(ctx: ApiContext): (WatcherConfig & { state: WatcherState; status?: WatcherStatus & { next?: NextStep } })[] {
   const waitLeft = waitLeftFor(ctx);

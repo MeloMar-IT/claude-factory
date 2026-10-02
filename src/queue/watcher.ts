@@ -1,3 +1,4 @@
+import { watcherOwner } from "../auth/run-owner.js";
 import type { WatcherConfig } from "../config.js";
 import { spentToday, type RunSummary } from "../engine/state.js";
 import { errorLine, explainError } from "../errors.js";
@@ -317,7 +318,7 @@ export class Watcher {
       const lockKey = `${this.repo}#ci:${r.workflowName}`;
       if (this.d.scheduler.isLocked(lockKey) || started >= this.cfg.max_per_tick || !this.budgetLeft()) continue;
       const { flow } = loadFlow(this.flowName(), this.d.repo);
-      const runId = this.d.scheduler.submit({
+      const runId = this.queue({
         kind: "run", flow, repo: this.d.repo,
         task: `Fix failing CI: ${r.workflowName} on ${branch} (${r.headSha.slice(0, 7)})`,
         vars: { ...this.cfg.vars, github_repo: this.repo, ci_run: String(r.databaseId), ci_workflow: r.workflowName, ci_sha: r.headSha, ci_url: r.url },
@@ -344,15 +345,20 @@ export class Watcher {
     const lockKey = `${this.repo}#chore:${this.cfg.id}`;
     if (this.d.scheduler.isLocked(lockKey) || !this.budgetLeft()) return;
     const { flow } = loadFlow(this.flowName(), this.d.repo);
-    const runId = this.d.scheduler.submit({
+    const runId = this.queue({
       kind: "run", flow, repo: this.d.repo, task: this.cfg.task ?? "",
       vars: { ...this.cfg.vars, github_repo: this.repo, chore_watcher: this.cfg.id },
     }, { lockKey, source: `watcher ${this.cfg.id} schedule` });
     this.act(`scheduled chore → run ${runId}`);
   }
 
+  /** Every run a watcher starts goes through here: a new run belongs to the watcher's owner; a resume keeps the run's own. */
+  private queue(job: Parameters<Scheduler["submit"]>[0], meta: { lockKey?: string; source?: string }): string {
+    return this.d.scheduler.submit(job, { ...meta, ...(job.kind === "run" ? { owner: watcherOwner(this.cfg.owner) } : {}) });
+  }
+
   private submit(n: number, kind: "issue" | "pr", job: Parameters<Scheduler["submit"]>[0]): string {
-    return this.d.scheduler.submit(job, { lockKey: kind === "issue" ? this.lockFor(n) : `${this.repo}#${n}`, source: `watcher ${this.cfg.id} ${kind} #${n}` });
+    return this.queue(job, { lockKey: kind === "issue" ? this.lockFor(n) : `${this.repo}#${n}`, source: `watcher ${this.cfg.id} ${kind} #${n}` });
   }
 
   /** Update labels when a run we started finishes (the next tick would also reconcile). */
@@ -669,7 +675,7 @@ export class Watcher {
     if (!budgetLeft) return hold("daily_budget");
     const { flow } = loadFlow(this.cfg.precheck_flow!, this.d.repo);
     const nums = list.map((i) => i.number);
-    const runId = this.d.scheduler.submit({
+    const runId = this.queue({
       kind: "run", flow, task: "", repo: this.d.repo,
       vars: { ...this.cfg.vars, github_repo: this.repo, issues: nums.join(" "), needs_info_label: this.L.needsInfo },
     }, { lockKey, source: `watcher ${this.cfg.id} precheck ${nums.map((x) => `#${x}`).join(" ")}` });

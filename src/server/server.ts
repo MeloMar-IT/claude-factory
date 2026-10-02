@@ -19,6 +19,7 @@ import { healthRoutes } from "./health.js";
 import { boardRoutes } from "./board.js";
 import { TurnNotifier } from "./notifier.js";
 import { CSP, HSTS, listenProblem, localUrl, requestAccess } from "./net.js";
+import { adoptRuns } from "../auth/run-owner.js";
 import { hasAdmin, type User } from "../auth/users.js";
 import { repoRoutes } from "./api-repos.js";
 import { authorize, findRule } from "./permissions.js";
@@ -38,6 +39,8 @@ export interface ServerOptions {
   log?: (msg: string) => void;
   /** How often an open response re-checks its session, in ms (default 4000). */
   sessionRecheckMs?: number;
+  /** How often runs without an owner are given to the first admin, in ms (default 60000). */
+  adoptEveryMs?: number;
 }
 
 export interface ApiContext {
@@ -144,6 +147,18 @@ export async function startServer(given: ServerOptions): Promise<{ url: string; 
     server.once("error", fail);
     server.listen(opts.port, listen, () => ok());
   });
+  // Runs of older versions have no owner. The first admin takes them: now, and again later, since the admin may be
+  // made with `scf user create --admin` while we run, and runs that were live are skipped until they end.
+  const adopt = () => {
+    try {
+      adoptRuns(opts.runsDir, log);
+    } catch (e) {
+      log(`! could not give runs to the first admin: ${(e as Error).message}`);
+    }
+  };
+  adopt();
+  const adoptTimer = setInterval(adopt, opts.adoptEveryMs ?? 60_000);
+  adoptTimer.unref();
   if (opts.watchers !== false) watchers.sync();
   let notifier: TurnNotifier | undefined;
   if (process.env.FACTORY_NO_NOTIFY !== "1") {
@@ -155,6 +170,7 @@ export async function startServer(given: ServerOptions): Promise<{ url: string; 
     ctx,
     notifier,
     close: () => {
+      clearInterval(adoptTimer);
       notifier?.stop();
       watchers.stopAll();
       server.close();

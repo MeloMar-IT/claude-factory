@@ -10,19 +10,24 @@ const what = (r) => (r.vars?.issue ? `${r.vars.github_repo}#${r.vars.issue}` : r
 const REFRESH_MS = 30_000;
 
 /** A row of the Runs list: the status name of the record with its "?", then flow, task, steps, cost, start. */
-export const runRow = (r) => h("tr", { class: "link", onClick: () => (location.hash = `#/runs/${r.runId}`) },
+export const runRow = (r, { owner = false } = {}) => h("tr", { class: "link", onClick: () => (location.hash = `#/runs/${r.runId}`) },
   h("td", {}, r.next ? nextStatus(r.next) : null),
   h("td", {}, h("b", {}, r.flow), what(r) ? h("div", { class: "muted mono", style: { fontSize: "11.5px" } }, what(r)) : null),
   h("td", { class: "task", title: r.task }, r.task || h("span", { class: "muted" }, "—"),
     r.next ? h("div", { class: "muted", title: r.next.text }, r.next.text) : null,
     r.next && whenParts(r.next).length ? h("div", { class: "next-parts timing" }, whenParts(r.next)) : null),
+  owner ? h("td", {}, r.ownerName ?? "—") : null,
   h("td", { class: "mono" }, r.history?.length ?? 0),
   h("td", { class: "mono" }, money(r.totalCostUsd)),
   h("td", { class: "muted" }, timeAgo(r.startedAt)));
 
+/** "2 runs ahead of you": other accounts' queued runs in front of a user's own. */
+export const aheadText = (n) => `${n} ${n === 1 ? "run" : "runs"} ahead of you`;
+
 /** A queued job: its status with "?", id, details, link and a Remove button. */
 export const queueRow = (p, onRemove) => h("div", { class: "row" },
   p.next ? nextStatus(p.next) : null, h("span", { class: "mono" }, p.runId), h("span", { class: "muted" }, [p.kind, p.source, p.next?.text].filter(Boolean).join(" · ")),
+  p.ahead ? h("span", { class: "muted" }, aheadText(p.ahead)) : null,
   ...(p.next ? whenParts(p.next) : []),
   p.next ? whereLink(p.next.where) : null,
   h("span", { class: "spacer" }),
@@ -41,26 +46,32 @@ export function stepRow(s) {
 export async function renderRunsList(main, { admin = true } = {}) {
   mount(main, h("div", { class: "row" }, h("span", { class: "spinner" }), " Loading runs…"));
   let timer;
+  let owner = "";
   const draw = async () => {
-    // A user has no queue: only the list of their own runs is asked for.
-    const [runs, queue] = await Promise.all([api.runs(), admin ? api.queue() : null]);
+    // A user gets their own runs and queue; the owner filter and its options are for admins.
+    const [runs, queue, owners] = await Promise.all([api.runs(admin ? owner : ""), api.queue(), admin ? api.runOwners() : []]);
     if (!main.isConnected) return;
     const yours = needsYou(runs);
+    const cols = ["Status", "Flow", "Task / what happens next", ...(admin ? ["Owner"] : []), "Steps", "Cost", "Started"];
     const table = (list) => h("table", { class: "table" },
-      h("thead", {}, h("tr", {}, ["Status", "Flow", "Task / what happens next", "Steps", "Cost", "Started"].map((t) => h("th", {}, t)))),
-      h("tbody", {}, list.map(runRow)));
+      h("thead", {}, h("tr", {}, cols.map((t) => h("th", {}, t)))),
+      h("tbody", {}, list.map((r) => runRow(r, { owner: admin }))));
+    const filter = admin ? h("select", { class: "small-select", title: "Show the runs of one account", onChange: (e) => { owner = e.target.value; draw(); } },
+      h("option", { value: "" }, "All owners"),
+      owners.map((o) => h("option", { value: o.id, selected: o.id === owner }, `${o.name} (${o.runs})`))) : null;
 
     mount(main,
       h("div", { class: "toolbar" }, h("h1", {}, "Runs"),
-        queue ? h("span", { class: "muted" }, `${queue.active.length}/${queue.concurrency} running · ${queue.pending.length} queued`) : null,
+        admin ? h("span", { class: "muted" }, `${queue.active.length}/${queue.concurrency} running · ${queue.pending.length} queued`) : null,
+        filter,
         h("span", { class: "spacer" }),
         h("span", { class: "muted", style: { fontSize: "12px" } }, `updated ${new Date().toLocaleTimeString()} · refreshes every 30 s`),
         h("button", { onClick: () => draw() }, "↻ Refresh")),
-      queue?.pending.length ? h("div", { class: "card", style: { marginBottom: "16px" } },
+      queue.pending.length ? h("div", { class: "card", style: { marginBottom: "16px" } },
         h("h3", {}, "Queue"),
         queue.pending.map((p) => queueRow(p, async () => { await api.cancelRun(p.runId); draw(); }))) : null,
       yours.length ? h("div", { style: { marginBottom: "16px" } }, h("h3", { style: { marginBottom: "8px" } }, `Needs you (${yours.length})`), table(yours)) : null,
-      runs.length ? table(runs) : h("div", { class: "empty" }, admin ? "No runs yet. Open a flow and press ▶ Run." : "No runs yet."));
+      runs.length ? table(runs) : h("div", { class: "empty" }, owner ? "No runs of this account." : admin ? "No runs yet. Open a flow and press ▶ Run." : "No runs yet."));
   };
   await draw();
   timer = setInterval(() => draw().catch(() => {}), REFRESH_MS);

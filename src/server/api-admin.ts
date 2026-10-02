@@ -1,4 +1,5 @@
 import { agentStatuses, providerStatuses, testSpec } from "../agents/health.js";
+import { watcherOwnerProblem } from "../auth/run-owner.js";
 import { hasAdmin } from "../auth/users.js";
 import { CONFIG_PATH, ConfigSchema, saveConfig } from "../config.js";
 import { spentToday } from "../engine/state.js";
@@ -35,7 +36,8 @@ export const adminRoutes: Route = async (ctx, req, res, seg, method) => {
       let saved;
       try {
         // Do not let a change shut out the browser that sends it (or the proxy it comes through).
-        const next = ConfigSchema.parse(body).server;
+        const parsed = ConfigSchema.parse(body);
+        const next = parsed.server;
         if (!hostAllowed(req.headers.host, next.allowed_hosts, opts.port)) {
           throw new Error(`allowed_hosts must keep "${req.headers.host}", the name you are using now`);
         }
@@ -44,6 +46,8 @@ export const adminRoutes: Route = async (ctx, req, res, seg, method) => {
         }
         const problem = listenProblem(next.listen, hasAdmin);
         if (problem) throw new Error(problem);
+        const bad = watcherOwnerProblem(parsed.watchers, ctx.config().watchers);
+        if (bad) throw new Error(bad);
         saved = saveConfig(body);
       } catch (e) {
         throw new HttpError(400, `invalid config: ${(e as Error).message}`);

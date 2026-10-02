@@ -5,7 +5,7 @@ import type { ApiContext } from "./server.js";
 
 /**
  * Who may make which API call. An admin may make every call in the table; a user only the calls marked `yes`,
- * and the calls marked `own` on runs the user started. A call that is not in the table is answered with 404.
+ * and the calls marked `own` on runs the user started (any other run answers 404, like an unknown one). A call that is not in the table is answered with 404.
  * The routes /api/session and /api/setup need no session and are not in the table.
  */
 export type UserAccess = "yes" | "no" | "own";
@@ -41,8 +41,9 @@ export const RULES: Rule[] = [
   r("DELETE", "blocks/:id", "no", "delete a block"),
   r("POST", "validate", "no", "check a flow"),
   r("POST", "generate", "no", "write a flow with AI"),
-  r("GET", "queue", "no", "the queue of all runs"),
+  r("GET", "queue", "yes", "the queue (a user sees their own queued runs and how many are ahead)"),
   r("GET", "runs", "yes", "list runs (a user sees their own)"),
+  r("GET", "run-owners", "no", "the accounts that have runs, for the owner filter"),
   r("POST", "runs", "yes", "start a run (a user: a saved flow and own repositories)"),
   r("GET", "runs/:id", "own", "read a run"),
   r("POST", "runs/:id/cancel", "own", "cancel a run"),
@@ -80,13 +81,14 @@ export function findRule(method: string, seg: string[]): Rule | undefined {
 }
 
 /**
- * Throws 403 when the user may not make the call. An admin always passes. Ownership is read from the run (or its
+ * Throws 403 when the user may not make the call, and 404 for a run that is not theirs. An admin always passes. Ownership is read from the run (or its
  * queue entry), never from the request.
  */
 export function authorize(ctx: ApiContext, user: User, rule: Rule, seg: string[]): void {
   if (user.role === "admin" || rule.user === "yes") return;
   if (rule.user === "no") throw new HttpError(403, "not allowed for your role");
-  if (ctx.scheduler.ownerOf(seg[1] ?? "") !== user.id) throw new HttpError(403, "not your run");
+  // The same answer as for a run that does not exist: a guessed id tells nothing.
+  if (ctx.scheduler.ownerOf(seg[1] ?? "") !== user.id) throw new HttpError(404, "run not found");
 }
 
 /** The flows a user may see and start: valid ones whose name a run can use. The list and the start check both use this. */
