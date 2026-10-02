@@ -87,7 +87,7 @@ describe("credentials API", () => {
     expect(wrong.status).toBe(415);
     const noCsrf = await fetch(base + "/api/credentials", { method: "POST", headers: { cookie: ann.cookie, "content-type": "application/json" }, body: "{}" });
     expect(noCsrf.status).toBe(403);
-    expect((await call(ann, "PUT", "/api/credentials", {})).status).toBe(405);
+    expect((await call(ann, "PUT", "/api/credentials", {})).status).toBe(404);
   });
 
   it("never leaks a secret when the store fails", async () => {

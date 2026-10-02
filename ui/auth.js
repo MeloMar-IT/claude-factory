@@ -124,3 +124,26 @@ export async function ensureSignedIn(a = api, reload = () => location.reload()) 
   box.hidden = false;
   return session.user;
 }
+
+/** True for an account with the role admin. */
+export const isAdmin = (user) => user?.role === "admin";
+
+/** The one page group a user may open: Runs and a run page. Anything else becomes the Runs list. */
+export function userHash(hash) {
+  return /^#\/runs(\/[\w-]+)?$/.test(hash ?? "") ? hash : "#/runs";
+}
+
+/** The hash to draw. A user never gets a page they may not open; `replace(to)` puts the allowed hash in the address bar. */
+export function allowedHash(admin, hash, replace) {
+  if (admin) return hash;
+  const to = userHash(hash);
+  if (to !== hash) replace(to);
+  return to;
+}
+
+/** Starts the app for the signed-in account: an admin gets the whole start-up, a user only the Runs pages. */
+export async function startApp(user, { startAdmin, route }) {
+  if (isAdmin(user)) return startAdmin();
+  document.body.classList.add("role-user");
+  return route();
+}

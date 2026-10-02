@@ -139,13 +139,14 @@ function passwordOf(body: Record<string, unknown>): string {
   return v;
 }
 
-/** Passes with a session (and a matching CSRF token unless the call only reads). Else 401 or 403. */
-export async function requireSession(ctx: ApiContext, req: IncomingMessage, method: string): Promise<void> {
+/** Passes with a session (and a matching CSRF token unless the call only reads) and gives the account. Else 401 or 403. */
+export async function requireSession(ctx: ApiContext, req: IncomingMessage, method: string): Promise<User> {
   const cur = await guarded(ctx, () => currentSession(ctx, req));
   if (!cur) throw new HttpError(401, "sign in first");
-  if (method === "GET" || method === "HEAD") return;
+  if (method === "GET" || method === "HEAD") return cur.user;
   const sent = req.headers["x-csrf-token"];
   if (typeof sent !== "string" || !sameToken(sent, csrfToken(cur.token))) throw new HttpError(403, "bad CSRF token");
+  return cur.user;
 }
 
 /** The signed-in account of a request (call after requireSession). */

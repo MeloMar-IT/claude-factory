@@ -60,6 +60,8 @@ brings you back to the sign-in form.
 | **Dashboard** | Spend, success rate, where runs fail, eval results |
 | **Settings** | Budget, safety, notifications, bot identity, disk clean-up |
 
+An account with the role `user` sees only **Runs**.
+
 Everything the UI does is also available from the command line (see [section 9](#9-command-line)).
 
 ---
@@ -877,10 +879,108 @@ The cookie gets the `Secure` flag when you reach the UI over HTTPS (through a pr
 - **Problems with the files.** If `users.json` or `sessions.json` cannot be read or written, or
   another `scf` process holds the lock, sign-in shows "sign-in is not working; see the server
   log". The log names the file and the kind of problem, never a password or a hash.
-- **Every account can do everything for now.** The role (`admin` or `user`) is stored but not
-  checked yet: any active account can use every page and call, including starting runs and
-  changing settings. Only give an account to people you trust with your machine's user rights.
-  Managing accounts and changing a password in the UI and permissions per role come later.
+
+#### Roles and permissions
+
+Every account has a role, `admin` or `user`. The server checks it on every call. A call that is
+not in the table below answers 404, also for an admin.
+
+- **An admin** may make every call and sees every page.
+- **A user** sees only the **Runs** page and may use the calls marked `yes` or `own runs` in the
+  table. Every other call answers `403 {"error":"not allowed for your role"}`. Pages other than
+  Runs are not drawn; the address bar goes back to `#/runs`.
+
+**Your own runs.** A run has an owner: the account that started it. A user sees and may follow,
+cancel, resume, approve, reject and read only their own runs. Another account's run, an unknown
+run and a run without an owner answer `403 {"error":"not your run"}`. Runs started by watchers,
+by the command line and runs from older versions belong to no one, so only an admin can use them.
+A queued run that has not started yet already counts as its owner's.
+
+**Answering a run.** On a run that waits, a user can approve or reject it with a note
+(`POST /api/runs/<id>/approve` or `/reject` with `{"note": "…"}`). The note reaches the run.
+
+**Repositories.** Every account has its own list of GitHub repositories, kept in `repos.json` in
+the data folder (mode `0600`). Three calls manage it:
+
+- `GET /api/repos` lists your repositories.
+- `POST /api/repos {"name": "owner/name"}` adds one (201; 409 if you have it; 400 for a bad name;
+  at most 50).
+- `DELETE /api/repos/<owner>/<name>` removes one (404 if you do not have it).
+
+A name is `owner/name` with letters, digits, `-`, `_` and `.`. The placeholder `owner/repo` and
+names like `a/..` are refused. Case does not matter when names are compared. If `repos.json`
+cannot be read, the calls answer "the repository list is not working; see the server log".
+
+**Which flows a user may start.** A user starts a saved flow by name (`POST /api/runs {"flow":
+"<name>", "task": "…", "vars": {…}}`), never by `yaml` (403 "only an admin can run a flow that
+is not saved") and never in a folder of their choice (403 "only an admin can choose the folder").
+`GET /api/flows` shows a user only the name and description of the valid flows with a plain name.
+If the flow uses `github_repo`, it must be one of the user's repositories: give it in `vars`
+(403 `"<name>" is not one of your repositories`). When none is given and the flow or the
+folder's own settings name a repository that is not the user's, the answer is 403 `set the var
+"github_repo" to one of your repositories`. A flow without `github_repo` runs in the server's
+default folder. A user's run keeps the variables it had when it was queued.
+
+**Trust.** Roles limit the API and the pages. They do not limit what a run can do. A user who can
+start a run can run commands as your Mac user (through the task and variables such as
+`test_cmd`), with the server's GitHub access. That is the same as admin rights. Give a user
+account only to people you would give an admin account. To switch user runs off, change the rule
+`POST runs` to `no` in `src/server/permissions.ts`.
+
+**After an upgrade.** Existing accounts with the role `user` lose access to everything but Runs.
+No command changes a role yet; create an admin with `scf user create --admin` under another
+e-mail if you need one.
+
+**The table.** An admin may make every call.
+
+| Call | Admin | User | What it does |
+|---|---|---|---|
+| `GET /api/info` | yes | no | server settings and today's cost |
+| `GET /api/config` | yes | no | read the settings |
+| `PUT /api/config` | yes | no | change the settings |
+| `GET /api/watchers` | yes | no | list the watchers |
+| `POST /api/watchers/:id/tick` | yes | no | run a watcher now |
+| `POST /api/clean` | yes | no | clean up old runs |
+| `GET /api/providers` | yes | no | agent providers |
+| `POST /api/providers/test` | yes | no | test a provider |
+| `GET /api/evals` | yes | no | eval reports |
+| `GET /api/stats` | yes | no | statistics |
+| `GET /api/flows` | yes | yes | list flows (a user sees the published names only) |
+| `GET /api/flows/:name` | yes | no | read a flow |
+| `PUT /api/flows/:name` | yes | no | save a flow |
+| `DELETE /api/flows/:name` | yes | no | delete a flow |
+| `GET /api/blocks` | yes | no | list blocks |
+| `PUT /api/blocks/:id` | yes | no | save a block |
+| `DELETE /api/blocks/:id` | yes | no | delete a block |
+| `POST /api/validate` | yes | no | check a flow |
+| `POST /api/generate` | yes | no | write a flow with AI |
+| `GET /api/queue` | yes | no | the queue of all runs |
+| `GET /api/runs` | yes | yes | list runs (a user sees their own) |
+| `POST /api/runs` | yes | yes | start a run (a user: a saved flow and own repositories) |
+| `GET /api/runs/:id` | yes | own runs | read a run |
+| `POST /api/runs/:id/cancel` | yes | own runs | cancel a run |
+| `POST /api/runs/:id/resume` | yes | own runs | resume a run |
+| `POST /api/runs/:id/approve` | yes | own runs | approve a run, with a note |
+| `POST /api/runs/:id/reject` | yes | own runs | reject a run, with a note |
+| `GET /api/runs/:id/events` | yes | own runs | follow a run live |
+| `GET /api/runs/:id/diff` | yes | own runs | the changes of a run |
+| `GET /api/runs/:id/transcript/:n` | yes | own runs | the transcript of a step |
+| `GET /api/next` | yes | no | what happens next, for all runs |
+| `GET /api/health` | yes | no | server health |
+| `GET /api/board` | yes | no | the board of all work |
+| `GET /api/since` | yes | no | what changed since a time |
+| `GET /api/your-turn` | yes | no | what waits for you |
+| `POST /api/your-turn/dismiss` | yes | no | dismiss an item |
+| `POST /api/your-turn/restore` | yes | no | restore dismissed items |
+| `GET /api/credentials` | yes | yes | your stored credentials |
+| `POST /api/credentials` | yes | yes | store a credential |
+| `DELETE /api/credentials/:id` | yes | yes | remove a credential |
+| `GET /api/repos` | yes | yes | your repositories |
+| `POST /api/repos` | yes | yes | add a repository |
+| `DELETE /api/repos/:owner/:name` | yes | yes | remove a repository |
+
+**What comes later.** Runs that use a user's stored credentials, changing your own password in
+the UI, and pages for users (starting runs, repositories).
 
 ### Access from other computers
 
@@ -965,7 +1065,8 @@ then cross the network unencrypted. Use it only on a network you trust.
 **Do not mix** HTTPS and plain HTTP on one host name: HSTS makes browsers refuse HTTP for that name
 for a year.
 
-Every account can still do everything (see above), so only give accounts to people you trust. Links
+A user account can only use Runs and the calls in "Roles and permissions" above, but a run can
+still run commands on this Mac, so only give accounts to people you trust. Links
 in Slack and notifications still point at `http://localhost:<port>`.
 
 **Stored credentials.** A token or an ssh key can be stored through the API

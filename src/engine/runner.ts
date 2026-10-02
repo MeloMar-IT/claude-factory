@@ -46,10 +46,14 @@ export interface RunOptions extends CommonOptions {
   task: string;
   repo: string;
   vars?: Record<string, string>;
+  /** `vars` is the final set: the folder's own settings are not read (they were applied when the run was queued). */
+  frozenVars?: boolean;
   /** Pre-allocated run id (e.g. so a UI can subscribe before the run starts). */
   runId?: string;
   /** Who started the run; saved in run.json. */
   source?: string;
+  /** The id of the account that started the run; saved in run.json. */
+  owner?: string;
 }
 
 export interface ResumeOptions extends CommonOptions {
@@ -70,24 +74,30 @@ export function learningsFile(vars: Record<string, string>, repo: string): strin
   return join(process.env.FACTORY_HOME ?? FACTORY_HOME, "learnings", `${key.replace(/[^\w.-]+/g, "__")}.md`);
 }
 
+/** The variables of a run: the flow's defaults, then the folder's own settings (not for an empty workspace), then the given ones. */
+export function effectiveVars(flow: Flow, repo: string, given: Record<string, string> = {}, log?: (msg: string) => void): Record<string, string> {
+  let repoVars: Record<string, string> = {};
+  try {
+    if (flow.workspace !== "empty") repoVars = loadRepoVars(repo);
+  } catch (e) {
+    log?.(redactText(`! ignoring repo config: ${(e as Error).message}`));
+  }
+  return { ...flow.vars, ...repoVars, ...given };
+}
+
 /** Start a new run of a flow. */
 export async function runFlow(flow: Flow, opts: RunOptions): Promise<RunSummary> {
   const config = opts.config ?? loadConfig();
   const runId = opts.runId ?? newRunId();
   const runDir = join(opts.runsDir, runId);
 
-  let repoVars: Record<string, string> = {};
-  try {
-    if (flow.workspace !== "empty") repoVars = loadRepoVars(opts.repo);
-  } catch (e) {
-    opts.log?.(redactText(`! ignoring repo config: ${(e as Error).message}`));
-  }
+  const vars = opts.frozenVars ? { ...opts.vars } : effectiveVars(flow, opts.repo, opts.vars, opts.log);
   const summary: RunSummary = {
     runId,
     flow: flow.name,
     flowDef: flow,
     task: opts.task,
-    vars: { ...flow.vars, ...repoVars, ...opts.vars },
+    vars,
     repo: opts.repo,
     status: "running",
     runDir,
@@ -97,6 +107,7 @@ export async function runFlow(flow: Flow, opts: RunOptions): Promise<RunSummary>
     state: { next: null, steps: {}, visits: {} },
     pid: process.pid,
     ...(opts.source ? { source: opts.source } : {}),
+    ...(opts.owner ? { owner: opts.owner } : {}),
   };
   claimRunStart(opts.runsDir, () => {
     mkdirSync(join(runDir, "logs"), { recursive: true });

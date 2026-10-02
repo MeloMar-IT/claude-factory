@@ -259,4 +259,62 @@ describe("the page", () => {
   it("index.html has the place for the user name", () => {
     expect(readFileSync("ui/index.html", "utf8")).toContain('id="user"');
   });
+
+  it("app.js starts the admin parts only inside startAdmin, and style.css hides the rest for a user", () => {
+    const app = readFileSync("ui/app.js", "utf8");
+    const start = app.indexOf("async function startAdmin()");
+    expect(start).toBeGreaterThan(0);
+    for (const text of ["startHealth(healthEl)", "S.info = await api.info();", "startBadge()", "startSince("]) {
+      expect(app.split(text).length - 1, text).toBe(1);
+      expect(app.indexOf(text), text).toBeGreaterThan(start);
+    }
+    expect(readFileSync("ui/style.css", "utf8")).toContain(".role-user");
+  });
+});
+
+describe("roles in the page", () => {
+  beforeEach(() => {
+    restore();
+    restore = installFakeDom();
+  });
+  const bodyHas = () => (document.body as unknown as FakeElement).classList.contains("role-user");
+
+  it("isAdmin is true for the role admin only", () => {
+    expect(auth.isAdmin({ role: "admin" })).toBe(true);
+    expect(auth.isAdmin({ role: "user" })).toBe(false);
+    expect(auth.isAdmin(undefined)).toBe(false);
+  });
+
+  it("userHash keeps the Runs pages and sends everything else to the list", () => {
+    expect(auth.userHash("#/runs")).toBe("#/runs");
+    expect(auth.userHash("#/runs/abc")).toBe("#/runs/abc");
+    expect(auth.userHash("#/runs/abc/x")).toBe("#/runs");
+    expect(auth.userHash("#/settings")).toBe("#/runs");
+    expect(auth.userHash("")).toBe("#/runs");
+  });
+
+  it("allowedHash replaces a page a user may not open, and leaves the rest", () => {
+    const replace = vi.fn();
+    expect(auth.allowedHash(false, "#/settings", replace)).toBe("#/runs");
+    expect(replace).toHaveBeenCalledWith("#/runs");
+    replace.mockClear();
+    expect(auth.allowedHash(false, "#/runs/abc", replace)).toBe("#/runs/abc");
+    expect(auth.allowedHash(true, "#/settings", replace)).toBe("#/settings");
+    expect(replace).not.toHaveBeenCalled();
+  });
+
+  it("startApp gives a user only the route, and an admin the whole start-up", async () => {
+    const user = { startAdmin: vi.fn(), route: vi.fn() };
+    await auth.startApp({ role: "user" }, user);
+    expect(user.startAdmin).not.toHaveBeenCalled();
+    expect(user.route).toHaveBeenCalledTimes(1);
+    expect(bodyHas()).toBe(true);
+    restore();
+    restore = installFakeDom();
+    const admin = { startAdmin: vi.fn(), route: vi.fn() };
+    await auth.startApp({ role: "admin" }, admin);
+    expect(admin.startAdmin).toHaveBeenCalledTimes(1);
+    expect(admin.route).not.toHaveBeenCalled();
+    expect(bodyHas()).toBe(false);
+  });
 });

@@ -1,6 +1,6 @@
 import YAML from "/vendor/yaml/index.js";
 import { api } from "./api.js";
-import { ensureSignedIn } from "./auth.js";
+import { allowedHash, ensureSignedIn, isAdmin, startApp } from "./auth.js";
 import { debounce, h, modal, mount, toast } from "./dom.js";
 import { cleanFlow, renderEditor } from "./editor.js";
 import { renderGraph } from "./graph.js";
@@ -40,7 +40,7 @@ steps:
  * cur: the flow being edited.
  * { name: saved name | null, scope, saveScope, yaml, obj, mode: "visual"|"yaml", dirty, selected, validation }
  */
-const S = { info: null, flows: [], cur: null, cleanup: null, lastHash: "" };
+const S = { info: null, flows: [], cur: null, cleanup: null, lastHash: "", admin: true };
 
 function tryParse(text) {
   try {
@@ -63,6 +63,7 @@ async function refreshFlows() {
 }
 
 function renderSidebar() {
+  if (!S.admin) return;
   const inFlows = location.hash.startsWith("#/flows/") || location.hash === "#/new";
   const current = inFlows ? S.cur : null;
   mount(sidebar,
@@ -359,7 +360,8 @@ function welcome() {
 }
 
 async function route() {
-  const hash = location.hash || "#/flows";
+  // A page a user may not open is never drawn.
+  const hash = allowedHash(S.admin, location.hash || (S.admin ? "#/flows" : "#/runs"), (to) => history.replaceState(null, "", to));
   const [, section, arg] = hash.split("/").map(decodeURIComponent);
   const leavingDraft = S.cur?.dirty && (section !== "flows" || arg !== S.cur.name) && hash !== "#/new";
   // Only warn when opening a *different* flow; other pages keep the draft in memory.
@@ -379,8 +381,8 @@ async function route() {
     else if (section === "watchers") await renderWatchers(main);
     else if (section === "settings") await renderSettings(main);
     else if (section === "models") await renderModels(main);
-    else if (section === "runs" && arg) S.cleanup = renderRunDetail(main, arg);
-    else if (section === "runs") S.cleanup = await renderRunsList(main);
+    else if (section === "runs" && arg) S.cleanup = renderRunDetail(main, arg, { admin: S.admin });
+    else if (section === "runs") S.cleanup = await renderRunsList(main, { admin: S.admin });
     else if (section === "new") S.cur && !S.cur.name ? renderFlowView() : openNew();
     else if (section === "flows" && arg) await openFlow(arg);
     else welcome();
@@ -390,7 +392,6 @@ async function route() {
   renderSidebar();
 }
 
-window.addEventListener("hashchange", route);
 window.addEventListener("beforeunload", (e) => S.cur?.dirty && e.preventDefault());
 document.addEventListener("keydown", (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key === "s" && S.cur && (location.hash.startsWith("#/flows/") || location.hash === "#/new")) {
@@ -399,14 +400,21 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
-await ensureSignedIn();
-startHealth(healthEl);
-S.info = await api.info();
-document.getElementById("repo").textContent = S.info.repo;
-await refreshFlows();
-void refreshModelLists();
-// When something waits for the owner, the app opens on the Your turn page.
-const to = startHash(location.hash, await startBadge());
-if (to) history.replaceState(null, "", to);
-route();
-startSince(document.getElementById("since"));
+const me = await ensureSignedIn();
+S.admin = isAdmin(me);
+// Only now: before the role is known, a hash change must not draw a page.
+window.addEventListener("hashchange", route);
+await startApp(me, { startAdmin, route });
+
+async function startAdmin() {
+  startHealth(healthEl);
+  S.info = await api.info();
+  document.getElementById("repo").textContent = S.info.repo;
+  await refreshFlows();
+  void refreshModelLists();
+  // When something waits for the owner, the app opens on the Your turn page.
+  const to = startHash(location.hash, await startBadge());
+  if (to) history.replaceState(null, "", to);
+  route();
+  startSince(document.getElementById("since"));
+}

@@ -66,6 +66,8 @@ export interface RunSummary {
   stepStartedAt?: string;
   /** Who started the run, e.g. "ui", "cli" or "watcher <id> issue #7". Absent on runs of older versions. */
   source?: string;
+  /** The id of the account that started the run. Absent for runs of watchers, the CLI and older versions. */
+  owner?: string;
 }
 
 /** The few fields of a run that are cheap to keep for every run. */
@@ -76,6 +78,7 @@ export interface RunBrief {
   startedAt: string;
   finishedAt?: string;
   source?: string;
+  owner?: string;
   runDir: string;
   /** When run.json was last written. */
   updatedAt: string;
@@ -103,7 +106,7 @@ export function listRunBriefs(runsDir: string): RunBrief[] {
       if (!hit || hit.mtimeMs !== st.mtimeMs || hit.size !== st.size) {
         const s = JSON.parse(readFileSync(file, "utf8")) as RunSummary;
         if (!s || typeof s.runId !== "string" || typeof s.status !== "string") continue;
-        hit = { mtimeMs: st.mtimeMs, size: st.size, brief: { runId: s.runId, flow: s.flow, status: s.status, startedAt: s.startedAt, finishedAt: s.finishedAt, source: s.source, runDir: s.runDir, updatedAt: new Date(Math.round(st.mtimeMs)).toISOString() } };
+        hit = { mtimeMs: st.mtimeMs, size: st.size, brief: { runId: s.runId, flow: s.flow, status: s.status, startedAt: s.startedAt, finishedAt: s.finishedAt, source: s.source, owner: s.owner, runDir: s.runDir, updatedAt: new Date(Math.round(st.mtimeMs)).toISOString() } };
         briefCache.set(file, hit);
       }
       out.push(hit.brief);
