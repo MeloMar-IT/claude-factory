@@ -108,18 +108,33 @@ describe("comment wording comes from the next-step module", () => {
     expect(split).toContain('first="$FACTORY_FIRST_START_PARTS"');
     expect(text("tools/create-split")).toMatch(/const comment = \[\s*\.\.\.\(first \? \[first, ""\]/);
     expect(text("tools/create-split")).toContain("FACTORY_FIRST_INFO");
+    before(stepRun(flowPath("issue-plan"), "post_plan"), 'echo "$FACTORY_FIRST_START_CODING"', "issue-plan/post_plan");
+    for (const f of ["issue-code-daily", "issue-deliver", "issue-gitflow"]) before(stepRun(flowPath(f), "report"), 'echo "$FACTORY_FIRST_SHIPS"', `${f}/report`);
+    before(stepRun(flowPath("pr-feedback"), "reply"), 'echo "$FACTORY_FIRST_LOOK"', "pr-feedback/reply");
+    const dailies: [string, string][] = [["release-daily", "release_pr"], ["daily-pr", "report"]];
+    for (const [f, id] of dailies) {
+      const run = stepRun(flowPath(f), id);
+      before(run, 'echo "$first"', `${f}/${id}`);
+      expect(run).toContain('first="$FACTORY_FIRST_DRAFT"');
+      expect(run).toContain('first="$FACTORY_FIRST_MERGE_RELEASE"');
+    }
+  });
+
+  it("the label-driven comments use the glossary words", () => {
+    const sites: [string, string][] = [
+      ["issue-plan", "post_plan"], ["issue-code-daily", "report"], ["issue-deliver", "report"], ["issue-gitflow", "report"],
+      ["pr-feedback", "reply"], ["release-daily", "release_pr"], ["daily-pr", "report"],
+    ];
+    for (const [f, id] of sites) expect(stepRun(flowPath(f), id), `${f}/${id}`).not.toMatch(/daily pull request|Foundry pull request/);
+    expect(stepRun(flowPath("issue-code-daily"), "report")).toContain("_This goes to main with the release pull request._");
+    expect(stepRun(flowPath("issue-deliver"), "report")).toContain("_It is in the release pull request: $FACTORY_OUT_OPEN_PR — merge it whenever you like._");
+    expect(stepRun(flowPath("issue-gitflow"), "report")).toContain("daily release pull request");
   });
 });
 
 describe("every posted comment starts with a first-line variable", () => {
-  // Changed in the next part (#59).
-  const NEXT_PART = [
-    "daily-pr/report", "issue-code-daily/report", "issue-deliver/report", "issue-gitflow/report",
-    "issue-plan/post_plan", "pr-feedback/reply", "release-daily/release_pr",
-  ];
-
-  it("reports exactly the steps the next part changes", () => {
-    expect(scanRepo().map((h) => h.where).sort()).toEqual(NEXT_PART);
+  it("finds no comment without a first-line variable in blocks, flows and tools", () => {
+    expect(scanRepo()).toEqual([]);
   });
 
   const bad = (label: string, script: string) => it(`catches: ${label}`, () => expect(scanShell(script).length).toBeGreaterThanOrEqual(1));
@@ -348,5 +363,8 @@ describe("pr-feedback flow (fake gh + claude)", () => {
     expect(s.status).toBe("succeeded");
     expect(gh.remoteGit("log", "-1", "--format=%s", "factory/pr-17").trim()).toBe("Address review comments");
     expect(gh.ghLog()).toContain("renamed the variable as requested");
+    const reply = gh.comments().find((c) => c.issue === 17)!.body.split("\n");
+    expect(reply.slice(0, 3)).toEqual([reportFirst("look"), "", "🤖 **Spaghetti Code Foundry** went through the review comments:"]);
+    expect(reply.at(-1)).toBe(`<!-- claude-factory run=${s.runId} -->`);
   });
 });

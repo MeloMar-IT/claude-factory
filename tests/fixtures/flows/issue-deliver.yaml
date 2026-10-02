@@ -640,14 +640,15 @@ steps:
     run: |-
       branch=$(git branch --show-current); sha=$(git rev-parse HEAD)
       verdict() { printf '%s\n' "$1" | sed -n 's/^VERDICT: *//p' | tail -1; }
-      { echo "🤖 **Spaghetti Code Foundry** implemented this on branch \`$branch\` (commit https://github.com/$FACTORY_VAR_GITHUB_REPO/commit/$sha)."
+      { echo "$FACTORY_FIRST_SHIPS"; echo
+        echo "🤖 **Spaghetti Code Foundry** implemented this on branch \`$branch\` (commit https://github.com/$FACTORY_VAR_GITHUB_REPO/commit/$sha)."
         echo; echo "### What was done"; printf '%s\n' "$FACTORY_OUT_IMPLEMENT"
         echo; echo "### Review (Codex)"
         echo "- round 1: $(verdict "$FACTORY_OUT_REVIEW_1")"
         [ -n "$FACTORY_OUT_REVIEW_2" ] && echo "- round 2: $(verdict "$FACTORY_OUT_REVIEW_2")"
         echo; echo "### Tests"; echo '```'; cat "{{run.dir}}/last-tests.txt"; echo '```'
         echo; echo "### Files changed"; echo '```'; git show --stat --format= HEAD | tail -40; echo '```'
-        echo; echo "_It is in the Foundry pull request: $FACTORY_OUT_OPEN_PR — merge it whenever you like._"
+        echo; echo "_It is in the release pull request: $FACTORY_OUT_OPEN_PR — merge it whenever you like._"
         echo; echo "<!-- claude-factory run=$FACTORY_RUN_ID -->"; } \
         | gh issue comment "$FACTORY_VAR_ISSUE" --repo "$FACTORY_VAR_GITHUB_REPO" --body-file -
     on_success: end

@@ -62,7 +62,9 @@ steps:
         | node -e 'let d="";process.stdin.on("data",(c)=>(d+=c)).on("end",()=>{const p=JSON.parse(d||"[]").find((x)=>x.headRefName===process.argv[1]&&x.state==="OPEN");process.stdout.write(p?String(p.number):"")})' "$dev")
       if [ -n "$pr" ]; then gh pr edit "$pr" --repo "$FACTORY_VAR_GITHUB_REPO" --title "$title" --body-file - < "{{run.dir}}/pr.md" >/dev/null
       else pr=$(gh pr create --repo "$FACTORY_VAR_GITHUB_REPO" --base "$main" --head "$dev" --title "$title" --body-file - < "{{run.dir}}/pr.md" | tail -1); pr=${pr##*/}; fi
-      { echo "🤖 **Spaghetti Code Foundry daily release check** — $(date '+%Y-%m-%d %H:%M')"; echo; cat "{{run.dir}}/checks.md"; echo; echo "<!-- claude-factory run=$FACTORY_RUN_ID daily -->"; } \
+      if printf '%s\n' "$FACTORY_OUT_VERIFY" | grep -q "^CHECKS: no"; then ok=no; first="$FACTORY_FIRST_DRAFT"; else ok=yes; first="$FACTORY_FIRST_MERGE_RELEASE"; fi
+      { echo "$first"; echo
+        echo "🤖 **Spaghetti Code Foundry daily release check** — $(date '+%Y-%m-%d %H:%M')"; echo; cat "{{run.dir}}/checks.md"; echo; echo "<!-- claude-factory run=$FACTORY_RUN_ID daily -->"; } \
         | gh pr comment "$pr" --repo "$FACTORY_VAR_GITHUB_REPO" --body-file - >/dev/null
-      if printf '%s\n' "$FACTORY_OUT_VERIFY" | grep -q "^CHECKS: no"; then gh pr ready "$pr" --repo "$FACTORY_VAR_GITHUB_REPO" --undo >/dev/null 2>&1 || true; echo "checks failed — PR #$pr is a draft"
+      if [ "$ok" = no ]; then gh pr ready "$pr" --repo "$FACTORY_VAR_GITHUB_REPO" --undo >/dev/null 2>&1 || true; echo "checks failed — PR #$pr is a draft"
       else gh pr ready "$pr" --repo "$FACTORY_VAR_GITHUB_REPO" >/dev/null 2>&1 || true; echo "checks passed — PR #$pr ($title) is ready to merge"; fi

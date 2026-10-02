@@ -8,7 +8,8 @@ import { runFlow } from "../src/engine/runner.js";
 import { loadFlow } from "../src/flow/load.js";
 import { Scheduler } from "../src/queue/scheduler.js";
 import { Watcher } from "../src/queue/watcher.js";
-import { claudeBin, fakeGithub } from "./helpers/fake-github.js";
+import { reportFirst } from "../src/next-step.js";
+import { claudeBin, closing, fakeGithub, first } from "./helpers/fake-github.js";
 
 // Gitflow: one feature branch per issue, merged into develop by the factory (in parallel when
 // the code areas differ); develop goes to main once a day in one pull request.
@@ -72,6 +73,10 @@ describe("gitflow pipeline", () => {
     const log = gh.ghLog();
     expect(log).toContain("merged it into `develop`");
     expect(log).toContain("with the daily release pull request");
+    const result = gh.comments().find((c) => c.issue === 5 && c.body.includes("merged it into"))!.body;
+    expect(first(result)).toBe(reportFirst("ships"));
+    expect(result.split("\n")[2]).toMatch(/^🤖 \*\*Spaghetti Code Foundry\*\* implemented this on `feature\/5-add-a-feature` and merged it into `develop` /);
+    expect(closing(result)).toEqual(["_It goes to `main` with the daily release pull request._", `<!-- claude-factory run=${run.runId} -->`]);
     expect(log).toMatch(/gh issue edit 5 .*--add-label Factory_done/);
   });
 
@@ -210,6 +215,18 @@ describe("gitflow pipeline", () => {
     expect(log).toMatch(/gh pr create --repo acme\/app --base main --head develop --title Release/);
     expect(log).toContain("Closes #5");
     expect(log).toContain("Spaghetti Code Foundry daily release check");
+    const red = await runFlow(flow, { task: "", repo: gh.tmp, runsDir: runsDir(), claudeBin, config, vars: { github_repo: REPO, test_cmd: "false" } });
+    expect(red.status).toBe("succeeded");
+    expect(red.history.at(-1)!.output).toContain("checks failed — PR #99 is a draft");
+    expect(gh.ghLog()).toMatch(/gh pr ready 99 --repo acme\/app --undo/);
+    const checks = gh.comments().filter((c) => c.issue === 99 && c.body.includes("daily release check"));
+    expect(checks).toHaveLength(2);
+    const green = checks[0]!.body.split("\n");
+    expect(green.slice(0, 2)).toEqual([reportFirst("merge_release"), ""]);
+    expect(green[2]).toMatch(/^🤖 \*\*Spaghetti Code Foundry daily release check\*\* — /);
+    expect(green.at(-1)).toBe(`<!-- claude-factory run=${r.runId} daily -->`);
+    expect(first(checks[1]!.body)).toBe(reportFirst("draft"));
+    expect(checks[1]!.body).toContain("⚠ **Checks failed**");
   });
 });
 
