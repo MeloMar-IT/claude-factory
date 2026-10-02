@@ -187,6 +187,12 @@ describe("until", () => {
     expect(limited("usage limit reached: busy").until).toBe("08:40");
     expect(limited("usage limit reached: busy", "2026-10-01T09:00:00Z").until).toBe("the next check");
   });
+  it("signed out: it is the owner's turn, with the exact command", () => {
+    const n = limited('usage limit reached: signed out — the Claude Code login has expired; sign in again (run "claude" in a terminal and type /login) and the run continues by itself');
+    expect(n.who).toBe("You");
+    expect(n.why).toBe("Claude Code is signed out (its login has expired)");
+    expect(JSON.stringify(n)).toContain("/login");
+  });
   it("daily budget: tomorrow, no amount", () => {
     const n = limited("daily budget of $5 reached — resume tomorrow");
     expect(n.kind).toBe("daily_budget");

@@ -21,6 +21,10 @@ for (const line of prompt.split("\n")) {
   if (s) result = s[1];
   if (line === "SHOWENV") result = `base=${process.env.ANTHROPIC_BASE_URL ?? ""} token=${process.env.ANTHROPIC_AUTH_TOKEN ?? ""} haiku=${process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL ?? ""} args=${args.join(" ")}`;
 }
+if (prompt.includes("CLAUDE_SIGNED_OUT")) {
+  emit({ type: "result", subtype: "success", is_error: true, result: "Failed to authenticate: OAuth session expired and could not be refreshed", session_id: "s", total_cost_usd: 0, num_turns: 1 });
+  process.exit(1);
+}
 if (prompt.includes("CLAUDE_LIMIT")) {
   emit({ type: "result", subtype: "success", is_error: true, result: "You've hit your limit · resets 3:50pm (Europe/Amsterdam)", session_id: "s", total_cost_usd: 0, num_turns: 1 });
   process.exit(1);

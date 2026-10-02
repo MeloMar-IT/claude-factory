@@ -233,6 +233,15 @@ export function nextStep(kind: NextKind, base: NextBase = {}, d: NextData = {}):
       break;
     }
     case "usage_limit": {
+      if (/signed out/.test(d.reason ?? "")) {
+        // The agent CLI lost its login: only the owner can fix that; the run is retried by itself.
+        const codex = /Codex login/.test(d.reason ?? "");
+        who = "You";
+        why = `${codex ? "Codex" : "Claude Code"} is signed out (its login has expired)`;
+        until = limitRetry(d, LIMIT_RETRY_MS);
+        say = `sign in again: ${codex ? 'run "codex login"' : 'run "claude" in a terminal and type /login'}. It continues by itself after that`;
+        break;
+      }
       who = "A time limit";
       why = "The usage limit is reached";
       until = limitReset(d.reason) ?? limitRetry(d, LIMIT_RETRY_MS);

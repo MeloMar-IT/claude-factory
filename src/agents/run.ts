@@ -3,7 +3,7 @@ import { runClaude } from "../steps/claude.js";
 import { runCodex, type CodexSandbox } from "../steps/codex.js";
 import { DEFAULT_PERMISSION_MODE, stepEnv, type Engine, type Scope, type StepResult } from "../engine/execute.js";
 import { render } from "../engine/template.js";
-import { BUILTIN_PROVIDERS, claudeProviderEnv, fallbackTargets, isLimitError, LOCAL_KINDS, resolveTarget, type Target } from "./targets.js";
+import { BUILTIN_PROVIDERS, claudeProviderEnv, fallbackTargets, isAuthError, isLimitError, LOCAL_KINDS, resolveTarget, type Target } from "./targets.js";
 
 const WRITE_TOOL = /^(Edit|Write|MultiEdit|NotebookEdit|Bash)\b/;
 
@@ -101,7 +101,13 @@ export async function runAgentStep(step: ClaudeStep, scope: Scope, engine: Engin
   for (;;) {
     tried.add(target.label);
     const r = await runOn(target, step, scope, engine, logFile, timeoutMs);
-    if (r.ok || engine.signal?.aborted || !isLimitError(r.error, r.output)) return r;
+    if (r.ok || engine.signal?.aborted) return r;
+    // Signed out: pause like a usage limit (the run is tried again by itself) instead of failing.
+    if (isAuthError(r.error, r.output)) {
+      const cli = target.agent === "codex" ? 'run "codex login"' : 'run "claude" in a terminal and type /login';
+      return { ...r, limited: true, error: `usage limit reached: signed out — the ${target.agent === "codex" ? "Codex" : "Claude Code"} login has expired; sign in again (${cli}) and the run continues by itself` };
+    }
+    if (!isLimitError(r.error, r.output)) return r;
     const next = fallbacks.find((t) => !tried.has(t.label));
     // No model left to try: the loop pauses the run until the limit resets.
     if (!next) return { ...r, limited: true, error: `usage limit reached: ${r.output.trim().split("\n")[0] || r.error}` };
