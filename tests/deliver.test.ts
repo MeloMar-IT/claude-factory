@@ -70,7 +70,11 @@ describe("deliver pipeline", () => {
     expect(first(plan)).toBe(nextStepEnv().FACTORY_FIRST_NOTHING);
     expect(plan.split("\n")[2]).toMatch(/^🤖 \*\*Spaghetti Code Foundry plan\*\*/);
     expect(plan.split("\n").at(-1)).toBe(`<!-- claude-factory run=${run.runId} plan -->`);
-    expect(log).toContain("It is in the Foundry pull request: https://github.com/owner/repo/pull/99");
+    expect(log).toContain("It is in the release pull request: https://github.com/owner/repo/pull/99");
+    const result = gh.comments().find((c) => c.body.includes("implemented this on branch"))!.body;
+    expect(first(result)).toBe(reportFirst("ships"));
+    expect(result).toMatch(/_It is in the release pull request: https:\/\/github.com\/owner\/repo\/pull\/99\s+— merge it whenever you like\._/);
+    expect(result.split("\n").at(-1)).toBe(`<!-- claude-factory run=${run.runId} -->`);
     expect(prs()).toHaveLength(1);
     expect(log).toMatch(/gh issue edit 5 .*--remove-label Factory_go.*--add-label Factory_done/);
   });
@@ -375,6 +379,17 @@ describe("deliver pipeline", () => {
     expect(red.history.at(-1)!.output).toContain("is a draft");
     expect(gh.ghLog()).toMatch(/gh pr ready 99 --repo acme\/app --undo/);
     expect(prs()).toHaveLength(1);
+    const reports = gh.comments().filter((c) => c.body.includes("daily report"));
+    expect(reports).toHaveLength(2);
+    const green = reports[0]!.body;
+    expect(first(green)).toBe(reportFirst("merge_release"));
+    expect(green.split("\n")[2]).toMatch(/^🤖 \*\*Spaghetti Code Foundry daily report\*\* — /);
+    expect(closing(green)).toEqual(["_Merge whenever you like — the Foundry keeps working either way; after a merge it continues on a fresh branch._", `<!-- claude-factory run=${ok.runId} daily -->`]);
+    const failed = reports[1]!.body;
+    expect(first(failed)).toBe(reportFirst("draft"));
+    expect(failed).toContain("⚠ **Checks failed**");
+    expect(failed).not.toContain("Merge whenever you like");
+    expect(failed.split("\n").at(-1)).toBe(`<!-- claude-factory run=${red.runId} daily -->`);
   });
 });
 
@@ -434,6 +449,20 @@ describe("generated issue flows", () => {
     const p = step("issue-code-daily", "implement");
     expect(p).toContain('\\"Spaghetti Code Foundry plan\\" comment (older ones are headed');
     expect(p).toContain('\\"claude-factory plan\\")');
+    expect(p).toContain("is for the owner, not a step of the plan");
+  });
+
+  it("keeps the hidden markers", () => {
+    const run = (f: string, id: string) => {
+      const s = parseFlow(text(f), f).steps.find((x) => x.id === id);
+      return s && "run" in s ? String(s.run ?? "") : "";
+    };
+    expect(run("issue-plan", "post_plan")).toContain("run=$FACTORY_RUN_ID plan -->");
+    for (const f of ["issue-code-daily", "issue-deliver", "issue-gitflow"]) expect(run(f, "report")).toContain("run=$FACTORY_RUN_ID -->");
+    expect(run("pr-feedback", "reply")).toContain("run=$FACTORY_RUN_ID -->");
+    expect(run("release-daily", "release_pr")).toContain("run=$FACTORY_RUN_ID daily -->");
+    expect(run("release-daily", "release_pr")).toContain("run=$FACTORY_RUN_ID release -->");
+    expect(run("daily-pr", "report")).toContain("run=$FACTORY_RUN_ID daily -->");
   });
 
   it.each(["issue-deliver", "issue-gitflow"])("%s swaps the implement prompt to the approved plan", (f) => {

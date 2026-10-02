@@ -562,7 +562,7 @@ const REPORTS: Record<ReportKind, Pick<NextStep, "who" | "action" | "why">> = {
   ships: foundry("It goes to main with the release pull request"),
   look: you("Look at the changes"),
   merge_release: you("Merge the release pull request when you like"),
-  draft: you("Fix the failed checks; the release pull request stays a draft until they pass"),
+  draft: foundry("It stays a draft until the checks pass"),
   start_parts: you("Start the new issues when you want them built"),
 };
 

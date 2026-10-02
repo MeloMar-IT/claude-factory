@@ -97,7 +97,8 @@ steps:
   - id: reply
     type: shell
     run: |-
-      { echo "🤖 **Spaghetti Code Foundry** went through the review comments:"; echo
+      { echo "$FACTORY_FIRST_LOOK"; echo
+        echo "🤖 **Spaghetti Code Foundry** went through the review comments:"; echo
         printf '%s\n' "$FACTORY_OUT_ADDRESS_COMMENTS"
         echo; echo "<!-- claude-factory run=$FACTORY_RUN_ID -->"; } \
         | gh pr comment "$FACTORY_VAR_PR" --repo "$FACTORY_VAR_GITHUB_REPO" --body-file -

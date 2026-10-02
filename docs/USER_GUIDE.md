@@ -720,6 +720,20 @@ issues after a split starts with `**Nothing needed from you**`. In `github-auto`
 `**What you need to do:** Start the new issues when you want them built.` when the new issues are not
 picked up by themselves (`auto_subtasks` is `no`).
 
+The label-driven flows do the same:
+
+- The plan from `issue-plan` starts with
+`**What you need to do:** Add the code label to start coding.`
+- The result of `issue-code-daily`, `issue-deliver` and `issue-gitflow` starts with
+`**Nothing needed from you** — it goes to main with the release pull request.`
+- The reply of `pr-feedback` after review comments starts with
+`**What you need to do:** Look at the changes.`
+- The daily report (`daily-pr`) and the release check (`release-daily`) start with
+`**What you need to do:** Merge the release pull request when you like.` when the checks pass, and with
+`**Nothing needed from you** — it stays a draft until the checks pass.` when they fail.
+
+The empty line and the heading follow, as before.
+
 In `issue-gitflow`, a plan that starts coding by itself starts with
 `**Nothing needed from you** — it is being worked on.` The server gives
 them for every run and issue at `GET /api/next` (and as `next` on each run). The usual reasons:
@@ -1316,8 +1330,9 @@ who has the next move (the badge at the start of the line), what to do and why. 
 `Factory_review_plan`. Read the plan on the issue and reply `/approve` (with notes if you like)
 or `/reject` with what to change.
 
-**The Foundry pull request is a draft.** The daily full test run or build failed on it; the
-failing output is in the daily report comment. It becomes ready again when a later report passes.
+**The release pull request is a draft.** The daily full test run or build failed on it; the
+daily report or release check starts with `**Nothing needed from you** — it stays a draft until the checks pass.`
+and has the failing output. It becomes ready again when a later report passes.
 
 **A run failed, or a watcher shows an error.** The message says what happened, why, and what
 you can do first. Find yours in the table:

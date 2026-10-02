@@ -56,7 +56,7 @@ describe("comment sentences", () => {
     ["ships", "**Nothing needed from you** — it goes to main with the release pull request."],
     ["look", "**What you need to do:** Look at the changes."],
     ["merge_release", "**What you need to do:** Merge the release pull request when you like."],
-    ["draft", "**What you need to do:** Fix the failed checks; the release pull request stays a draft until they pass."],
+    ["draft", "**Nothing needed from you** — it stays a draft until the checks pass."],
     ["start_parts", "**What you need to do:** Start the new issues when you want them built."],
   ] as const)("words the report first line %s", (kind, text) => {
     expect(reportFirst(kind)).toBe(text);

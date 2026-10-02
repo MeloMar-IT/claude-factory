@@ -902,7 +902,8 @@ steps:
     run: |-
       branch=$(cat "{{run.dir}}/feature-branch"); sha=$(git rev-parse HEAD)
       verdict() { printf '%s\n' "$1" | sed -n 's/^VERDICT: *//p' | tail -1; }
-      { echo "🤖 **Spaghetti Code Foundry** implemented this on \`$branch\` and merged it into \`$FACTORY_VAR_DEVELOP_BRANCH\` (commit https://github.com/$FACTORY_VAR_GITHUB_REPO/commit/$sha)."
+      { echo "$FACTORY_FIRST_SHIPS"; echo
+        echo "🤖 **Spaghetti Code Foundry** implemented this on \`$branch\` and merged it into \`$FACTORY_VAR_DEVELOP_BRANCH\` (commit https://github.com/$FACTORY_VAR_GITHUB_REPO/commit/$sha)."
         echo; echo "### What was done"; printf '%s\n' "$FACTORY_OUT_IMPLEMENT"
         echo; echo "### Review (Codex)"
         echo "- round 1: $(verdict "$FACTORY_OUT_REVIEW_1")"
