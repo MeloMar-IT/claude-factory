@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { runProcess } from "./process.js";
 
 /** Where the Claude desktop app keeps its bundled Claude Code, one folder per version. */
-const DESKTOP_CLAUDE_CODE = join(homedir(), "Library/Application Support/Claude/claude-code");
+const desktopClaudeCodeDir = () => process.env.FACTORY_DESKTOP_CLAUDE_DIR ?? join(homedir(), "Library/Application Support/Claude/claude-code");
 
 const VERSION_RE = /(\d+)\.(\d+)\.(\d+)/;
 function cmpVersion(a: string, b: string): number {
@@ -32,15 +32,25 @@ export function resolveClaudeBin(): string {
   }
   let bundled: { version: string; bin: string } | undefined;
   try {
-    for (const v of readdirSync(DESKTOP_CLAUDE_CODE).filter((d) => VERSION_RE.test(d)).sort(cmpVersion).reverse()) {
-      const bin = join(DESKTOP_CLAUDE_CODE, v, "claude.app/Contents/MacOS/claude");
+    for (const v of readdirSync(desktopClaudeCodeDir()).filter((d) => VERSION_RE.test(d)).sort(cmpVersion).reverse()) {
+      // The app keeps it at <version>/claude.app/… or, in newer app versions, <version>/<id>/claude.app/…
+      const dirs = [join(desktopClaudeCodeDir(), v)];
       try {
-        accessSync(bin, constants.X_OK);
-        bundled = { version: v, bin };
-        break;
+        for (const sub of readdirSync(join(desktopClaudeCodeDir(), v))) dirs.push(join(desktopClaudeCodeDir(), v, sub));
       } catch {
-        // incomplete download of that version
+        // unreadable version folder
       }
+      for (const d of dirs) {
+        const bin = join(d, "claude.app/Contents/MacOS/claude");
+        try {
+          accessSync(bin, constants.X_OK);
+          bundled = { version: v, bin };
+          break;
+        } catch {
+          // not here, or an incomplete download of that version
+        }
+      }
+      if (bundled) break;
     }
   } catch {
     // no desktop app
