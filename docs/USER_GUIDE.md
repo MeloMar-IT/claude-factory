@@ -947,16 +947,31 @@ show as "n runs ahead of you", without ids.
 (`POST /api/runs/<id>/approve` or `/reject` with `{"note": "…"}`). The note reaches the run.
 
 **Repositories.** Every account has its own list of GitHub repositories, kept in `repos.json` in
-the data folder (mode `0600`). Three calls manage it:
+the data folder (mode `0600`). A repository is a record: `id`, `owner` (account id), `url`, `method`
+and `added`. It never holds a secret. These calls manage it:
 
-- `GET /api/repos` lists your repositories.
-- `POST /api/repos {"name": "owner/name"}` adds one (201; 409 if you have it; 400 for a bad name;
-  at most 50).
-- `DELETE /api/repos/<owner>/<name>` removes one (404 if you do not have it).
+- `GET /api/repos` lists your records.
+- `POST /api/repos {"url": …, "method": …, "username": …, "token": …}` adds one (201; 409 if you or
+  another account has it; 400 for a bad URL or method; at most 50). `{"name": "owner/name"}` still works.
+- `PUT /api/repos/<id>/auth` changes the method, user name, token or address. What you do not give
+  keeps its value. The old stored token is wiped. 404 for an id that is not yours.
+- `DELETE /api/repos/<id>` removes the repository and its stored token (404 if it is not yours).
+- `DELETE /api/repos/<owner>/<name>` removes a GitHub repository by name (the old form).
 
-A name is `owner/name` with letters, digits, `-`, `_` and `.`. The placeholder `owner/repo` and
-names like `a/..` are refused. Case does not matter when names are compared. If `repos.json`
-cannot be read, the calls answer "the repository list is not working; see the server log".
+The URL is `https://host/path`, `ssh://[user@]host[:port]/path` or `git@host:path`; `owner/name`
+means `https://github.com/owner/name`. Local paths, `file:`, `ext::` and other transports, a user
+name or password in the URL, and control characters give 400. The record keeps the address as you
+wrote it (for example `git@host:team/app.git` stays that way). The same repository in another case,
+with or without `.git`, or in https or ssh form counts as one repository. `PUT …/auth` may change the
+address only to another form of the same repository.
+
+Methods: `github-token` (a GitHub fine-grained token, only for `https://github.com/…`) and
+`https-token` (a user name and a token, any https host). The token is stored in the credential store
+as `repo:<repository id>`. `none` is the default without a method: the server's own access for an
+admin, "needs authentication" for a user, who cannot choose it. If a repository's token is removed
+with `DELETE /api/credentials/<id>`, set it again with `PUT …/auth`.
+
+If `repos.json` cannot be read, the calls answer "the repository list is not working; see the server log".
 
 **Which flows a user may start.** A user starts a *published* flow by name (`POST /api/runs
 {"flow": "<name>", "task": "…", "vars": {…}}`), never by `yaml` (403 "only an admin can run a
@@ -1041,11 +1056,13 @@ Change a role with `scf user role <e-mail> admin|user`, or create an admin with
 | `POST /api/credentials` | yes | yes | store a credential |
 | `DELETE /api/credentials/:id` | yes | yes | remove a credential |
 | `GET /api/repos` | yes | yes | your repositories |
-| `POST /api/repos` | yes | yes | add a repository |
-| `DELETE /api/repos/:owner/:name` | yes | yes | remove a repository |
+| `POST /api/repos` | yes | yes | add a repository (a URL, and a token for it) |
+| `PUT /api/repos/:id/auth` | yes | yes | change the method, user name, token or address of your repository |
+| `DELETE /api/repos/:id` | yes | yes | remove your repository and its stored token |
+| `DELETE /api/repos/:owner/:name` | yes | yes | remove a GitHub repository by name (old form) |
 
-**What comes later.** Runs that use a user's stored credentials, changing your own password in
-the UI, and pages for users (starting runs, repositories).
+**What comes later.** Runs that use a user's stored credentials or a repository's token, changing
+your own password in the UI, and pages for users (starting runs, repositories).
 
 ### Access from other computers
 
@@ -1138,7 +1155,8 @@ in Slack and notifications still point at `http://localhost:<port>`.
 (`POST /api/credentials`); there is no UI page yet, and runs do not use them yet. They are kept in
 `credentials.json` in the data folder (mode `0600`), encrypted with AES-256-GCM. The key is not in
 the data folder: it is in the macOS Keychain, as an item of the service
-`claude-factory-credential-key`. Only macOS is supported.
+`claude-factory-credential-key`. Only macOS is supported. The token of a repository is stored here
+too, as `repo:<repository id>`; your own names must not start with `repo:`.
 - **What the API shows.** Only type, name, created, last used and the fingerprint, never the
   secret. A token must be 8 to 4096 printable ASCII characters on one line. To check a fingerprint:
   `printf %s "$TOKEN" | shasum -a 256`, the first 16 digits.

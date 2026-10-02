@@ -4,6 +4,16 @@ Changes that are merged but not yet in a release go under **Unreleased**. Newest
 
 ## Unreleased
 
+- Repository records (#64).
+  - A repository is a record: id, owner, URL, method and time added. URLs: `https://host/path`, `ssh://[user@]host[:port]/path`, `git@host:path`, or `owner/name` (GitHub). The URL is kept as written. Local paths, `file:`, `ext::`, other transports, a user name or password in the URL, an empty user name or port, and control characters give 400.
+  - Methods: `github-token`, `https-token` and `none`. The token is stored as `repo:<id>` in the credential store and never shown in answers or logs.
+  - 409 when the repository is already yours or belongs to another account (same repository in any case, with `.git`, in https or ssh form).
+  - `PUT /api/repos/<id>/auth` (fields not given keep their value; the address may change to another form of the same repository) and `DELETE /api/repos/<id>` wipe the old token. A retry also removes an old Keychain key that a first try could not remove. `POST {name}` and `DELETE /api/repos/<owner>/<name>` still work.
+  - An explicit method `none` is for admins only (403 for a user); without a method a repository has `none`, which means the server's own access for an admin and "needs authentication" for a user.
+  - **Changed:** `GET /api/repos` answers records instead of names, and `POST /api/repos` answers the record instead of `{name}`. The UI does not use these calls yet.
+  - **Changed:** one repository can belong to one account only; old double entries stay. A credential name must not start with `repo:`.
+  - `repos.json` is now version 2; version 1 loads as is and is rewritten on the first change. An older build cannot read version 2. A data-folder move copies `repos.json` unchanged.
+  - Not included: the page, SSH deploy keys, the GitHub App, the connection test, admin settings, transfer, and runs that use the token.
 - Account rules and audit log (#60).
   - **`scf user role <e-mail> admin|user`** changes the role. It counts from the next API call; the account stays signed in.
   - **Last admin.** The only admin that is not blocked cannot be demoted, blocked or deleted. The command says "make another admin first", changes nothing and exits 1. **Changed:** blocking the only admin was allowed before, and a blocked admin no longer counts as another admin when deleting.
