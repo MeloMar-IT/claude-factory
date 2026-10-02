@@ -1,8 +1,9 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { parse, stringify } from "yaml";
 import { RULES, findRule, permissionTable, ruleKey } from "../src/server/permissions.js";
 import { startServer } from "../src/server/server.js";
 import { fakeKeychain, type FakeKeychain } from "./helpers/keychain.js";
@@ -25,11 +26,18 @@ const logs: string[] = [];
 
 const WALK = `name: walk
 workspace: empty
+publish:
+  enabled: true
 steps:
   - {id: say, type: shell, run: "echo hi"}
   - {id: gate, type: approval, message: "Go?"}
 `;
-const QUICK = (name: string, extra = "", workspace = "empty") => `name: ${name}\nworkspace: ${workspace}\n${extra}steps:\n  - {id: a, type: shell, run: "true"}\n`;
+/** A published flow; `inputs` are the variables users fill in. */
+const PUBLISH = (inputs: string[] = []) => `publish:\n  enabled: true\n${inputs.length ? `  vars:\n${inputs.map((i) => `    ${i}: {mode: input}\n`).join("")}` : ""}`;
+const QUICK = (name: string, extra = "", workspace = "empty", inputs: string[] = []) =>
+  `name: ${name}\nworkspace: ${workspace}\n${extra}${PUBLISH(inputs)}steps:\n  - {id: a, type: shell, run: "true"}\n`;
+/** A flow that is not published. */
+const PRIVATE = (name: string) => `name: ${name}\nworkspace: empty\nsteps:\n  - {id: a, type: shell, run: "true"}\n`;
 
 beforeAll(async () => {
   saved = process.env.FACTORY_HOME;
@@ -311,9 +319,9 @@ describe("starting a run as a user", () => {
   const confFile = () => join(repo, ".claude-factory", "config.yaml");
 
   beforeAll(async () => {
-    await saveFlow("withrepo", QUICK("withrepo", "vars:\n  github_repo: owner/repo\n"));
+    await saveFlow("withrepo", QUICK("withrepo", "vars:\n  github_repo: owner/repo\n", "empty", ["github_repo"]));
     await saveFlow("plain", QUICK("plain"));
-    await saveFlow("wt", QUICK("wt", "", "worktree"));
+    await saveFlow("wt", QUICK("wt", 'vars:\n  github_repo: ""\n', "worktree", ["github_repo"]));
     expect(folderConfig).toContain("config.yaml");
   });
 
@@ -373,7 +381,7 @@ describe("starting a run as a user", () => {
     mkdirSync(join(repo, ".claude-factory"), { recursive: true });
     writeFileSync(confFile(), "vars:\n  test_cmd: 'true'\n");
     try {
-      const r = await start(ann, { flow: "wt", task: "t" });
+      const r = await start(ann, { flow: "wt", task: "t", vars: { github_repo: "acme/app" } });
       expect(r.status).toBe(201);
       const { runId } = r.json() as { runId: string };
       await ctx.scheduler.wait(runId);
@@ -396,11 +404,12 @@ describe("starting a run as a user", () => {
   });
 
   it("checks every flow of the user's list in the same way", async () => {
-    const list = (await call(ann, "GET", "/api/flows")).json() as { name: string }[];
+    const list = (await call(ann, "GET", "/api/flows")).json() as { name: string; fields: { name: string }[] }[];
     expect(list.map((f) => f.name)).toEqual(expect.arrayContaining(["walk", "plain", "wt", "withrepo"]));
-    for (const { name } of list) {
+    for (const { name, fields } of list) {
       const r = await start(ann, { flow: name, vars: { github_repo: "nobody/none" } });
-      expect([name, r.status, r.error()]).toEqual([name, 403, '"nobody/none" is not one of your repositories']);
+      const message = fields.some((f) => f.name === "github_repo") ? '"nobody/none" is not one of your repositories' : 'you cannot set the var "github_repo"';
+      expect([name, r.status, r.error()]).toEqual([name, 403, message]);
     }
     expect((await start(ann, { flow: "unlisted-name", vars: { github_repo: "nobody/none" } })).status).toBe(404);
   });
@@ -432,26 +441,180 @@ describe("lists", () => {
     expect(all.length).toBeGreaterThan(a.length);
   });
 
-  it("gives a user only name and description of the published flows", async () => {
+  it("gives a user only the published flows, in the user's view", async () => {
     const dir = join(repo, ".claude-factory", "flows");
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "bad.yaml"), "name: [");
     writeFileSync(join(dir, "my flow.yaml"), QUICK("x"));
     writeFileSync(join(dir, "a.b.yaml"), QUICK("x"));
+    writeFileSync(join(dir, "unpub.yaml"), PRIVATE("unpub"));
     try {
       const list = (await call(ann, "GET", "/api/flows")).json() as Record<string, unknown>[];
-      for (const f of list) expect(Object.keys(f).sort()).toEqual(["description", "name"]);
+      for (const f of list) expect(Object.keys(f).sort()).toEqual(["description", "fields", "name", "title", "version"]);
       const names = list.map((f) => f.name);
       expect(names).toContain("walk");
-      for (const hidden of ["bad", "my flow", "a.b"]) expect(names).not.toContain(hidden);
-      expect(list.find((f) => f.name === "walk")).toEqual({ name: "walk", description: "" });
+      for (const hidden of ["bad", "my flow", "a.b", "unpub", "feature"]) expect(names).not.toContain(hidden);
+      expect(list.find((f) => f.name === "walk")).toEqual({ name: "walk", title: "walk", description: "", version: 1, fields: [] });
       const adminList = (await call(admin, "GET", "/api/flows")).json() as Record<string, unknown>[];
       expect(adminList.map((f) => f.name)).toEqual(expect.arrayContaining(["bad", "my flow", "a.b"]));
-      expect(adminList.find((f) => f.name === "walk")).toMatchObject({ scope: "repo" });
+      expect(adminList.find((f) => f.name === "walk")).toMatchObject({ scope: "repo", published: true });
       expect(adminList.every((f) => "path" in f && "scope" in f)).toBe(true);
     } finally {
-      for (const f of ["bad.yaml", "my flow.yaml", "a.b.yaml"]) rmSync(join(dir, f), { force: true });
+      for (const f of ["bad.yaml", "my flow.yaml", "a.b.yaml", "unpub.yaml"]) rmSync(join(dir, f), { force: true });
     }
+  });
+});
+
+describe("published flows", () => {
+  const start = (who: TestSession, body: unknown) => call(who, "POST", "/api/runs", body);
+  const put = (yaml: string, scope = "repo") => call(admin, "PUT", `/api/flows/${/^name: (\S+)/.exec(yaml)![1]}`, { yaml, scope });
+  const GATED = (cmd: string, publish = "  enabled: true\n") =>
+    `name: pinned\nworkspace: empty\npublish:\n${publish}steps:\n  - {id: gate, type: approval, message: "Go?"}\n  - {id: say, type: shell, run: "echo ${cmd}"}\n`;
+  const stored = async (name: string) => ((await call(admin, "GET", `/api/flows/${name}`)).json() as { yaml: string }).yaml;
+  const output = (id: string) => (runJson(id).history as { output: string }[]).map((h) => h.output).join("\n");
+
+  it("does not start a flow that is not published, or a built-in one", async () => {
+    expect((await put(PRIVATE("unpublished"))).status).toBe(200);
+    for (const flow of ["unpublished", "feature"]) {
+      const r = await start(ann, { flow });
+      expect([flow, r.status, r.error()]).toEqual([flow, 404, "flow not found"]);
+    }
+    expect((await start(admin, { flow: "unpublished" })).status).toBe(201);
+    await ctx.scheduler.idle();
+  });
+
+  it("lists and starts a copy of a built-in flow once the admin publishes it", async () => {
+    const flow = parse(readFileSync(resolve("flows/feature.yaml"), "utf8"));
+    flow.publish = { enabled: true, name: "Build a feature" };
+    expect((await put(stringify(flow))).status).toBe(200);
+    try {
+      const listed = ((await call(ann, "GET", "/api/flows")).json() as { name: string; title: string }[]).find((f) => f.name === "feature");
+      expect(listed?.title).toBe("Build a feature");
+      const r = await start(ann, { flow: "feature", task: "t" });
+      expect(r.status).toBe(201);
+      ctx.scheduler.cancel((r.json() as { runId: string }).runId);
+      await ctx.scheduler.idle();
+    } finally {
+      rmSync(join(repo, ".claude-factory", "flows", "feature.yaml"), { force: true });
+    }
+  });
+
+  const VARS = `name: ruled
+workspace: empty
+vars:
+  secret: s1
+  shown: v1
+  topic: ""
+  github_repo: other/thing
+publish:
+  enabled: true
+  vars:
+    shown: {mode: fixed, label: Shown}
+    topic: {mode: input, label: Topic, required: true}
+    secret: {mode: hidden}
+steps:
+  - {id: a, type: shell, run: "true"}
+`;
+
+  it("lets a user set inputs only, and shows fixed values", async () => {
+    expect((await put(VARS)).status).toBe(200);
+    const list = (await call(ann, "GET", "/api/flows")).json() as { name: string; fields: unknown[] }[];
+    expect(list.find((f) => f.name === "ruled")?.fields).toEqual([
+      { name: "shown", mode: "fixed", label: "Shown", value: "v1", required: false },
+      { name: "topic", mode: "input", label: "Topic", value: "", required: true },
+    ]);
+    for (const key of ["secret", "shown", "nothing", "constructor"]) {
+      const r = await start(ann, { flow: "ruled", vars: { topic: "x", [key]: "y" } });
+      expect([key, r.status, r.error()]).toEqual([key, 403, `you cannot set the var "${key}"`]);
+    }
+  });
+
+  it("wants a required input", async () => {
+    for (const vars of [{}, { topic: "" }, { topic: "   " }]) {
+      const r = await start(bob, { flow: "ruled", vars });
+      expect([r.status, r.error()]).toEqual([400, 'fill in "Topic"']);
+    }
+  });
+
+  it("keeps the flow's value for a hidden var and gives the run the user's input", async () => {
+    const r = await start(bob, { flow: "ruled", vars: { topic: "t1" } });
+    expect(r.status).toBe(201);
+    const { runId } = r.json() as { runId: string };
+    await ctx.scheduler.wait(runId);
+    expect(runJson(runId).vars).toMatchObject({ secret: "s1", shown: "v1", topic: "t1" });
+  });
+
+  it("hands an input to a shell step as text, never as a command", async () => {
+    const yaml = `name: echoer\nworkspace: empty\nvars: {topic: ""}\npublish:\n  enabled: true\n  vars:\n    topic: {mode: input}\nsteps:\n  - {id: say, type: shell, run: 'echo "got:$FACTORY_VAR_TOPIC"'}\n`;
+    expect((await put(yaml)).status).toBe(200);
+    const marker = join(tmp, "pwned");
+    const r = await start(ann, { flow: "echoer", vars: { topic: `x; touch ${marker}` } });
+    expect(r.status).toBe(201);
+    const { runId } = r.json() as { runId: string };
+    await ctx.scheduler.wait(runId);
+    expect(output(runId)).toContain(`got:x; touch ${marker}`);
+    expect(existsSync(marker)).toBe(false);
+    const bad = await put(yaml.replace('"got:$FACTORY_VAR_TOPIC"', "{{vars.topic}}"));
+    expect(bad.status).toBe(400);
+  });
+
+  it("refuses a var named __proto__ with 400", async () => {
+    const r = await start(ann, { flow: "walk", vars: { ["__proto__"]: "x" } });
+    expect(r.status).toBe(400);
+    expect(r.error()).toContain("invalid var");
+  });
+
+  it("refuses a fixed repository that is not the user's", async () => {
+    const r = await start(ann, { flow: "ruled", vars: { topic: "t" } });
+    expect([r.status, r.error()]).toEqual([403, "this flow works on a repository that is not one of yours"]);
+  });
+
+  it("refuses to save a published flow with a sub-flow step", async () => {
+    const yaml = "name: nested\nworkspace: empty\npublish:\n  enabled: true\nsteps:\n  - {id: s, type: flow, flow: walk}\n";
+    const r = await put(yaml);
+    expect(r.status).toBe(400);
+    expect(r.error()).toContain("a flow published to users cannot have sub-flow steps");
+    expect((await put(yaml.replace("enabled: true", "enabled: false"))).status).toBe(200);
+  });
+
+  it("keeps the version a run started with and raises it when the flow changes", async () => {
+    const first = await put(GATED("one"));
+    expect(first.status).toBe(200);
+    expect(first.json()).toMatchObject({ version: 1 });
+    expect(await stored("pinned")).toContain("version: 1");
+    const a = await start(ann, { flow: "pinned" });
+    const idA = (a.json() as { runId: string }).runId;
+    expect((await ctx.scheduler.wait(idA))?.status).toBe("waiting");
+
+    const second = await put(GATED("two"));
+    expect(second.json()).toMatchObject({ version: 2 });
+    expect(await stored("pinned")).toContain("version: 2");
+
+    expect((await call(ann, "POST", `/api/runs/${idA}/approve`, {})).status).toBe(202);
+    await ctx.scheduler.idle();
+    expect(output(idA)).toContain("one");
+    expect(runJson(idA).flowDef.publish.version).toBe(1);
+
+    const b = await start(ann, { flow: "pinned" });
+    const idB = (b.json() as { runId: string }).runId;
+    expect((await ctx.scheduler.wait(idB))?.status).toBe("waiting");
+    expect(runJson(idB).flowDef.publish.version).toBe(2);
+    await call(ann, "POST", `/api/runs/${idB}/approve`, {});
+    await ctx.scheduler.idle();
+    expect(output(idB)).toContain("two");
+
+    expect((await put(GATED("two"))).json()).toMatchObject({ version: 2 });
+    expect(await stored("pinned")).toContain("version: 2");
+
+    const off = await put(GATED("two", "  enabled: false\n"));
+    expect(off.status).toBe(200);
+    expect(off.json()).not.toHaveProperty("version");
+  });
+
+  it("compares with the copies of every scope", async () => {
+    const yaml = (cmd: string) => `name: scoped\nworkspace: empty\npublish:\n  enabled: true\n  version: 2\nsteps:\n  - {id: a, type: shell, run: "${cmd}"}\n`;
+    expect((await put(yaml("true"), "global")).json()).toMatchObject({ version: 2 });
+    expect((await put(yaml("echo changed"), "repo")).json()).toMatchObject({ version: 3 });
   });
 });
 
@@ -476,7 +639,7 @@ describe("repositories over HTTP", () => {
     try {
       const list = await call(ann, "GET", "/api/repos");
       expect([list.status, list.error()]).toEqual([500, "the repository list is not working; see the server log"]);
-      const run = await call(ann, "POST", "/api/runs", { flow: "plain", vars: { github_repo: "acme/app" } });
+      const run = await call(ann, "POST", "/api/runs", { flow: "withrepo", vars: { github_repo: "acme/app" } });
       expect([run.status, run.error()]).toEqual([500, "the repository list is not working; see the server log"]);
       expect(logs).toContain("repos: repos.json unreadable");
       expect(logs.join("\n")).not.toContain(tmp);

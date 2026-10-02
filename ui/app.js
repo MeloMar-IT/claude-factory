@@ -75,7 +75,7 @@ function renderSidebar() {
       current && !current.name ? h("li", {}, h("a", { href: "#/new", class: "active" }, h("span", { class: "n" }, current.obj?.name ?? "new flow", h("span", { class: "pill claude" }, "unsaved")))) : null,
       S.flows.map((f) => h("li", { class: f.error ? "bad" : null },
         h("a", { href: `#/flows/${f.name}`, class: current?.name === f.name ? "active" : null },
-          h("span", { class: "n" }, h("span", {}, f.name, current?.name === f.name && current.dirty ? " •" : ""), h("span", { class: "pill" }, f.scope)),
+          h("span", { class: "n" }, h("span", {}, f.name, current?.name === f.name && current.dirty ? " •" : ""), f.published ? h("span", { class: "pill ok" }, "published") : null, h("span", { class: "pill" }, f.scope)),
           h("span", { class: "d" }, f.error ? "invalid flow" : f.description ?? ""))))));
 }
 
@@ -245,14 +245,18 @@ async function save() {
   const exists = S.flows.find((f) => f.name === name);
   if (name !== c.name && exists && exists.scope !== "builtin" && !confirm(`A flow named "${name}" already exists. Overwrite it?`)) return;
   try {
-    await api.saveFlow(name, c.yaml, c.saveScope);
+    const saved = await api.saveFlow(name, c.yaml, c.saveScope);
+    if (saved?.yaml && saved.yaml !== c.yaml) {
+      c.yaml = saved.yaml;
+      c.obj = tryParse(saved.yaml) ?? c.obj;
+    }
     if (c.name && c.name !== name && c.scope !== "builtin") await api.deleteFlow(c.name); // rename
     Object.assign(c, { name, scope: c.saveScope, dirty: false });
     history.replaceState(null, "", `#/flows/${name}`);
     S.lastHash = location.hash;
     await refreshFlows();
     renderFlowView();
-    toast(`Saved ${name}`);
+    toast(saved?.version ? `Saved ${name} — version ${saved.version} for users` : `Saved ${name}`);
   } catch (e) {
     toast(e.message, "error");
   }

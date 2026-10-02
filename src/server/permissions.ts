@@ -32,7 +32,7 @@ export const RULES: Rule[] = [
   r("POST", "providers/test", "no", "test a provider"),
   r("GET", "evals", "no", "eval reports"),
   r("GET", "stats", "no", "statistics"),
-  r("GET", "flows", "yes", "list flows (a user sees the published names only)"),
+  r("GET", "flows", "yes", "list flows (a user sees the published flows only)"),
   r("GET", "flows/:name", "no", "read a flow"),
   r("PUT", "flows/:name", "no", "save a flow"),
   r("DELETE", "flows/:name", "no", "delete a flow"),
@@ -43,7 +43,7 @@ export const RULES: Rule[] = [
   r("POST", "generate", "no", "write a flow with AI"),
   r("GET", "queue", "no", "the queue of all runs"),
   r("GET", "runs", "yes", "list runs (a user sees their own)"),
-  r("POST", "runs", "yes", "start a run (a user: a saved flow and own repositories)"),
+  r("POST", "runs", "yes", "start a run (a user: a published flow and own repositories)"),
   r("GET", "runs/:id", "own", "read a run"),
   r("POST", "runs/:id/cancel", "own", "cancel a run"),
   r("POST", "runs/:id/resume", "own", "resume a run"),
@@ -89,9 +89,9 @@ export function authorize(ctx: ApiContext, user: User, rule: Rule, seg: string[]
   if (ctx.scheduler.ownerOf(seg[1] ?? "") !== user.id) throw new HttpError(403, "not your run");
 }
 
-/** The flows a user may see and start: valid ones whose name a run can use. The list and the start check both use this. */
+/** The flows a user may see and start: valid, published ones whose name a run can use. The list and the start check both use this. */
 export function publishedFlows(repo: string): FlowListing[] {
-  return listFlows(repo).filter((f) => !f.error && NAME_RE.test(f.name));
+  return listFlows(repo).filter((f) => !f.error && NAME_RE.test(f.name) && f.published === true);
 }
 
 /** The table for the guide, in Markdown. */

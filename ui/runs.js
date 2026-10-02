@@ -130,7 +130,10 @@ export function stepEntry(runId, s, i) {
 }
 
 /** The raw reason of a run, shown as a detail under the plain text. */
-export const detailsRow = (s) => (s.reason ? [h("dt", {}, "Details"), h("dd", { style: { whiteSpace: "pre-wrap" } }, s.reason)] : null);
+/** The published version of the flow a run started with; null for a flow that is not published. */
+export const versionRow = (s) => (s.flowDef?.publish?.enabled ? [h("dt", {}, "Flow version"), h("dd", {}, String(s.flowDef.publish.version))] : null);
+
+export const detailsRow =(s) => (s.reason ? [h("dt", {}, "Details"), h("dd", { style: { whiteSpace: "pre-wrap" } }, s.reason)] : null);
 
 function diffView(d) {
   if (!d.patch) return h("p", { class: "muted" }, "No changes (or the workspace is not a git checkout).");
@@ -223,6 +226,7 @@ export function renderRunDetail(main, runId, { admin = true } = {}) {
           h("dt", {}, "Run"), h("dd", {}, s.runId),
           s.branch ? [h("dt", {}, "Branch"), h("dd", {}, s.branch)] : null,
           s.workdir ? [h("dt", {}, "Workspace"), h("dd", {}, s.workdir)] : null,
+          versionRow(s),
           stepRow(s),
           detailsRow(s))));
     if (tab === "steps" && (!prev || prev.history.length !== s.history.length)) showTab("steps");
