@@ -2,7 +2,7 @@
 // Stand-in for `codex exec --json`: reads the prompt from stdin, emits Codex JSONL events.
 // Prompt directives: "WRITE <file> <text>" writes a file; "SAY <text>" sets the answer;
 // "LIMIT" fails with a rate limit. Args are echoed into the answer for assertions.
-import { writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 
 let prompt = "";
 for await (const chunk of process.stdin) prompt += chunk;
@@ -13,6 +13,13 @@ const thread = resumeAt >= 0 ? args[args.indexOf("-") - 1] : `thread-${Math.rand
 
 emit({ type: "thread.started", thread_id: thread });
 emit({ type: "turn.started" });
+// "at capacity" until the file named by CODEX_CAPACITY_ONCE exists (fails once, then works).
+const once = /CODEX_CAPACITY_ONCE (\S+)/.exec(prompt)?.[1];
+if (once && !existsSync(once)) {
+  writeFileSync(once, "");
+  emit({ type: "turn.failed", error: { message: "Selected model is at capacity. Please try a different model." } });
+  process.exit(1);
+}
 if (prompt.includes("CODEX_LIMIT")) {
   emit({ type: "turn.failed", error: { message: "You've hit your usage limit (429 rate limit)" } });
   process.exit(1);

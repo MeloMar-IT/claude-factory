@@ -4,6 +4,7 @@ Changes that are merged but not yet in a release go under **Unreleased**. Newest
 
 ## Unreleased
 
+- A briefly unavailable AI service ("at capacity", overloaded, a network blip) no longer fails the story: the step is tried again after 1 and 3 minutes, and only then paused like a usage limit.
 - Flows cleaned up: only the gitflow pipeline (`epic-questions`, `issue-gitflow`, `release-daily`) and the human-in-the-loop pipeline (`issue-plan`, `issue-code-daily`, `daily-pr`) ship. Retired: `quick`, `feature`, `cross-review`, `github-issue`, `github-pr`, `github-auto`, `issue-deliver`, `pr-feedback`, `ci-fix`, `chore`, `jira-ticket`, `linear-ticket` (kept as test material). Watcher defaults: issues → `issue-gitflow`, schedule → `release-daily`. A flow in use by a watcher (also a disabled one) or by another flow can't be deleted.
 - Blocking or deleting an account stops its work (#61).
   - **What is cancelled.** The jobs the account queued are dropped; its running runs finish; runs that wait for approval stay. The server checks every 2 seconds (`accountSweepMs`) and at start, before any job starts. A job queued by a blocked or deleted account never starts, also after a restart. Deleting an account does the same.

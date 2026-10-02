@@ -133,6 +133,13 @@ export function fallbackTargets(config: Config, filter: (t: Target) => boolean =
 
 const LIMIT_RE = /hit your (?:usage )?limit|rate.?limit|usage limit|limit reached|overloaded|too many requests|quota|\b429\b|\b529\b/i;
 
+/** The service is briefly unavailable (overloaded, at capacity, network): worth a short wait and a retry. */
+const TRANSIENT_RE = /at capacity|overloaded|temporarily unavailable|service unavailable|try again (?:later|in a)|internal server error|bad gateway|gateway time-?out|\b50[0234]\b|\b529\b|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket hang up|can't reach the api server|network error|connection (?:reset|refused|error)/i;
+
+export function isTransientError(error: string | undefined, output: string): boolean {
+  return TRANSIENT_RE.test(`${error ?? ""}\n${output.length < 400 ? output : ""}`);
+}
+
 /** A limit message is short; a long answer that merely mentions "quota" is not one. */
 export function isLimitError(error: string | undefined, output: string): boolean {
   return LIMIT_RE.test(`${error ?? ""}\n${output.length < 400 ? output : ""}`);

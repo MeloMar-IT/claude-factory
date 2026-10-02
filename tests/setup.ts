@@ -13,3 +13,4 @@ for (const k of Object.keys(process.env)) {
 process.env.FACTORY_HOME = mkdtempSync(join(tmpdir(), "factory-home-"));
 process.env.FACTORY_LOCK_DIR = join(process.env.FACTORY_HOME, "locks");
 process.env.FACTORY_NO_NOTIFY = "1";
+process.env.FACTORY_TRANSIENT_RETRY_MS = "20,20"; // retries of a briefly unavailable service: quick in tests
