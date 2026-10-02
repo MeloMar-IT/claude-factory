@@ -148,7 +148,7 @@ const EXAMPLES: Record<string, Example> = {
   "POST runs/:id/reject": { path: "runs/nope/reject", body: {}, user: 404, admin: 404 },
   "GET runs/:id/events": { path: "runs/nope/events", user: 404, admin: 200 },
   "GET runs/:id/diff": { path: "runs/nope/diff", user: 404, admin: 404 },
-  "GET runs/:id/transcript/:n": { path: "runs/nope/transcript/0", user: 404, admin: 404 },
+  "GET runs/:id/transcript/:n": no("runs/nope/transcript/0", 404),
   "GET next": no("next", 200),
   "GET health": no("health", 200),
   "GET board": no("board", 200),
@@ -275,7 +275,6 @@ describe("own runs", () => {
     "POST runs/:id/reject": 202,
     "GET runs/:id/events": 200,
     "GET runs/:id/diff": 200,
-    "GET runs/:id/transcript/:n": 200,
   };
   const own = RULES.filter((r) => r.user === "own");
 

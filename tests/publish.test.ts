@@ -49,6 +49,23 @@ describe("publish schema", () => {
     expect(flow("vars: {topic: a}\npublish: {vars: {topic: {mode: fixed}}}\n", run("echo {{vars.topic}}")).steps).toHaveLength(1);
   });
 
+  it("refuses an approval message that shows a variable users do not see", () => {
+    const vars = "vars: {h: a, f: b, i: c, u: d, github_repo: x/y, issue: '1'}\n";
+    const pub = `${vars}publish: {enabled: true, vars: {h: {mode: hidden}, f: {mode: fixed}, i: {mode: input}}}\n`;
+    const ask = (msg: string) => `steps:\n  - {id: ok, type: approval, message: '${msg}'}\n`;
+    expect(fail(pub, ask("Go with {{vars.h}}?"))).toContain('"h" is hidden');
+    expect(fail(pub, ask("Go with {{ vars.u }}?"))).toContain('"u"');
+    expect(fail(pub, ask("All: {{vars}}"))).toContain("{{vars}}");
+    for (const ok of ["{{vars.f}}", "{{vars.i}}", "{{vars.github_repo}}", "{{vars.issue}}", "{{task}}", "{{steps.a.output}}"]) {
+      expect(flow(pub, ask(`Go with ${ok}?`)).steps).toHaveLength(1);
+    }
+    for (const bad of ["{{workdir}}", "{{run.dir}}", "{{learnings}}", "{{steps}}", "{{steps.a}}", "{{steps.a.agent}}", "{{steps.a.session_id}}", "{{steps.a.output.x}}"]) {
+      expect(fail(pub, ask(`Go ${bad}?`)), bad).toContain("shown to users");
+    }
+    // The same flow, not published, is fine.
+    expect(flow(`${vars}publish: {enabled: false, vars: {h: {mode: hidden}}}\n`, ask("Go with {{vars.h}}?")).steps).toHaveLength(1);
+  });
+
   it("refuses names that give the same environment variable", () => {
     const head = (mode: string) => `vars: {foo-bar: a, foo_bar: b}\npublish: {vars: {foo-bar: {mode: ${mode}}}}\n`;
     expect(fail(head("input"))).toContain("FACTORY_VAR_FOO_BAR");

@@ -186,13 +186,16 @@ its description, or the kind of step when the flow gives none.
 ![Live log](images/run-log.png)
 
 - **Live log** — each step as it starts and ends, with the agent's tool calls, duration, cost or
-  tokens.
+  tokens. A user sees the steps and the tool names only.
 - **Steps & transcripts** — every step with its outcome. Open an agent step to read the whole
   conversation: what it said, each command it ran and the output, and the final result. The
   label next to the step name shows which agent and model ran it (here Claude on Haiku wrote the
   code, and Codex reviewed it).
 
   ![Steps and transcripts](images/run-steps.png)
+
+  A user sees **Steps** only: each step with its result and a plain sentence for a failure, but
+  no output, no transcripts and no cost.
 
 - **Changes** — the complete diff the run made, including uncommitted work.
 
@@ -310,7 +313,9 @@ how steps connect: grey = next, green = on success, red dashed = on failure, pur
   "Required" and a default). Tick **Own default** to give the input its own default, even an
   empty one; unticked, it uses the flow's value. The version goes up by itself when you save a
   change. A published flow cannot have sub-flow steps, and a shell step must read an input as
-  `$FACTORY_VAR_NAME`, not `{{vars.name}}`.
+  `$FACTORY_VAR_NAME`, not `{{vars.name}}`. An approval message is shown to users, so it may only
+  use `{{task}}`, `{{vars.<name>}}` of a variable users see (fixed or input, or `github_repo` or
+  `issue`) and `{{steps.<id>.output}}`; the flow is refused on save otherwise.
 
 ### Let any AI write a flow
 
@@ -925,6 +930,16 @@ not in the table below answers 404, also for an admin.
   table. Every other call answers `403 {"error":"not allowed for your role"}`. Pages other than
   Runs are not drawn; the address bar goes back to `#/runs`.
 
+**What a user does not see.** The server cuts these from every answer a user gets, so the page
+cannot show them: costs, tokens, budgets and prices; the model, provider and agent; step output
+and transcripts (`GET runs/:id/transcript/:n` is for admins only); tool arguments in the log;
+settings, folders and the raw reason of a failure; hidden variables of the flow. A user sees the
+status, the log (steps and tool names), the questions and approvals, the steps with their result,
+and the changes. A limit reads "the administrator's limit was reached". An unexpected error
+answers "something went wrong on the server; ask the administrator" and the details go to the
+server log. Notifications are not changed: they go to your channels with your wording, also for
+runs users started, so the Slack webhook should not point at a channel users read.
+
 **Your own runs.** A run has an owner: the account that started it. A user sees and may follow,
 cancel, resume, approve, reject and read only their own runs. Another account's run, an unknown
 run and a run without an owner all answer `404 {"error":"run not found"}`, so a guessed id tells
@@ -1020,14 +1035,14 @@ Change a role with `scf user role <e-mail> admin|user`, or create an admin with
 | `GET /api/runs` | yes | yes | list runs (a user sees their own) |
 | `GET /api/run-owners` | yes | no | the accounts that have runs, for the owner filter |
 | `POST /api/runs` | yes | yes | start a run (a user: a published flow and own repositories) |
-| `GET /api/runs/:id` | yes | own runs | read a run |
+| `GET /api/runs/:id` | yes | own runs | read a run (a user: without costs and setup) |
 | `POST /api/runs/:id/cancel` | yes | own runs | cancel a run |
 | `POST /api/runs/:id/resume` | yes | own runs | resume a run |
 | `POST /api/runs/:id/approve` | yes | own runs | approve a run, with a note |
 | `POST /api/runs/:id/reject` | yes | own runs | reject a run, with a note |
-| `GET /api/runs/:id/events` | yes | own runs | follow a run live |
+| `GET /api/runs/:id/events` | yes | own runs | follow a run live (a user: without costs and setup) |
 | `GET /api/runs/:id/diff` | yes | own runs | the changes of a run |
-| `GET /api/runs/:id/transcript/:n` | yes | own runs | the transcript of a step |
+| `GET /api/runs/:id/transcript/:n` | yes | no | the transcript of a step |
 | `GET /api/next` | yes | no | what happens next, for all runs |
 | `GET /api/health` | yes | no | server health |
 | `GET /api/board` | yes | no | the board of all work |

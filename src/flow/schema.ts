@@ -275,6 +275,22 @@ export const FlowSchema = z
       });
     }
     if (flow.publish?.enabled) {
+      // The message of an approval is shown to users: it may only name variables they see.
+      const seen = (key: string) => key === "github_repo" || key === "issue" || ["fixed", "input"].includes(flow.publish?.vars[key]?.mode ?? "");
+      flow.steps.forEach((s, i) => {
+        if (s.type !== "approval") return;
+        for (const m of s.message.matchAll(/\{\{\s*([\w.-]+)\s*\}\}/g)) {
+          const path = m[1]!;
+          const root = path.split(".")[0]!;
+          if (!["task", "vars", "steps"].includes(root) || (root === "steps" && !/^steps\.[\w-]+\.output$/.test(path))) {
+            ctx.addIssue({ code: "custom", path: ["steps", i, "message"], message: `the approval message is shown to users; {{${path}}} can hold paths or setup, so use only {{task}}, {{vars.<name>}} or {{steps.<id>.output}}` });
+          } else if (path === "vars") {
+            ctx.addIssue({ code: "custom", path: ["steps", i, "message"], message: "the approval message is shown to users; {{vars}} holds every variable, so name only the variables users see" });
+          } else if (path.startsWith("vars.") && !seen(path.slice(5))) {
+            ctx.addIssue({ code: "custom", path: ["steps", i, "message"], message: `the approval message is shown to users; "${path.slice(5)}" is hidden from them or not listed in publish.vars, so use only variables users see` });
+          }
+        }
+      });
       flow.steps.forEach((s, i) => {
         if (s.type === "flow") {
           ctx.addIssue({ code: "custom", path: ["steps", i, "type"], message: "a flow published to users cannot have sub-flow steps; copy the steps in" });

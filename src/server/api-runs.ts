@@ -15,6 +15,7 @@ import { guardedRepos } from "./api-repos.js";
 import { publishedFlows } from "./permissions.js";
 import { HttpError, NAME_RE, readJson, send, str } from "./http.js";
 import { hideForeign, nextFor, ownQueue, ownRecord, queueWithNext } from "./next.js";
+import { hidePaths, userLogLine, userRecord, userRun } from "./user-view.js";
 import type { NextStep } from "../next-step.js";
 import type { RunEvent } from "../queue/scheduler.js";
 import type { Route } from "./server.js";
@@ -27,7 +28,9 @@ export const runRoutes: Route = async (ctx, req, res, seg, method, user) => {
   const admin = user.role === "admin";
   // What a user sees of a record: another account's run is not named in it.
   const mine = (rid: string) => scheduler.ownerOf(rid) === user.id;
-  const view = admin ? (n: NextStep) => n : (n: NextStep) => ownRecord(n, mine);
+  const view = admin ? (n: NextStep) => n : (n: NextStep) => userRecord(ownRecord(n, mine));
+  // What a user sees of a run: no costs and no setup (see user-view.ts).
+  const shape: (r: RunSummary & { next?: NextStep; superseded?: boolean; ownerName?: string }) => unknown = admin ? (r) => r : userRun;
   const hide = <T,>(v: T): T => (admin ? v : hideForeign(v, mine));
   if (seg[0] === "queue" && method === "GET") return send(res, 200, admin ? queueWithNext(ctx) : ownQueue(ctx, user.id)), true;
   if (seg[0] === "run-owners" && !seg[1] && method === "GET") {
@@ -55,14 +58,14 @@ export const runRoutes: Route = async (ctx, req, res, seg, method, user) => {
       ? scheduler.briefs().filter((b) => b.owner === want).slice(0, 200).map((b) => ({ dir: b.dirName, s: scheduler.get(b.dirName) })).filter((x): x is { dir: string; s: RunSummary } => !!x.s && x.s.runId === x.dir && x.s.owner === want).map((x) => x.s)
       : scheduler.list(200);
     const replaced = supersededRuns(runs);
-    const next = nextFor(ctx, runs);
+    const next = nextFor(ctx, runs, !admin);
     const names = admin ? ownerNames() : undefined;
-    return send(res, 200, runs.map((r) => hide({
+    return send(res, 200, runs.map((r) => hide(shape({
       ...r,
       ...(replaced.has(r.runId) ? { superseded: true } : {}),
       ...(names && r.owner ? { ownerName: names.get(r.owner) ?? "deleted account" } : {}),
       next: view(next(r)),
-    }))), true;
+    })))), true;
   }
   if (!id && method === "POST") {
     const body = await readJson(req);
@@ -92,7 +95,11 @@ export const runRoutes: Route = async (ctx, req, res, seg, method, user) => {
       if (!NAME_RE.test(name)) throw new HttpError(400, "invalid flow name");
       const listing = publishedFlows(opts.repo).find((f) => f.name === name);
       if (!listing) throw new HttpError(404, "flow not found");
-      flow = parseFlow(readFileSync(listing.path, "utf8"), listing.path);
+      try {
+        flow = parseFlow(readFileSync(listing.path, "utf8"), listing.path);
+      } catch {
+        throw new HttpError(404, "flow not found"); // the message of a failure holds a file path
+      }
       if (!isPublished(flow)) throw new HttpError(404, "flow not found");
       repo = resolve(opts.repo);
       if (!existsSync(repo)) throw new HttpError(400, "the server's folder was not found");
@@ -135,6 +142,8 @@ export const runRoutes: Route = async (ctx, req, res, seg, method, user) => {
     const from = str(body, "from", false) || undefined;
     const vars = s.vars ?? {};
     const lockKey = vars.github_repo && (vars.issue || vars.pr) ? `${vars.github_repo}#${vars.issue || vars.pr}` : undefined;
+    // The same answer for both roles; any other failure of submit is unexpected (and generic for a user).
+    if (scheduler.isActive(id) || scheduler.isQueued(id)) throw new HttpError(400, `run ${id} is already queued or running`);
     scheduler.submit(
       action === "resume"
         ? { kind: "resume", runId: id, from }
@@ -149,12 +158,19 @@ export const runRoutes: Route = async (ctx, req, res, seg, method, user) => {
     // What a viewer sees of the record, sent last.
     const shown = (n: NextStep) => [n.text, n.until, n.timing?.progress, n.timing?.estimate, n.timing?.note].join("\n");
     let last = "";
+    // The folders of the run, to take out of what a user reads.
+    let known = admin ? undefined : scheduler.get(id);
     const write = (e: RunEvent) => {
       let out: unknown = e;
       if (e.type === "update") {
-        const next = view(nextFor(ctx)(e.summary));
+        known = admin ? undefined : e.summary;
+        const next = view(nextFor(ctx, undefined, !admin)(e.summary));
         last = shown(next);
-        out = { ...e, summary: { ...e.summary, next } };
+        out = { type: "update", summary: shape({ ...e.summary, next }) };
+      } else if (!admin) {
+        const line = userLogLine(e.line);
+        if (line === undefined) return;
+        out = { type: "log", line: hidePaths(line, known) };
       }
       const data = redactedJson(hide(out));
       if (data === undefined) return void res.write(`event: log\ndata: ${JSON.stringify({ type: "log", line: CANNOT_READ })}\n\n`);
@@ -164,7 +180,7 @@ export const runRoutes: Route = async (ctx, req, res, seg, method, user) => {
     // A wait for a code area shows up in the step log only, without an update event: look again now and then.
     const recheck = setInterval(() => {
       const s = scheduler.get(id);
-      if (s?.status === "running" && shown(view(nextFor(ctx)(s))) !== last) write({ type: "update", summary: s });
+      if (s?.status === "running" && shown(view(nextFor(ctx, undefined, !admin)(s))) !== last) write({ type: "update", summary: s });
     }, NEXT_RECHECK_MS);
     const ping = setInterval(() => res.write(": ping\n\n"), 15_000);
     req.on("close", () => {
@@ -177,7 +193,7 @@ export const runRoutes: Route = async (ctx, req, res, seg, method, user) => {
 
   const s = scheduler.get(id);
   if (!s) throw new HttpError(404, "run not found");
-  if (!action && method === "GET") return send(res, 200, hide({ ...s, next: view(nextFor(ctx)(s)) })), true;
+  if (!action && method === "GET") return send(res, 200, hide(shape({ ...s, next: view(nextFor(ctx, undefined, !admin)(s)) }))), true;
   if (action === "diff" && method === "GET") return send(res, 200, runDiff(s)), true;
   if (action === "transcript" && method === "GET") {
     const n = Number(seg[3]);

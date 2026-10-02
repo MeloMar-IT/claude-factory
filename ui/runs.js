@@ -10,7 +10,7 @@ const what = (r) => (r.vars?.issue ? `${r.vars.github_repo}#${r.vars.issue}` : r
 const REFRESH_MS = 30_000;
 
 /** A row of the Runs list: the status name of the record with its "?", then flow, task, steps, cost, start. */
-export const runRow = (r, { owner = false } = {}) => h("tr", { class: "link", onClick: () => (location.hash = `#/runs/${r.runId}`) },
+export const runRow = (r, { owner = false, cost = true } = {}) => h("tr", { class: "link", onClick: () => (location.hash = `#/runs/${r.runId}`) },
   h("td", {}, r.next ? nextStatus(r.next) : null),
   h("td", {}, h("b", {}, r.flow), what(r) ? h("div", { class: "muted mono", style: { fontSize: "11.5px" } }, what(r)) : null),
   h("td", { class: "task", title: r.task }, r.task || h("span", { class: "muted" }, "—"),
@@ -18,7 +18,7 @@ export const runRow = (r, { owner = false } = {}) => h("tr", { class: "link", on
     r.next && whenParts(r.next).length ? h("div", { class: "next-parts timing" }, whenParts(r.next)) : null),
   owner ? h("td", {}, r.ownerName ?? "—") : null,
   h("td", { class: "mono" }, r.history?.length ?? 0),
-  h("td", { class: "mono" }, money(r.totalCostUsd)),
+  cost ? h("td", { class: "mono" }, money(r.totalCostUsd)) : null,
   h("td", { class: "muted" }, timeAgo(r.startedAt)));
 
 /** "2 runs ahead of you": other accounts' queued runs in front of a user's own. */
@@ -38,7 +38,7 @@ export function stepRow(s) {
   const id = s.state?.next;
   if (!id || s.status === "succeeded") return null;
   const step = s.flowDef?.steps?.find((st) => st.id === id);
-  const about = step?.description || STEP_TYPES[step?.type]?.label || "what this step does is not saved with this run";
+  const about = step?.description || (step?.type === "agent" ? "Agent" : STEP_TYPES[step?.type]?.label) || "what this step does is not saved with this run";
   return [h("dt", {}, s.status === "running" ? "Current step" : "Resumes at step"), h("dd", {}, id, h("span", { class: "muted" }, ` — ${about}`))];
 }
 
@@ -52,10 +52,10 @@ export async function renderRunsList(main, { admin = true } = {}) {
     const [runs, queue, owners] = await Promise.all([api.runs(admin ? owner : ""), api.queue(), admin ? api.runOwners() : []]);
     if (!main.isConnected) return;
     const yours = needsYou(runs);
-    const cols = ["Status", "Flow", "Task / what happens next", ...(admin ? ["Owner"] : []), "Steps", "Cost", "Started"];
+    const cols = ["Status", "Flow", "Task / what happens next", ...(admin ? ["Owner"] : []), "Steps", ...(admin ? ["Cost"] : []), "Started"];
     const table = (list) => h("table", { class: "table" },
       h("thead", {}, h("tr", {}, cols.map((t) => h("th", {}, t)))),
-      h("tbody", {}, list.map((r) => runRow(r, { owner: admin }))));
+      h("tbody", {}, list.map((r) => runRow(r, { owner: admin, cost: admin }))));
     const filter = admin ? h("select", { class: "small-select", title: "Show the runs of one account", onChange: (e) => { owner = e.target.value; draw(); } },
       h("option", { value: "" }, "All owners"),
       owners.map((o) => h("option", { value: o.id, selected: o.id === owner }, `${o.name} (${o.runs})`))) : null;
@@ -116,6 +116,18 @@ function stepsView(runId, summary) {
 
 /** One finished step: summary line, the raw error under "Details", and the output or transcript when opened. */
 export function stepEntry(runId, s, i) {
+  // A user's view has no output: a plain row that cannot be opened and never asks for a transcript.
+  if (!("output" in s)) {
+    return h("div", { class: "tl" },
+      h("div", { class: "row" },
+        h("span", { class: `pill ${s.ok ? "ok" : "fail"}` }, s.ok ? "✔" : "✘"),
+        h("b", { class: "mono" }, s.id),
+        s.visit > 1 ? h("span", { class: "pill" }, `visit ${s.visit}`) : null,
+        h("span", { class: "muted" }, s.type === "agent" ? "Agent" : s.type),
+        h("span", { class: "spacer" }),
+        h("span", { class: "muted mono" }, secs(s.durationMs))),
+      s.error ? h("p", { class: "muted", style: { margin: "4px 12px" } }, s.error) : null);
+  }
   const body = h("div");
   return h("details", {
     class: "tl",
@@ -210,7 +222,7 @@ export function renderRunDetail(main, runId, { admin = true } = {}) {
   };
 
   const tabs = h("div", { class: "seg tabs", style: { marginBottom: "12px" } },
-    [["log", "Live log"], ["steps", "Steps & transcripts"], ["diff", "Changes"]].map(([k, l]) =>
+    [["log", "Live log"], ["steps", admin ? "Steps & transcripts" : "Steps"], ["diff", "Changes"]].map(([k, l]) =>
       h("button", { "data-tab": k, class: k === tab ? "on" : null, onClick: () => showTab(k) }, l)));
 
   mount(main, head, tabs, tabBody);
@@ -224,7 +236,7 @@ export function renderRunDetail(main, runId, { admin = true } = {}) {
         h("a", { href: "#/runs", class: "btn ghost" }, "←"),
         h("h1", {}, s.flow),
         s.next ? nextStatus(s.next) : null,
-        h("span", { class: "muted mono" }, money(s.totalCostUsd)),
+        admin ? h("span", { class: "muted mono" }, money(s.totalCostUsd)) : null,
         s.resumes ? h("span", { class: "muted" }, `resumed ${s.resumes}×`) : null,
         h("span", { class: "spacer" }),
         ...actions(s),
@@ -232,6 +244,7 @@ export function renderRunDetail(main, runId, { admin = true } = {}) {
       s.next ? nextBlock(s.next) : null,
       h("div", { class: "card", style: { marginBottom: "16px" } },
         s.task ? h("p", { style: { margin: 0, whiteSpace: "pre-wrap" } }, s.task) : null,
+        s.questions ? h("pre", { class: "mono", style: { whiteSpace: "pre-wrap" } }, h("b", {}, "Questions"), "\n", s.questions) : null,
         h("dl", { class: "meta" },
           what(s) ? [h("dt", {}, "Ticket"), h("dd", {}, what(s))] : null,
           h("dt", {}, "Run"), h("dd", {}, s.runId),
