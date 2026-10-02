@@ -4,6 +4,13 @@ Changes that are merged but not yet in a release go under **Unreleased**. Newest
 
 ## Unreleased
 
+- One status comment per issue (#53).
+  - **Behaviour.** An issue watcher keeps one comment on every issue it follows with the next step (the record the app shows, in plain words for a reader of the issue). It is edited, never posted again. It also covers done issues, a wait for the scheduled release, an issue closed while its run works, and an issue the watcher no longer follows (last text). Two watchers on one issue share the comment. Status comments never count as questions, answers or approval requests. Extra status comments of the Foundry's own account are removed (at most 5 per read); a comment of another account is never touched.
+  - **Option.** `status_comment` on a watcher, `true` by default. Off, removed or disabled watchers leave their comments as they are.
+  - **First check after the upgrade.** One new comment (one notification) per open issue a watcher tracks, at most 30 per check; the rest follows at the next check. A check spends at most 60 seconds on comments, and a failing comment only shows in the log.
+  - **File.** `status-comments.json` in the data folder keeps the issue numbers (per repository and watcher) that have a status comment, so a last text is written after a restart. Bodies and comment ids stay in memory.
+  - **Needs a check on a real repository.** It assumes `gh issue view --json comments` returns `url` and `viewerDidAuthor`, `gh issue comment` prints the comment link, and `gh api … --input -` takes JSON on stdin.
+  - **Code.** `src/queue/status-comment.ts` (`statusBody`, `leftBody`, `statusTargets`, `StatusComments`), `src/issue-record.ts` (`issueRecord`, shared with `src/server/next.ts`), `upsertStatusComment`, `isStatusComment`, `commentId` and `sameBody` in `src/github.ts`.
 - A run that waits for a person (questions, a decision) ends by itself when its issue is closed on GitHub, so it no longer shows as needing attention.
 - Gitflow merge: changes left on the feature branch are committed (never dropped); a failed switch to `develop` or a push error stops the run with the real message instead of looping; only a `develop` that moved meanwhile is merged again.
 - Claude's "session limit" (and weekly / 5-hour limits) pause a run like a usage limit instead of failing it.

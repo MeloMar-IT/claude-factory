@@ -1,6 +1,7 @@
 import type { Config, WatcherConfig } from "../config.js";
 import type { RunSummary } from "../engine/state.js";
 import type { Scheduler } from "./scheduler.js";
+import { StatusComments, statusFile } from "./status-comment.js";
 import { Watcher, type WatcherStatus } from "./watcher.js";
 
 export interface WatcherManagerOptions {
@@ -25,7 +26,19 @@ export class WatcherManager {
   /** Watchers stopped by stopAll() (a drain); read live so a tick still in flight shows up. */
   private drained: Watcher[] = [];
 
+  /** One writer of status comments per repository, shared by its watchers. */
+  private boards = new Map<string, StatusComments>();
+
   constructor(private o: WatcherManagerOptions) {}
+
+  private board(repo: string): StatusComments {
+    let b = this.boards.get(repo);
+    if (!b) {
+      b = new StatusComments(repo, (m) => this.o.log(`[${repo}] ${m}`), { file: statusFile() });
+      this.boards.set(repo, b);
+    }
+    return b;
+  }
 
   sync() {
     this.drained = [];
@@ -34,6 +47,7 @@ export class WatcherManager {
       const cfg = wanted.get(id);
       if (!cfg || JSON.stringify(cfg) !== r.key) {
         r.watcher.stop();
+        this.board(r.watcher.cfg.github_repo).forget(id);
         this.running.delete(id);
         this.o.log(`[${id}] watcher stopped`);
       }
@@ -47,6 +61,8 @@ export class WatcherManager {
         dailyBudget: () => (this.o.config().cost_limits ? this.o.config().daily_budget_usd : undefined),
         areaWait: this.o.areaWait,
         log: this.o.log,
+        statusComments: this.board(cfg.github_repo),
+        watchers: () => this.o.config().watchers,
       });
       this.running.set(id, { watcher, key: JSON.stringify(cfg) });
       watcher.start();

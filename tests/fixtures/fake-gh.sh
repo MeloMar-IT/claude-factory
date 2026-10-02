@@ -5,6 +5,17 @@ echo "gh $*" >> "$FAKE_GH_LOG"
 if [ -n "$FAKE_GH_SLEEP" ]; then sleep "$FAKE_GH_SLEEP"; fi
 # $FAKE_GH_FAIL="issue list": that call prints $FAKE_GH_FAIL_TEXT (default "boom") to stderr and fails.
 if [ -n "$FAKE_GH_FAIL" ] && [ "$FAKE_GH_FAIL" = "$1 $2" ]; then printf '%s\n' "${FAKE_GH_FAIL_TEXT:-boom}" >&2; exit 1; fi
+# Edit or delete of a comment (gh api repos/…/issues/comments/<id> [-X DELETE]): logged, the edit with the body field of the JSON on stdin.
+all="$*"
+case "$all" in "api repos/"*"/issues/comments/"*)
+  id=${all##*/issues/comments/}; id=${id%% *}
+  case "$all" in
+    *DELETE*) echo "--- comment delete $id" >> "$FAKE_GH_LOG" ;;
+    *) echo "--- comment edit $id:" >> "$FAKE_GH_LOG"
+       node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).body))' >> "$FAKE_GH_LOG" ;;
+  esac
+  echo '{}'; exit 0 ;;
+esac
 case "$1 $2" in
   "repo view")
     case "$*" in *--jq*|*nameWithOwner*) echo "repo: owner/repo"; echo "default branch: main" ;;
@@ -26,7 +37,9 @@ case "$1 $2" in
     case "$*" in *--body-file*) cat >> "$FAKE_GH_LOG" ;;
       *) prev=""; for a in "$@"; do [ "$prev" = "--body" ] && printf '%s\n' "$a" >> "$FAKE_GH_LOG"; prev="$a"; done ;;
     esac
-    echo "https://github.com/owner/repo/issues/$3#issuecomment-1" ;;
+    printf '\n--- end comment\n' >> "$FAKE_GH_LOG" # a body may end without a line end
+    cn=$(($(cat "$FAKE_GH_LOG.comments" 2>/dev/null || echo 0) + 1)); echo "$cn" > "$FAKE_GH_LOG.comments"
+    echo "https://github.com/owner/repo/issues/$3#issuecomment-$cn" ;;
   "issue create") n=$(($(cat "$FAKE_GH_LOG.created" 2>/dev/null || echo 100) + 1)); echo "$n" > "$FAKE_GH_LOG.created"
                   echo "--- created issue: $*" >> "$FAKE_GH_LOG"; case "$*" in *--body-file*) cat >> "$FAKE_GH_LOG" ;; esac
                   echo "https://github.com/owner/repo/issues/$n" ;;

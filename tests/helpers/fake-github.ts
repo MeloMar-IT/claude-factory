@@ -21,6 +21,10 @@ export function fakeGithub() {
   git(seed, "add", ".");
   git(seed, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init");
   git(tmp, "clone", "-q", "--bare", seed, remote);
+  // A status comment has its marker on the last line; a comment that only quotes the marker is not one.
+  const STATUS_END = /<!-- (?:claude-factory|spaghetti-code-foundry) status -->$/;
+  const logged = () =>
+    [...readFileSync(join(tmp, "gh.log"), "utf8").matchAll(/^--- comment on #(\d+):\n([\s\S]*?)\n--- end comment$/gm)].map((m) => ({ issue: Number(m[1]), body: m[2]!.trimEnd() }));
 
   // Retired flows (no longer shipped) are test material: make them repo flows of the test repository.
   const flowsDir = join(tmp, ".claude-factory", "flows");
@@ -32,6 +36,8 @@ export function fakeGithub() {
   symlinkSync(resolve("tests/fixtures/fake-gh.sh"), join(bin, "gh"));
   const ghLog = join(tmp, "gh.log");
   writeFileSync(ghLog, "");
+  // The status comments the Foundry remembers must not leak from one test into the next.
+  rmSync(join(process.env.FACTORY_HOME ?? tmp, "status-comments.json"), { force: true });
   Object.assign(process.env, {
     PATH: `${bin}:${process.env.PATH}`,
     FAKE_GH_LOG: ghLog,
@@ -45,9 +51,15 @@ export function fakeGithub() {
     tmp,
     remote,
     ghLog: () => readFileSync(ghLog, "utf8"),
-    /** Every comment the fake gh logged (up to its hidden marker). */
-    comments: () =>
-      [...readFileSync(ghLog, "utf8").matchAll(/^--- comment on #(\d+):\n([\s\S]*?<!-- claude-factory[^>]*-->)/gm)].map((m) => ({ issue: Number(m[1]), body: m[2]! })),
+    /** Every comment the fake gh logged (up to its hidden marker), the status comments left out. */
+    comments: () => logged().filter((c) => !STATUS_END.test(c.body)),
+    /** The status comments that were created. */
+    statusComments: () => logged().filter((c) => STATUS_END.test(c.body)),
+    /** The status comments that were edited (the id and the new text). */
+    statusEdits: () =>
+      [...readFileSync(ghLog, "utf8").matchAll(/^--- comment edit (\d+):\n([\s\S]*?<!-- claude-factory status -->)/gm)].map((m) => ({ id: m[1]!, body: m[2]! })),
+    /** The ids of the comments that were deleted. */
+    statusDeletes: () => [...readFileSync(ghLog, "utf8").matchAll(/^--- comment delete (\d+)$/gm)].map((m) => m[1]!),
     remoteGit: (...a: string[]) => git(remote, ...a),
     restore: () => {
       process.env = { ...env };
