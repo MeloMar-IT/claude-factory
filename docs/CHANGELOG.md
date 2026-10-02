@@ -4,6 +4,7 @@ Changes that are merged but not yet in a release go under **Unreleased**. Newest
 
 ## Unreleased
 
+- Gitflow: tests before the change and after the merge into `develop` run once more when they fail (a timing-sensitive test can fail by chance on a busy machine); a fix attempt that changes nothing just tests again instead of failing.
 - A run that waits for a person (questions, a decision) ends by itself when its issue is closed on GitHub, so it no longer shows as needing attention.
 - Gitflow merge: changes left on the feature branch are committed (never dropped); a failed switch to `develop` or a push error stops the run with the real message instead of looping; only a `develop` that moved meanwhile is merged again.
 - Claude's "session limit" (and weekly / 5-hour limits) pause a run like a usage limit instead of failing it.
