@@ -4,6 +4,14 @@ Changes that are merged but not yet in a release go under **Unreleased**. Newest
 
 ## Unreleased
 
+- Access from other computers (#20). New `server` settings (Settings → Network, or `config.yaml`): `listen` (default `127.0.0.1`; one of `127.0.0.1`, `::1`, `0.0.0.0`, `::`; needs a restart), `allowed_hosts` (replaces the fixed localhost check; live) and `allow_insecure_http` (default off; live). The user guide has a new section "Access from other computers" with a Caddy setup, what any proxy must do, and troubleshooting.
+  - **HTTPS rule.** A request from another computer is refused with `403 HTTPS required` unless it comes over HTTPS through a proxy on this Mac (loopback peer with `X-Forwarded-Proto: https`), or `allow_insecure_http` is on. Forwarded headers are trusted only from a loopback peer. Unlisted hosts still get `403 forbidden host`.
+  - **Origin check is stricter.** A change needs the exact origin of the request: scheme, name and port. Before, the scheme was ignored and `localhost` and `127.0.0.1` counted as the same.
+  - **Headers.** Over HTTPS the session cookie is `Secure` and responses have `Strict-Transport-Security: max-age=31536000`. Every response has a strict `Content-Security-Policy` and `X-Content-Type-Options: nosniff`. The plain-HTTP cookie is unchanged. The import map is gone: `ui/app.js` and `ui/library.js` import `/vendor/yaml/index.js`.
+  - **Safety.** The server does not start on `0.0.0.0` or `::` without an admin account (it exits with a message naming `scf user create --admin`). `POST /api/setup` works only from the Mac itself. `PUT /api/config` answers 400 when the change would lock out the sending browser. `GET /api/info` has `listening`. A malformed URL such as `/%` now gets 400 instead of an error.
+  - **Sign-in limits.** Besides the limit per e-mail: 60 tries per client address in 15 minutes (the address comes from `X-Forwarded-For` only for a proxy on this Mac), at most 16 password checks at once (else 429), and an e-mail longer than 254 characters is a wrong sign-in.
+  - New `src/server/net.ts` holds the access rules. Not included: built-in TLS, a proxy on another machine, listening on one LAN address, a public URL for Slack links. After the first save `config.yaml` has a `server:` block, which an older build would reject.
+
 - A health line at the top of every page (#56). Under the top bar every page says "All good", or the number of problems of the Foundry itself and one sentence for each, with its action and a link. It refreshes on every page change and every 30 seconds, and says so when the server does not answer. The problems are:
   - a server that waits to restart ("A new version is waiting — it restarts after 2 runs");
   - a usage limit, one per agent (Claude, Codex), for runs that stopped in the last hour, with the time it continues; a used-up daily budget (the link goes to Settings);

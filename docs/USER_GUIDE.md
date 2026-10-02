@@ -31,7 +31,8 @@ cd ~/code/my-project
 scf ui
 ```
 
-The UI opens at **http://localhost:4777**. It only listens on your own machine. The path in the
+The UI opens at **http://localhost:4777**. By default it only listens on your own machine; see
+[Access from other computers](#access-from-other-computers). The path in the
 top-right corner is the repository runs work on by default.
 
 **First start.** The first time you open the UI there is no account yet, so it shows
@@ -840,7 +841,8 @@ and first-admin calls and the static files are open. A session is kept on the se
 lasts 7 days from sign-in and is not renewed. Sessions survive a restart and move with the data
 folder. The browser holds the token in the cookie `scf_session_<port>` (`HttpOnly`,
 `SameSite=Strict`); the port is in the name because `localhost` cookies are shared between ports.
-There is no `Secure` flag, because the server speaks plain HTTP on 127.0.0.1 only.
+The cookie gets the `Secure` flag when you reach the UI over HTTPS (through a proxy, see
+[Access from other computers](#access-from-other-computers)); over plain HTTP on this machine it has none.
 - **CSRF.** Every call that changes something must send the header `X-CSRF-Token` with the token
   the server gave at sign-in; otherwise it gets 403. The UI does this for you. Requests from a
   foreign origin or host are refused as before.
@@ -855,8 +857,93 @@ There is no `Secure` flag, because the server speaks plain HTTP on 127.0.0.1 onl
 - **Every account can do everything for now.** The role (`admin` or `user`) is stored but not
   checked yet: any active account can use every page and call, including starting runs and
   changing settings. Only give an account to people you trust with your machine's user rights.
-  Managing accounts and changing a password in the UI, permissions per role, access from other
-  machines and TLS come later.
+  Managing accounts and changing a password in the UI and permissions per role come later.
+
+### Access from other computers
+
+By default the Foundry answers only on the Mac it runs on. Colleagues can reach it from their own
+computers when you set three things in **Settings → Network** (or in `config.yaml`):
+
+```yaml
+server:
+  listen: 127.0.0.1              # 127.0.0.1 (default), ::1, 0.0.0.0 or ::
+  allowed_hosts: [mymac.local]   # names people type; a port is optional
+  allow_insecure_http: false     # true: also accept plain HTTP from other computers
+```
+
+- `listen` is the address the server binds. `0.0.0.0` and `::` answer on every network; the other
+  two only on this Mac. Only these four values are allowed. A change needs a restart.
+- `allowed_hosts` replaces the old fixed localhost check. `localhost`, `127.0.0.1` and `[::1]` (with
+  the server port) always work. Any other `Host` header must be listed, else the answer is
+  `403 forbidden host`. A change applies at once.
+- `allow_insecure_http` is off by default. A change applies at once.
+
+**The safe way: HTTPS through Caddy on the Mac.** The Foundry has no TLS of its own. A proxy on the
+same Mac does the HTTPS and talks to the Foundry on `127.0.0.1`.
+
+1. Keep `listen: 127.0.0.1`. Add the Mac's name to the allowed host names. Use the local host name
+   from System Settings → General → Sharing, for example `mymac.local`. Colleagues must be able to
+   resolve that name (macOS does it on the same network; other systems may need a DNS or hosts entry).
+2. Install Caddy: `brew install caddy`.
+3. Write the Caddyfile. Homebrew's service reads `$(brew --prefix)/etc/Caddyfile`:
+   ```
+   mymac.local {
+       tls internal
+       reverse_proxy 127.0.0.1:4777
+   }
+   ```
+4. Start it: `brew services start caddy` (it starts again at login). After a change:
+   `brew services restart caddy`. To try it once in a terminal: `caddy run --config <file>`.
+5. Trust the certificate on the Mac itself: `caddy trust`.
+6. Give your colleagues Caddy's root certificate, `root.crt`. Caddy keeps it in its data folder, by
+   default `~/Library/Application Support/Caddy/pki/authorities/local/root.crt` when it runs as your
+   user. Check that the file exists on your Mac. On macOS, open it with Keychain Access, add it to
+   **System**, then set it to **Always Trust**. On Windows, import it into **Trusted Root
+   Certification Authorities**. Firefox has its own certificate store.
+7. Check it:
+   - `curl --cacert root.crt -sI https://mymac.local/` shows `200` and `strict-transport-security`.
+   - `curl -s -H 'Host: mymac.local' http://127.0.0.1:4777/` answers `HTTPS required`.
+
+**What any proxy must do.**
+- Run on the same Mac and connect to `127.0.0.1:<port>`. The Foundry believes forwarded headers
+  only from a connection that comes from this Mac.
+- Pass the `Host` header unchanged, with its port.
+- Set `X-Forwarded-Proto` itself from the real connection (overwrite what the client sent, never
+  pass it on) and send `X-Forwarded-For`.
+- Not buffer responses (the run log is a stream).
+
+Caddy does all of this by default. For nginx use `proxy_set_header Host $http_host;
+proxy_set_header X-Forwarded-Proto $scheme; proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+proxy_buffering off;` (`$host` drops the port, so use `$http_host`). A proxy that rewrites `Host` to
+`127.0.0.1:4777` and sends no forwarded headers makes remote requests look local; do not use one.
+
+**Plain HTTP on a trusted network.** Set `listen: 0.0.0.0`, add the Mac's name or address to the
+allowed host names and switch on `allow_insecure_http`. **Warning:** passwords and session cookies
+then cross the network unencrypted. Use it only on a network you trust.
+
+**What the server does.**
+- Over HTTPS (through the proxy) the session cookie is `Secure` and responses carry
+  `Strict-Transport-Security` (one year).
+- Every response carries a strict `Content-Security-Policy` (only this server's own scripts and
+  styles) and `X-Content-Type-Options: nosniff`.
+- A change (POST, PUT, DELETE) with an `Origin` header must come from exactly the address you used:
+  same scheme, name and port.
+- Requests from other computers are refused with `HTTPS required` unless they come through the
+  proxy over HTTPS, or `allow_insecure_http` is on.
+- The server does not start on `0.0.0.0` or `::` until an admin account exists.
+- The first admin can only be created on the Mac itself, not through the proxy.
+- Settings cannot be saved if the change would lock out the browser that saves it (its host name
+  removed, or a `listen` value that does not cover the address it is connected to).
+- Sign-in is also limited per client address (60 tries in 15 minutes) and to 16 password checks at
+  the same time; an e-mail longer than 254 characters is a wrong sign-in.
+
+**Restart** after changing the address: stop and start `scf ui`, or run `scf service install` again.
+
+**Do not mix** HTTPS and plain HTTP on one host name: HSTS makes browsers refuse HTTP for that name
+for a year.
+
+Every account can still do everything (see above), so only give accounts to people you trust. Links
+in Slack and notifications still point at `http://localhost:<port>`.
 
 Global settings are stored in `~/.spaghetti-code-foundry/config.yaml`; runs in `~/.spaghetti-code-foundry/runs/`.
 
@@ -969,6 +1056,12 @@ built-in ones.
 ---
 
 ## 10. Troubleshooting
+
+**`forbidden host`, `HTTPS required` or `forbidden origin` from another computer.**
+`forbidden host`: add the name you typed to the allowed host names. `HTTPS required`: use the HTTPS
+proxy and check that it sends `X-Forwarded-Proto`. `forbidden origin` behind a proxy: the proxy
+changes `Host` (or drops its port), or does not send `X-Forwarded-Proto: https`. If the server exits
+with "cannot listen on …", create the admin first with `scf user create --admin`.
 
 **Nothing is happening to an issue.** First look at the [health line](#the-health-line) under the
 top bar: it says when the Foundry itself is the problem. Then look at the **Waiting** card on the Dashboard — it says
