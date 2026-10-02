@@ -197,7 +197,7 @@ steps:
 `;
     const s = await runFlow(parseFlow(flow), { task: "t", repo, runsDir, claudeBin, config: cfg(), vars: { p: "CLAUDE_SIGNED_OUT" } });
     expect(s.status).toBe("stopped"); // paused and retried later, not failed
-    expect(s.reason).toMatch(/^usage limit reached: signed out — the Claude Code login has expired; sign in again \(run "claude" in a terminal and type \/login\)/);
+    expect(s.reason).toBe('signed out — the Claude Code login has expired. Sign in again: run "claude" in a terminal and type /login. The run continues by itself after that.');
     expect(s.state.next).toBe("b");
   });
 

@@ -105,7 +105,7 @@ export async function runAgentStep(step: ClaudeStep, scope: Scope, engine: Engin
     // Signed out: pause like a usage limit (the run is tried again by itself) instead of failing.
     if (isAuthError(r.error, r.output)) {
       const cli = target.agent === "codex" ? 'run "codex login"' : 'run "claude" in a terminal and type /login';
-      return { ...r, limited: true, error: `usage limit reached: signed out — the ${target.agent === "codex" ? "Codex" : "Claude Code"} login has expired; sign in again (${cli}) and the run continues by itself` };
+      return { ...r, limited: true, error: `signed out — the ${target.agent === "codex" ? "Codex" : "Claude Code"} login has expired. Sign in again: ${cli}. The run continues by itself after that.` };
     }
     if (!isLimitError(r.error, r.output)) return r;
     const next = fallbacks.find((t) => !tried.has(t.label));

@@ -100,7 +100,7 @@ const APPROVE_RE = /^\s*\/(approve|reject)\b[ \t]*(.*)$/im;
 
 /** Stopped for a reason that clears by itself: daily budget, or a `wait_*` step (e.g. waiting for a PR merge). */
 function isPaused(s: RunSummary): boolean {
-  return /daily budget|usage limit reached|stopped at step "(?:[\w-]+\/)*wait_/.test(s.reason ?? "");
+  return /daily budget|usage limit reached|signed out —|stopped at step "(?:[\w-]+\/)*wait_/.test(s.reason ?? "");
 }
 
 /** Usage limits reset after a while; try a limited run again at most every 30 minutes. */
@@ -455,8 +455,8 @@ export class Watcher {
         // Reconcile: the label says working but nothing is running (restart, crash, budget pause).
         const resumable = run.status === "cancelled" || /interrupted/.test(run.reason ?? "") ||
           (run.status === "stopped" && /daily budget/.test(run.reason ?? "") && budgetLeft) ||
-          (run.status === "stopped" && /usage limit reached/.test(run.reason ?? "") && retryLimitAfter(run)) ||
-          (run.status === "stopped" && isPaused(run) && !/daily budget|usage limit reached/.test(run.reason ?? "") && !paused);
+          (run.status === "stopped" && /usage limit reached|signed out —/.test(run.reason ?? "") && retryLimitAfter(run)) ||
+          (run.status === "stopped" && isPaused(run) && !/daily budget|usage limit reached|signed out —/.test(run.reason ?? "") && !paused);
         if (resumable && started < this.cfg.max_per_tick) {
           this.resume(n, run.runId, run.status !== "stopped" ? "was interrupted" : /daily budget/.test(run.reason ?? "") ? "budget available again" : /usage limit/.test(run.reason ?? "") ? "trying again after the usage limit" : "can continue now");
           this.labelWhenDone(n, run.runId);
