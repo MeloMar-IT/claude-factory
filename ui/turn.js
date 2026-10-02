@@ -1,6 +1,7 @@
 import { api } from "./api.js";
 import { h, mount, toast } from "./dom.js";
 import { whereTarget } from "./next.js";
+import { actButtons } from "./turn-act.js";
 
 // The "Your turn" page: only what waits for the owner, from GET /api/your-turn. No wording of
 // its own except labels; the text of each item comes from its next-step record.
@@ -71,15 +72,17 @@ export function sinceText(iso, now = new Date()) {
 
 const stories = (n) => `${n} ${n === 1 ? "story" : "stories"}`;
 
-function itemView(item, { onDismiss, onLeave }) {
+function itemView(item, { onDismiss, onLeave, onAct }) {
   const n = item.next;
   const issueOk = n.issue && /^[\w.-]+\/[\w.-]+$/.test(n.repo ?? "");
   const target = whereTarget(n.where);
+  const acts = item.acts?.length > 0 && onAct;
+  const cls = acts ? "btn" : "btn primary"; // the in-app buttons are the main action; the link stays beside them
   const action = !target
     ? h("span", { class: "muted" }, n.where?.label ?? "")
     : target.external
-      ? h("a", { class: "btn primary", href: target.href, target: "_blank", rel: "noopener", onClick: () => onLeave(item) }, `${n.where.label} ↗`)
-      : h("a", { class: "btn primary", href: target.href }, n.where.label);
+      ? h("a", { class: cls, href: target.href, target: "_blank", rel: "noopener", onClick: () => onLeave(item) }, `${n.where.label} ↗`)
+      : h("a", { class: cls, href: target.href }, n.where.label);
   const since = sinceText(item.since);
   return h("div", { class: "turn-item" },
     h("div", { class: "turn-main" },
@@ -92,17 +95,34 @@ function itemView(item, { onDismiss, onLeave }) {
       item.unblocks > 0 ? h("div", { class: "muted" }, `${stories(item.unblocks)} ${item.unblocks === 1 ? "waits" : "wait"} for this`) : null,
       since ? h("div", { class: "muted", title: new Date(item.since).toLocaleString() }, since) : null),
     h("div", { class: "turn-side" },
+      ...(acts ? actButtons(item, onAct) : []),
       action,
       item.dismissable ? h("button", { class: "ghost small", onClick: () => onDismiss(item.key) }, "Dismiss") : null));
 }
 
+/** An item the user acted on: no buttons, the Foundry carries on by itself. */
+function continuingView(item) {
+  const n = item.next;
+  const issueOk = n.issue && /^[\w.-]+\/[\w.-]+$/.test(n.repo ?? "");
+  return h("div", { class: "turn-item" },
+    h("div", { class: "turn-main" },
+      h("div", {},
+        issueOk ? h("a", { href: `https://github.com/${n.repo}/issues/${n.issue}`, target: "_blank", rel: "noopener", class: "mono" }, `#${n.issue}`) : null,
+        issueOk ? " " : null,
+        h("b", {}, item.what)),
+      h("div", { class: "muted" }, "done — continuing")));
+}
+
 /** The page for one answer of the server. */
-export function turnView(data, { onDismiss, onRestore, onLeave }) {
+export function turnView(data, { onDismiss, onRestore, onLeave, onAct }) {
   return [
     h("div", { class: "toolbar" }, h("h1", {}, "Your turn")),
     data.count === 0 ? h("div", { class: "empty" }, data.empty) : null,
     ...(data.groups ?? []).map((g) =>
-      h("div", { class: "card turn-group" }, h("h3", {}, g.repo), ...g.items.map((i) => itemView(i, { onDismiss, onLeave })))),
+      h("div", { class: "card turn-group" }, h("h3", {}, g.repo), ...g.items.map((i) => itemView(i, { onDismiss, onLeave, onAct })))),
+    data.continuing?.length
+      ? h("div", { class: "card turn-group" }, h("h3", {}, "Done — continuing"), ...data.continuing.map(continuingView))
+      : null,
     data.dismissed > 0
       ? h("p", { class: "muted" }, `${data.dismissed} dismissed `, h("button", { class: "small", onClick: () => onRestore() }, "Show again"))
       : null,
@@ -117,6 +137,11 @@ export async function renderYourTurn(main) {
     onDismiss: (key) => refresh(() => api.dismissTurn(key)).catch(fail),
     onRestore: () => refresh(api.restoreTurn).catch(fail),
     onLeave: (item) => { if (item.watcher) left = item.watcher; },
+    // Wait for the action first: a poll that started meanwhile is older than its answer and must not win.
+    onAct: async (body) => {
+      const data = await api.actTurn(body);
+      await refresh(async () => data);
+    },
   };
   page = (data) => mount(main, turnView(data, handlers));
   try {

@@ -11,7 +11,15 @@ const block = (id) => parse(readFileSync(join(root, "blocks", `${id}.yaml`), "ut
 const steps = (...ids) => ids.flatMap((id) => (typeof id === "string" ? block(id) : [id]));
 const patch = (list, id, fields) => Object.assign(list.find((s) => s.id === id), fields);
 // issue-deliver/gitflow replace this sentence in the implement prompt — keep one copy.
-const FOLLOW_PLAN = "Follow the plan in the latest \"Spaghetti Code Foundry plan\" comment (older ones are headed\n\"claude-factory plan\"), including any later comments from people, which override it.";
+const FOLLOW_PLAN = "Follow the plan in the latest \"Spaghetti Code Foundry plan\" comment (older ones are headed\n\"claude-factory plan\"), including any later comments from people, which override it. The bold first\nline of that comment is for the owner, not a step of the plan.";
+// The closing sentence of the result comment: issue-deliver swaps the first for the second, issue-gitflow the second for its own.
+const SHIPS_DAILY = "_This goes to main with the release pull request._";
+const SHIPS_DELIVER = "_It is in the release pull request: $FACTORY_OUT_OPEN_PR — merge it whenever you like._";
+// Like String.replace, but a text that is gone is an error (a silent no-op would ship the old wording).
+const swap = (text, from, to) => {
+  if (!text.includes(from)) throw new Error(`build-flows: nothing to replace: ${from}`);
+  return text.replace(from, () => to);
+};
 
 // The shipped flows are the two pipelines and what supports them:
 //   human in the loop — issue-plan → (you add Factory_code) → issue-code-daily → daily-pr
@@ -188,7 +196,8 @@ write("pr-feedback", {
       id: "reply",
       type: "shell",
       run: [
-        '{ echo "🤖 **Spaghetti Code Foundry** went through the review comments:"; echo',
+        '{ echo "$FACTORY_FIRST_LOOK"; echo',
+        '  echo "🤖 **Spaghetti Code Foundry** went through the review comments:"; echo',
         '  printf \'%s\\n\' "$FACTORY_OUT_ADDRESS_COMMENTS"',
         '  echo; echo "<!-- claude-factory run=$FACTORY_RUN_ID -->"; } \\',
         '  | gh pr comment "$FACTORY_VAR_PR" --repo "$FACTORY_VAR_GITHUB_REPO" --body-file -',
@@ -578,7 +587,8 @@ write("issue-plan", {
         'reviewed=""; [ -n "$FACTORY_OUT_PLAN_REVIEW" ] && reviewed=" (checked against the code by Codex)"',
         '[ -n "$notes" ] && reviewed=" (draft — the revision did not finish; Codex\'s review notes are below)"',
       'printf \'%s\\n\' "$FACTORY_OUT_REVISE_GATE" | grep -q "^SKIPPED" && reviewed=" (checked against the code by Codex — low risk, so the coder works in Codex\'s notes below)"',
-        '{ echo "🤖 **Spaghetti Code Foundry plan**$reviewed"; echo',
+        '{ echo "$FACTORY_FIRST_START_CODING"; echo',
+        '  echo "🤖 **Spaghetti Code Foundry plan**$reviewed"; echo',
         '  printf \'%s\\n\' "$out" | sed \'/^PLAN_STATUS:/d\'',
         '  if [ -n "$notes" ]; then echo; echo "## Codex review notes (not yet worked in)"; echo',
         '    printf \'%s\\n\' "$notes" | sed \'/^VERDICT:/d\'; fi',
@@ -786,14 +796,15 @@ write("issue-plan", {
       run: [
         "branch=$(git branch --show-current); sha=$(git rev-parse HEAD)",
         'verdict() { printf \'%s\\n\' "$1" | sed -n \'s/^VERDICT: *//p\' | tail -1; }',
-        '{ echo "🤖 **Spaghetti Code Foundry** implemented this on branch \\`$branch\\` (commit https://github.com/$FACTORY_VAR_GITHUB_REPO/commit/$sha)."',
+        '{ echo "$FACTORY_FIRST_SHIPS"; echo',
+        '  echo "🤖 **Spaghetti Code Foundry** implemented this on branch \\`$branch\\` (commit https://github.com/$FACTORY_VAR_GITHUB_REPO/commit/$sha)."',
         '  echo; echo "### What was done"; printf \'%s\\n\' "$FACTORY_OUT_IMPLEMENT"',
         '  echo; echo "### Review (Codex)"',
         '  echo "- round 1: $(verdict "$FACTORY_OUT_REVIEW_1")"',
         '  [ -n "$FACTORY_OUT_REVIEW_2" ] && echo "- round 2: $(verdict "$FACTORY_OUT_REVIEW_2")"',
         '  echo; echo "### Tests"; echo \'```\'; cat "{{run.dir}}/last-tests.txt"; echo \'```\'',
         '  echo; echo "### Files changed"; echo \'```\'; git show --stat --format= HEAD | tail -40; echo \'```\'',
-        '  echo; echo "_This goes to main with the daily pull request._"',
+        `  echo; echo "${SHIPS_DAILY}"`,
         '  echo; echo "<!-- claude-factory run=$FACTORY_RUN_ID -->"; } \\',
         '  | gh issue comment "$FACTORY_VAR_ISSUE" --repo "$FACTORY_VAR_GITHUB_REPO" --body-file -',
       ].join("\n"),
@@ -941,7 +952,7 @@ write("issue-plan", {
     on_failure: "pull_ticket",
   };
   const implement = byId("implement");
-  implement.prompt = implement.prompt.replace(
+  implement.prompt = swap(implement.prompt,
     FOLLOW_PLAN,
     "Follow this plan (comments from people on the issue override it):\n\n{{steps.risk_gate.output}}\n\nNotes from the person who approved the plan, if any: {{steps.approve_plan.output}}\n");
   const branch = byId("daily_branch");
@@ -949,8 +960,7 @@ write("issue-plan", {
   branch.run = branch.run.replace(" prepare --wait-for-merge", " prepare");
   delete branch.routes;
   const report = byId("report");
-  report.run = report.run
-    .replace("_This goes to main with the daily pull request._", "_It is in the Foundry pull request: $FACTORY_OUT_OPEN_PR — merge it whenever you like._");
+  report.run = swap(report.run, SHIPS_DAILY, SHIPS_DELIVER);
   const deliver = [
     byId("pull_ticket"),
     branch,
@@ -1224,11 +1234,10 @@ write("issue-plan", {
     routes: [{ if: "^MOVED\\s*$", goto: "merge_develop" }],
   };
   const gitflowReport = structuredClone(report);
-  gitflowReport.run = gitflowReport.run
-    .replace("branch=$(git branch --show-current); sha=$(git rev-parse HEAD)", 'branch=$(cat "{{run.dir}}/feature-branch"); sha=$(git rev-parse HEAD)')
-    .replace("implemented this on branch \\`$branch\\` (commit", "implemented this on \\`$branch\\` and merged it into \\`$FACTORY_VAR_DEVELOP_BRANCH\\` (commit")
-    .replace("_It is in the Foundry pull request: $FACTORY_OUT_OPEN_PR — merge it whenever you like._", "_It goes to \\`$FACTORY_VAR_MAIN_BRANCH\\` with the daily release pull request._")
-    .replace("git show --stat --format= HEAD | tail -40", 'git diff --stat "$(cat "{{run.dir}}/develop-before")" HEAD | tail -40');
+  gitflowReport.run = swap(gitflowReport.run, "branch=$(git branch --show-current); sha=$(git rev-parse HEAD)", 'branch=$(cat "{{run.dir}}/feature-branch"); sha=$(git rev-parse HEAD)');
+  gitflowReport.run = swap(gitflowReport.run, "implemented this on branch \\`$branch\\` (commit", "implemented this on \\`$branch\\` and merged it into \\`$FACTORY_VAR_DEVELOP_BRANCH\\` (commit");
+  gitflowReport.run = swap(gitflowReport.run, SHIPS_DELIVER, "_It goes to \\`$FACTORY_VAR_MAIN_BRANCH\\` with the daily release pull request._");
+  gitflowReport.run = swap(gitflowReport.run, "git show --stat --format= HEAD | tail -40", 'git diff --stat "$(cat "{{run.dir}}/develop-before")" HEAD | tail -40');
   // Gitflow: "done" means merged into develop — close the issue now (GitHub only closes issues by
   // itself when work reaches the default branch).
   gitflowReport.run += [
@@ -1376,9 +1385,11 @@ write("release-daily", {
         '  | node -e \'let d="";process.stdin.on("data",(c)=>(d+=c)).on("end",()=>{const p=JSON.parse(d||"[]").find((x)=>x.headRefName===process.argv[1]&&x.state==="OPEN");process.stdout.write(p?String(p.number):"")})\' "$dev")',
         'if [ -n "$pr" ]; then gh pr edit "$pr" --repo "$FACTORY_VAR_GITHUB_REPO" --title "$title" --body-file - < "{{run.dir}}/pr.md" >/dev/null',
         'else pr=$(gh pr create --repo "$FACTORY_VAR_GITHUB_REPO" --base "$main" --head "$dev" --title "$title" --body-file - < "{{run.dir}}/pr.md" | tail -1); pr=${pr##*/}; fi',
-        '{ echo "🤖 **Spaghetti Code Foundry daily release check** — $(date \'+%Y-%m-%d %H:%M\')"; echo; cat "{{run.dir}}/checks.md"; echo; echo "<!-- claude-factory run=$FACTORY_RUN_ID daily -->"; } \\',
+        'if printf \'%s\\n\' "$FACTORY_OUT_VERIFY" | grep -q "^CHECKS: no"; then ok=no; first="$FACTORY_FIRST_DRAFT"; else ok=yes; first="$FACTORY_FIRST_MERGE_RELEASE"; fi',
+        '{ echo "$first"; echo',
+        '  echo "🤖 **Spaghetti Code Foundry daily release check** — $(date \'+%Y-%m-%d %H:%M\')"; echo; cat "{{run.dir}}/checks.md"; echo; echo "<!-- claude-factory run=$FACTORY_RUN_ID daily -->"; } \\',
         '  | gh pr comment "$pr" --repo "$FACTORY_VAR_GITHUB_REPO" --body-file - >/dev/null',
-        'if printf \'%s\\n\' "$FACTORY_OUT_VERIFY" | grep -q "^CHECKS: no"; then gh pr ready "$pr" --repo "$FACTORY_VAR_GITHUB_REPO" --undo >/dev/null 2>&1 || true; echo "checks failed — PR #$pr is a draft"',
+        'if [ "$ok" = no ]; then gh pr ready "$pr" --repo "$FACTORY_VAR_GITHUB_REPO" --undo >/dev/null 2>&1 || true; echo "checks failed — PR #$pr is a draft"',
         'else gh pr ready "$pr" --repo "$FACTORY_VAR_GITHUB_REPO" >/dev/null 2>&1 || true; echo "checks passed — PR #$pr ($title) is ready to merge"; fi',
       ].join("\n"),
     },
@@ -1514,10 +1525,12 @@ write("daily-pr", {
       run: [
         'branch=$(printf \'%s\\n\' "$FACTORY_OUT_FIND_BRANCH" | head -1)',
         'url=$("$FACTORY_TOOLS/daily-branch" ensure-pr "$branch") || exit 1; n=${url##*/}',
-        '{ echo "🤖 **Spaghetti Code Foundry daily report** — $(date \'+%Y-%m-%d %H:%M\')"; echo; cat "{{run.dir}}/checks.md"',
-        '  echo; echo "_Merge whenever you like — the Foundry keeps working either way; after a merge it continues on a fresh branch._"',
+        'if printf \'%s\\n\' "$FACTORY_OUT_VERIFY" | grep -q "^CHECKS: no"; then ok=no; first="$FACTORY_FIRST_DRAFT"; else ok=yes; first="$FACTORY_FIRST_MERGE_RELEASE"; fi',
+        '{ echo "$first"; echo',
+        '  echo "🤖 **Spaghetti Code Foundry daily report** — $(date \'+%Y-%m-%d %H:%M\')"; echo; cat "{{run.dir}}/checks.md"',
+        '  if [ "$ok" = yes ]; then echo; echo "_Merge whenever you like — the Foundry keeps working either way; after a merge it continues on a fresh branch._"; fi',
         '  echo; echo "<!-- claude-factory run=$FACTORY_RUN_ID daily -->"; } | gh pr comment "$n" --repo "$FACTORY_VAR_GITHUB_REPO" --body-file - >/dev/null',
-        'if printf \'%s\\n\' "$FACTORY_OUT_VERIFY" | grep -q "^CHECKS: no"; then gh pr ready "$n" --repo "$FACTORY_VAR_GITHUB_REPO" --undo >/dev/null 2>&1 || true; echo "checks failed — $url is a draft"',
+        'if [ "$ok" = no ]; then gh pr ready "$n" --repo "$FACTORY_VAR_GITHUB_REPO" --undo >/dev/null 2>&1 || true; echo "checks failed — $url is a draft"',
         'else gh pr ready "$n" --repo "$FACTORY_VAR_GITHUB_REPO" >/dev/null 2>&1 || true; echo "checks passed — $url is ready to merge"; fi',
       ].join("\n"),
     },

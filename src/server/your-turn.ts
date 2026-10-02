@@ -61,6 +61,31 @@ export function evalRunIds(): Set<string> {
   return ids;
 }
 
+/** An item the user acted on shows as "done — continuing" for this long (the watcher normally picks it up within seconds). */
+const ACTED_MS = 10 * 60_000;
+const actedStore = new WeakMap<ApiContext, Map<string, { since: string; at: number }>>();
+
+/** Remembers that the user acted on an item (at this stamp); it moves to "Done — continuing". In memory only. */
+export function markActed(ctx: ApiContext, key: string, stamp: string, now = new Date()) {
+  const m = actedStore.get(ctx) ?? actedStore.set(ctx, new Map()).get(ctx)!;
+  m.set(key, { since: stamp, at: now.getTime() });
+}
+
+/** Was this item (at this stamp) acted on already, and not yet expired? */
+export function wasActed(ctx: ApiContext, key: string, stamp: string, now = new Date()): boolean {
+  return actedNow(ctx, now)[key]?.since === stamp;
+}
+
+function actedNow(ctx: ApiContext, now: Date): Record<string, { since: string }> {
+  const m = actedStore.get(ctx);
+  const out: Record<string, { since: string }> = {};
+  for (const [k, e] of m ?? []) {
+    if (now.getTime() - e.at >= ACTED_MS) m!.delete(k);
+    else out[k] = { since: e.since };
+  }
+  return out;
+}
+
 const keyOf =(n: NextStep) => `${n.repo}#${n.issue ?? ""}|${n.kind}|${n.runId ?? ""}`;
 
 /** Every current item (dismissed ones too) and the page. */
@@ -111,7 +136,7 @@ export function turnFor(ctx: ApiContext, now = new Date()) {
   }
 
   const release = soonest(times, now);
-  return { ...buildTurn(sources, { dismissed: readStore(), building: stories.size, releaseAt: release?.at }), building: stories.size, release };
+  return { ...buildTurn(sources, { dismissed: readStore(), acted: actedNow(ctx, now), building: stories.size, releaseAt: release?.at }), building: stories.size, release };
 }
 
 export function yourTurn(ctx: ApiContext): YourTurn {

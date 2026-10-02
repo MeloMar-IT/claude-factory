@@ -6,8 +6,9 @@ import { readdirSync, readFileSync } from "node:fs";
 import { learningsFile, resumeRun, runFlow } from "../src/engine/runner.js";
 import { listBlocks, parseBlock } from "../src/flow/blocks.js";
 import { loadFlow, parseFlow } from "../src/flow/load.js";
-import { commentFirst, commentText, nextStepEnv } from "../src/next-step.js";
+import { commentFirst, commentText, nextStepEnv, reportFirst } from "../src/next-step.js";
 import { closing, fakeGithub, first, flowPath } from "./helpers/fake-github.js";
+import { scanNode, scanRepo, scanShell, scanTool } from "./helpers/comment-scan.js";
 
 describe("block library", () => {
   it("all built-in blocks are valid", () => {
@@ -28,7 +29,7 @@ describe("comment wording comes from the next-step module", () => {
     ...readdirSync("blocks").filter((f) => f.endsWith(".yaml")).map((f) => join("blocks", f)),
     ...readdirSync("flows").filter((f) => f.endsWith(".yaml")).map((f) => join("flows", f)),
     ...readdirSync("tests/fixtures/flows").filter((f) => f.endsWith(".yaml")).map((f) => join("tests/fixtures/flows", f)),
-    "tools/post-questions",
+    ...readdirSync("tools", { withFileTypes: true }).filter((d) => d.isFile()).map((d) => join("tools", d.name)),
   ];
   const text = (f: string) => readFileSync(f, "utf8");
 
@@ -78,7 +79,7 @@ describe("comment wording comes from the next-step module", () => {
   it("print the first line before anything else", () => {
     const before = (run: string, echo: string, label: string) => {
       const at = run.indexOf(echo);
-      const mark = run.search(/🤖|✋/);
+      const mark = run.search(/🤖|✋|✅/);
       expect(at, `${label}: ${echo}`).toBeGreaterThanOrEqual(0);
       expect(at, label).toBeLessThan(mark);
     };
@@ -96,6 +97,83 @@ describe("comment wording comes from the next-step module", () => {
     }
     expect(text("tools/post-questions")).toMatch(/const comment = \[\s*\.\.\.\(first \? \[first, ""\]/);
     expect(text("tools/post-questions")).toContain("FACTORY_FIRST_QUESTIONS");
+    before(stepRun("blocks/push-plan.yaml", "push_plan"), 'echo "$FACTORY_FIRST_INFO"', "push-plan");
+    const result = stepRun("blocks/push-result.yaml", "push_result");
+    before(result, 'echo "$first"', "push-result");
+    expect(result).toContain('first="$FACTORY_FIRST_MERGE_PR"');
+    expect(result).toContain('first="$FACTORY_FIRST_OPEN_PR"');
+    const split = stepRun("blocks/triage.yaml", "split_ticket");
+    before(split, 'echo "$first"', "triage/split_ticket");
+    expect(split).toContain('first="$FACTORY_FIRST_INFO"');
+    expect(split).toContain('first="$FACTORY_FIRST_START_PARTS"');
+    expect(text("tools/create-split")).toMatch(/const comment = \[\s*\.\.\.\(first \? \[first, ""\]/);
+    expect(text("tools/create-split")).toContain("FACTORY_FIRST_INFO");
+    before(stepRun(flowPath("issue-plan"), "post_plan"), 'echo "$FACTORY_FIRST_START_CODING"', "issue-plan/post_plan");
+    for (const f of ["issue-code-daily", "issue-deliver", "issue-gitflow"]) before(stepRun(flowPath(f), "report"), 'echo "$FACTORY_FIRST_SHIPS"', `${f}/report`);
+    before(stepRun(flowPath("pr-feedback"), "reply"), 'echo "$FACTORY_FIRST_LOOK"', "pr-feedback/reply");
+    const dailies: [string, string][] = [["release-daily", "release_pr"], ["daily-pr", "report"]];
+    for (const [f, id] of dailies) {
+      const run = stepRun(flowPath(f), id);
+      before(run, 'echo "$first"', `${f}/${id}`);
+      expect(run).toContain('first="$FACTORY_FIRST_DRAFT"');
+      expect(run).toContain('first="$FACTORY_FIRST_MERGE_RELEASE"');
+    }
+  });
+
+  it("the label-driven comments use the glossary words", () => {
+    const sites: [string, string][] = [
+      ["issue-plan", "post_plan"], ["issue-code-daily", "report"], ["issue-deliver", "report"], ["issue-gitflow", "report"],
+      ["pr-feedback", "reply"], ["release-daily", "release_pr"], ["daily-pr", "report"],
+    ];
+    for (const [f, id] of sites) expect(stepRun(flowPath(f), id), `${f}/${id}`).not.toMatch(/daily pull request|Foundry pull request/);
+    expect(stepRun(flowPath("issue-code-daily"), "report")).toContain("_This goes to main with the release pull request._");
+    expect(stepRun(flowPath("issue-deliver"), "report")).toContain("_It is in the release pull request: $FACTORY_OUT_OPEN_PR — merge it whenever you like._");
+    expect(stepRun(flowPath("issue-gitflow"), "report")).toContain("daily release pull request");
+  });
+});
+
+describe("every posted comment starts with a first-line variable", () => {
+  it("finds no comment without a first-line variable in blocks, flows and tools", () => {
+    expect(scanRepo()).toEqual([]);
+  });
+
+  const bad = (label: string, script: string) => it(`catches: ${label}`, () => expect(scanShell(script).length).toBeGreaterThanOrEqual(1));
+  bad("no first line", '{ echo "🤖 **X**"; echo; } | gh issue comment 1 --body-file -');
+  bad("a heading before the first line", '{ echo "🤖 **X**"; echo "$FACTORY_FIRST_INFO"; echo; } | gh pr comment 1 --body-file -');
+  bad("--body with text", 'gh issue comment 1 --body "text"');
+  bad("first= that is not a first-line variable", 'first="**Do it**"\n{ echo "$first"; echo\n  echo x; } | gh issue comment 1 --body-file -');
+  bad("one good and one bad first=", 'if a; then first="$FACTORY_FIRST_INFO"; else first="nope"; fi\n{ echo "$first"; echo\n  echo x; } | gh issue comment 1 --body-file -');
+  bad("first= with more text", 'first="$FACTORY_FIRST_INFO and more"\n{ echo "$first"; echo\n  echo x; } | gh issue comment 1 --body-file -');
+  bad("$first never set", '{ echo "$first"; echo\n  echo x; } | gh issue comment 1 --body-file -');
+  bad("an unrelated good group before a bare echo", '{ echo "$FACTORY_FIRST_INFO"; echo\n  echo x; } > out.md\necho "heading" | gh issue comment 1 --body-file -');
+  it("does not reuse the group of the first call for the second", () => {
+    const run = '{ echo "$FACTORY_FIRST_INFO"; echo\n  echo x; } | gh issue comment 1 --body-file -\ngh issue comment 2 --body-file -';
+    expect(scanShell(run)).toHaveLength(1);
+  });
+  bad("a call split over lines by continuations", 'echo hi | gh \\\n  issue comment 1 --body "text"');
+  it("accepts good shell comments", () => {
+    expect(scanShell('{ echo "$FACTORY_FIRST_INFO"; echo\n  echo x; } \\\n  | gh issue comment 1 --body-file -')).toEqual([]);
+    const two = 'a="$FACTORY_FIRST_MERGE_PR"; if x; then first="$FACTORY_FIRST_MERGE_PR"; else first="$FACTORY_FIRST_OPEN_PR"; fi\n{\n  echo "$first"; echo\n  echo x\n} | gh pr comment 1 --body-file -';
+    expect(scanShell(two)).toEqual([]);
+    expect(scanShell("echo nothing")).toEqual([]);
+  });
+
+  const node = (body: string) => `#!/usr/bin/env node\nconst first = process.env.FACTORY_FIRST_INFO;\n${body}`;
+  const call = 'gh(["issue", "comment", "1", "--body-file", "-"], comment);';
+  const array = 'const comment = [\n  ...(first ? [first, ""] : []),\n  "x",\n].join("\\n");\n';
+  it("catches bad Node tools", () => {
+    expect(scanNode(node('const comment = `text`;\n' + call))).not.toEqual([]);
+    expect(scanNode(node('const comment = [\n  "x",\n  ...(first ? [first, ""] : []),\n].join("\\n");\n' + call))).not.toEqual([]);
+    expect(scanNode(`const first = "**Do it**";\n${array}${call}`)).not.toEqual([]);
+    expect(scanNode(node('execFileSync("gh", ["issue", "comment", "1"]);'))).not.toEqual([]);
+    expect(scanNode(node(array + 'gh(["issue", "comment", "1", "--body", "-"], comment);'))).not.toEqual([]);
+    expect(scanNode(node(array + "gh(['issue', 'comment', '1', '--body', '-'], comment);"))).not.toEqual([]);
+    expect(scanNode(node("const comment = `text`;\ngh(['pr', 'comment', '1', '--body-file', '-'], comment);"))).not.toEqual([]);
+    expect(scanNode(node(array + 'gh(["issue", "comment", "1", "--body-file", "-"], "text");'))).not.toEqual([]);
+  });
+  it("accepts good Node tools", () => {
+    expect(scanNode(node(array + call))).toEqual([]);
+    for (const f of ["tools/post-questions", "tools/create-split"]) expect(scanTool(readFileSync(f, "utf8")), f).toEqual([]);
   });
 });
 
@@ -132,6 +210,14 @@ describe("github-issue flow (fake gh + claude)", { timeout: 30_000 }, () => {
     expect(log).toContain(`<!-- claude-factory run=${s.runId} -->`);
     expect(log).not.toContain("**claude-factory");
     expect(log).toContain("added feature.txt");
+    const marker = `<!-- claude-factory run=${s.runId} -->`;
+    const plan = gh.comments().find((c) => c.body.includes("Foundry plan**"))!.body.split("\n");
+    expect(plan.slice(0, 3)).toEqual([reportFirst("info"), "", "🤖 **Spaghetti Code Foundry plan**"]);
+    expect(plan.at(-1)).toBe(marker);
+    const result = gh.comments().find((c) => c.body.includes("finished this ticket"))!.body.split("\n");
+    expect(result.slice(0, 3)).toEqual([reportFirst("open_pr"), "", "✅ **Spaghetti Code Foundry finished this ticket**"]);
+    expect(result.join("\n")).toContain("— open a pull request from there.");
+    expect(result.at(-1)).toBe(marker);
     const branches = gh.remoteGit("branch", "--list");
     expect(branches).toMatch(/factory\/issue-7-/);
     const msg = gh.remoteGit("log", "-1", "--format=%s", branches.match(/factory\/\S+/)![0]);
@@ -200,6 +286,9 @@ describe("github-pr flow (fake gh + claude)", () => {
     expect(log).toContain("Closes #7");
     expect(log).toContain("✅ **Spaghetti Code Foundry finished this ticket**");
     expect(log).toContain("Pull request: https://github.com/owner/repo/pull/99");
+    expect(first(gh.comments().find((c) => c.body.includes("Foundry plan**"))!.body)).toBe(reportFirst("info"));
+    const result = gh.comments().find((c) => c.body.includes("finished this ticket"))!.body.split("\n");
+    expect(result.slice(0, 5)).toEqual([reportFirst("merge_pr"), "", "✅ **Spaghetti Code Foundry finished this ticket**", "", "Pull request: https://github.com/owner/repo/pull/99"]);
     const branch = gh.remoteGit("branch", "--list").match(/factory\/\S+/)![0];
     expect(gh.remoteGit("log", "-2", "--format=%s", branch).trim().split("\n")).toEqual(["Fix CI", "Resolve #7"]);
     expect(gh.remoteGit("log", "-1", "--format=%b", branch).trim()).toBe(`Automated by Spaghetti Code Foundry (run ${r.runId})`);
@@ -274,5 +363,8 @@ describe("pr-feedback flow (fake gh + claude)", () => {
     expect(s.status).toBe("succeeded");
     expect(gh.remoteGit("log", "-1", "--format=%s", "factory/pr-17").trim()).toBe("Address review comments");
     expect(gh.ghLog()).toContain("renamed the variable as requested");
+    const reply = gh.comments().find((c) => c.issue === 17)!.body.split("\n");
+    expect(reply.slice(0, 3)).toEqual([reportFirst("look"), "", "🤖 **Spaghetti Code Foundry** went through the review comments:"]);
+    expect(reply.at(-1)).toBe(`<!-- claude-factory run=${s.runId} -->`);
   });
 });

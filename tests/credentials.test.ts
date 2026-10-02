@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { StoreError, withAuthLock } from "../src/auth/store.js";
 import { KEYCHAIN_SERVICE, KeyError } from "../src/credentials/keychain.js";
 import {
-  CredentialError, addCredential, checkKeychain, credentialsPath, listCredentials, readSecret, removeCredential, removeCredentialsLocked, rotateKey,
+  CredentialError, addCredential, addCredentialLocked, checkKeychain, credentialsPath, listCredentials, readSecret, removeCredential, removeCredentialsLocked, rotateKey,
 } from "../src/credentials/store.js";
 import { fakeKey, fakeKeychain, fakeToken, type FakeKeychain } from "./helpers/keychain.js";
 
@@ -440,5 +440,29 @@ describe("key rotation", () => {
     expect(rotateKey().oldKeysLeft).toBe(0);
     expect(fileJson().retiredKeyIds).toEqual([]);
     expect(keyItems()).toHaveLength(1);
+  });
+});
+
+describe("addCredentialLocked and the reserved names", () => {
+  const locked = (name: string, id = randomUUID()) => withAuthLock(() => addCredentialLocked({ id, userId: A, type: "token", name, secret: fakeToken() }));
+
+  it("throws outside the lock", () => {
+    expect(() => addCredentialLocked({ id: randomUUID(), userId: A, type: "token", name: "repo:x", secret: fakeToken() })).toThrow("inside withAuthLock");
+  });
+
+  it("stores a readable credential under the given id; a repeated name or id is refused", () => {
+    const id = randomUUID();
+    expect(locked("repo:x", id).id).toBe(id);
+    expect(readSecret(A, id)).toBe(fakeToken());
+    expect(code(() => locked("repo:x"))).toBe("duplicate");
+    expect(code(() => locked("other", id))).toBe("duplicate");
+  });
+
+  it("keeps repo: for the Foundry: addCredential refuses it in any case, a stored one is listed and removable", () => {
+    expect(code(() => add(A, "repo:x", fakeToken()))).toBe("bad-name");
+    expect(code(() => add(A, "REPO:x", fakeToken()))).toBe("bad-name");
+    const c = locked("repo:x");
+    expect(listCredentials(A).map((x) => x.name)).toEqual(["repo:x"]);
+    expect(removeCredential(A, c.id).removed).toBe(1);
   });
 });

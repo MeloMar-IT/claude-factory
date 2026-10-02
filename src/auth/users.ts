@@ -103,6 +103,8 @@ const UserSchema = z
     passwordHash: z.string().refine((s) => parseHash(s) !== undefined),
     created: z.iso.datetime(),
     lastSignIn: z.iso.datetime().nullable(),
+    /** The id of a stop-work request the server has not handled yet. */
+    stopWork: z.uuid().optional(),
   })
   .strict();
 
@@ -237,16 +239,42 @@ export async function setPassword(id: string, password: string, opts: ChangeOpti
   return change(id, (u) => ({ next: { ...u, passwordHash }, event: { action: "password" } }), { endSessions: true, by: opts.by });
 }
 
-export async function setStatus(id: string, status: "active" | "blocked", opts: ChangeOptions = {}): Promise<User> {
+export interface StatusOptions extends ChangeOptions {
+  /** With a block: ask the server to cancel the running work of the account too. */
+  stopWork?: boolean;
+}
+
+export async function setStatus(id: string, status: "active" | "blocked", opts: StatusOptions = {}): Promise<User> {
+  const stopWork = status === "blocked" && opts.stopWork === true;
   return change(
     id,
     (u, all) => {
-      if (u.status === status) return undefined;
+      if (u.status === status && !stopWork) return undefined;
       if (status === "blocked" && isLastAdmin(all, u)) throw new UserError("last-admin", LAST_ADMIN);
-      return { next: { ...u, status }, event: { action: status === "blocked" ? "block" : "unblock" } };
+      const { stopWork: _old, ...rest } = u;
+      const next: User = stopWork ? { ...rest, status, stopWork: randomUUID() } : { ...rest, status };
+      return { next, event: status === "blocked" ? { action: "block", stopWork } : { action: "unblock" } };
     },
     { endSessions: status === "blocked", by: opts.by },
   );
+}
+
+/**
+ * Hands the pending stop-work request of a blocked account to `act`, then removes it. Under the account lock, so an
+ * unblock cannot slip in between. Returns false when there is nothing to do. If `act` throws, nothing is written.
+ * The short lock wait keeps a busy lock from holding the event loop; the caller tries again later.
+ */
+export function takeStopWork(id: string, act: (request: string) => void, waitMs = 500): boolean {
+  return withAuthLock(() => {
+    const file = read();
+    const i = file.users.findIndex((u) => u.id === id);
+    const u = file.users[i];
+    if (!u || u.stopWork === undefined) return false;
+    if (u.status === "blocked") act(u.stopWork);
+    const { stopWork: _done, ...rest } = u;
+    writeJsonFile(usersPath(), { ...file, users: file.users.map((o, j) => (j === i ? rest : o)) });
+    return true;
+  }, waitMs);
 }
 
 /** Changes name, e-mail and role in one step. Only a role change is logged. */

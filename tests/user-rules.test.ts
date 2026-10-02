@@ -204,3 +204,55 @@ describe("the audit log from the store", () => {
     expect(readFileSync(usersPath(), "utf8")).toBe(text);
   });
 });
+
+describe("setStatus with stopWork", () => {
+  const blocks = () => auditLines().filter((l) => l.action === "block");
+  const setup = () => {
+    const b = record({ id: randomUUID(), email: "b@example.com", role: "user" });
+    put([record({ email: "a@example.com" }), b]);
+    return b.id;
+  };
+
+  it("follows the table", async () => {
+    const b = setup();
+    await setStatus(b, "blocked", { by: "cli" });
+    expect(getUser(b)).toMatchObject({ status: "blocked" });
+    expect(getUser(b)!.stopWork).toBeUndefined();
+    expect(blocks().at(-1)!.stopWork).toBe(false);
+
+    await setStatus(b, "active", { by: "cli" });
+    await setStatus(b, "blocked", { by: "cli", stopWork: true });
+    const first = getUser(b)!.stopWork;
+    expect(first).toMatch(/^[0-9a-f-]{36}$/);
+    expect(blocks().at(-1)!.stopWork).toBe(true);
+
+    // the option on a blocked account is a new request
+    await setStatus(b, "blocked", { by: "cli", stopWork: true });
+    const second = getUser(b)!.stopWork;
+    expect(second).toBeDefined();
+    expect(second).not.toBe(first);
+    expect(blocks().at(-1)!.stopWork).toBe(true);
+
+    // a plain block of a blocked account changes nothing
+    const before = bytes();
+    await setStatus(b, "blocked", { by: "cli" });
+    expect(bytes()).toEqual(before);
+
+    // unblock removes a request that was not handled
+    await setStatus(b, "active", { by: "cli" });
+    expect(getUser(b)).toMatchObject({ status: "active" });
+    expect(getUser(b)!.stopWork).toBeUndefined();
+    // unblock of an active account is a no-op
+    const now = bytes();
+    await setStatus(b, "active", { by: "cli" });
+    expect(bytes()).toEqual(now);
+  });
+
+  it("loads a file with stopWork and refuses one that is not a UUID", () => {
+    const b = record({ id: randomUUID(), email: "b@example.com", role: "user", status: "blocked" });
+    put([record({ email: "a@example.com" }), { ...b, stopWork: randomUUID() }]);
+    expect(listUsers()[1]!.stopWork).toBeDefined();
+    put([record({ email: "a@example.com" }), { ...b, stopWork: "later" }]);
+    expect(() => listUsers()).toThrow();
+  });
+});

@@ -107,8 +107,8 @@ describe("every route needs a session", () => {
   beforeAll(async () => void (who = await signInAs(s.base)));
 
   const GETS = ["/api/credentials", "/api/repos", "/api/info", "/api/config", "/api/watchers", "/api/providers", "/api/evals", "/api/stats", "/api/flows", "/api/flows/x", "/api/blocks", "/api/queue", "/api/runs", "/api/runs/x", "/api/runs/x/events", "/api/runs/x/diff", "/api/runs/x/transcript/0", "/api/next", "/api/your-turn", "/api/since", "/api/board", "/api/nope", "/api/setup"];
-  const PUTS = ["/api/config", "/api/flows/x", "/api/blocks/x", "/api/session"];
-  const DELETES = ["/api/credentials/x", "/api/repos/a/b", "/api/flows/x", "/api/blocks/x"];
+  const PUTS = ["/api/config", "/api/flows/x", "/api/blocks/x", "/api/session", "/api/repos/x/auth"];
+  const DELETES = ["/api/credentials/x", "/api/repos/a/b", "/api/repos/x", "/api/flows/x", "/api/blocks/x"];
   const POSTS = ["/api/credentials", "/api/repos", "/api/watchers/x/tick", "/api/clean", "/api/providers/test", "/api/validate", "/api/generate", "/api/runs", "/api/runs/x/cancel", "/api/runs/x/resume", "/api/runs/x/approve", "/api/runs/x/reject", "/api/your-turn/dismiss", "/api/your-turn/restore", "/api/nope"];
   const table = [...GETS.map((p) => ["GET", p]), ...PUTS.map((p) => ["PUT", p]), ...DELETES.map((p) => ["DELETE", p]), ...POSTS.map((p) => ["POST", p])] as [string, string][];
 

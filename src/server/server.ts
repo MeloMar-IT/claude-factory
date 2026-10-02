@@ -19,6 +19,7 @@ import { healthRoutes } from "./health.js";
 import { boardRoutes } from "./board.js";
 import { TurnNotifier } from "./notifier.js";
 import { CSP, HSTS, listenProblem, localUrl, requestAccess } from "./net.js";
+import { ACCOUNT_SWEEP_MS, accountActive, accountSweeper } from "./account-work.js";
 import { adoptRuns } from "../auth/run-owner.js";
 import { hasAdmin, type User } from "../auth/users.js";
 import { repoRoutes } from "./api-repos.js";
@@ -26,6 +27,7 @@ import { authorize, findRule } from "./permissions.js";
 import { sinceRoutes } from "./since.js";
 import { yourTurnRoutes } from "./your-turn.js";
 import { USER_ERROR, movedText } from "./user-view.js";
+import { turnActionRoutes } from "./turn-actions.js";
 
 const UI_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../../ui");
 const YAML_BROWSER_DIR = join(dirname(createRequire(import.meta.url).resolve("yaml/package.json")), "browser");
@@ -42,6 +44,8 @@ export interface ServerOptions {
   sessionRecheckMs?: number;
   /** How often runs without an owner are given to the first admin, in ms (default 60000). */
   adoptEveryMs?: number;
+  /** How often blocked and deleted accounts are checked, in ms (default 2000). */
+  accountSweepMs?: number;
 }
 
 export interface ApiContext {
@@ -64,7 +68,7 @@ export interface ApiContext {
 /** A route handler: returns true when it handled the request. */
 export type Route = (ctx: ApiContext, req: IncomingMessage, res: ServerResponse, seg: string[], method: string, user: User) => Promise<boolean>;
 
-const ROUTES: Route[] = [credentialRoutes, repoRoutes, adminRoutes, flowRoutes, runRoutes, nextRoutes, yourTurnRoutes, sinceRoutes, boardRoutes, healthRoutes];
+const ROUTES: Route[] = [credentialRoutes, repoRoutes, adminRoutes, flowRoutes, runRoutes, nextRoutes, yourTurnRoutes, turnActionRoutes, sinceRoutes, boardRoutes, healthRoutes];
 
 export async function startServer(given: ServerOptions): Promise<{ url: string; close: () => void; ctx: ApiContext; notifier?: TurnNotifier }> {
   // every free-form server, watcher and notifier log line passes the redaction (fail closed)
@@ -84,6 +88,7 @@ export async function startServer(given: ServerOptions): Promise<{ url: string; 
     claudeBin: opts.claudeBin,
     config: () => config,
     queueFile: join(process.env.FACTORY_HOME ?? FACTORY_HOME, "queue.json"),
+    accountActive,
     onFinished: (s) => {
       // A new succeeded run is a new sample: the next estimate must see it.
       if (s.status === "succeeded") forgetHistory(ctx);
@@ -93,6 +98,11 @@ export async function startServer(given: ServerOptions): Promise<{ url: string; 
   });
   const watchers = new WatcherManager({ scheduler, runsDir: opts.runsDir, repo: opts.repo, config: () => config, areaWait, log });
   const ctx: ApiContext = { opts, diagLog: sink, scheduler, watchers, config: () => config, reloadConfig: () => (config = loadConfig()), listen };
+
+  // Before the first pump and before adopt(): jobs of blocked accounts never start, and a stop-work request made while
+  // the server was down does not reach a run that is adopted later.
+  const sweep = accountSweeper(scheduler, log);
+  sweep();
 
   async function api(req: IncomingMessage, res: ServerResponse, path: string) {
     const method = req.method ?? "GET";
@@ -174,6 +184,8 @@ export async function startServer(given: ServerOptions): Promise<{ url: string; 
   adopt();
   const adoptTimer = setInterval(adopt, opts.adoptEveryMs ?? 60_000);
   adoptTimer.unref();
+  const sweepTimer = setInterval(sweep, opts.accountSweepMs ?? ACCOUNT_SWEEP_MS);
+  sweepTimer.unref();
   if (opts.watchers !== false) watchers.sync();
   let notifier: TurnNotifier | undefined;
   if (process.env.FACTORY_NO_NOTIFY !== "1") {
@@ -186,6 +198,7 @@ export async function startServer(given: ServerOptions): Promise<{ url: string; 
     notifier,
     close: () => {
       clearInterval(adoptTimer);
+      clearInterval(sweepTimer);
       notifier?.stop();
       watchers.stopAll();
       server.close();

@@ -98,6 +98,7 @@ When a run finishes, its branch stays in your repository. Review it, merge it, o
 - **Order:** the item that holds back the most stories comes first, then the one that waits longest. Items are grouped by repository.
 - **Each item:** what it is, why it waits, the action, and since when. The button opens the place to do it (GitHub in a new tab, or the run page).
 - **Runs you started yourself** (UI or `scf run`) count when they wait for approval, at any age, or when they failed or stopped in the last 7 days. Failed release, CI-fix and review runs started by a watcher show the same way. Runs of older versions have no record of who started them and are treated like watcher runs.
+- **Answer and approve here:** for an item of a watcher, buttons next to the GitHub link do the work. **Show questions** has **Accept all recommendations** (only for questions asked up front) and **Answer…** (a box per question; each needs an answer, and **Use recommendation** fills one in visibly). **Show plan**, **Show split** and **Show request** show the risk and **Approve** / **Reject** (say what to change). A failed item has **Retry** and **Retry with a hint…**. Each action is a normal comment on the issue under the Foundry's GitHub login, signed with your name, so replying on GitHub still works. Approve and reject need write access for that login. The item then shows under **Done — continuing**.
 - **Dismiss** hides an item. It stays hidden until its situation changes (a new question, a new approval, a new failure). **Show again** at the bottom brings all dismissed items back. Watcher errors cannot be dismissed. Dismissals are kept in `your-turn.json` in the data folder.
 - **No refresh needed:** the page updates every 5 seconds. When you come back from a GitHub link, the watcher checks GitHub at once. An answer you give elsewhere shows at the next watcher check.
 - **Empty:** it says "Nothing needs you." and, when it can, how many stories are being built and when the next release pull request is expected.
@@ -405,7 +406,7 @@ In **agent prompts** you can use:
 **Shell commands** may only template trusted values (`{{vars.*}}`, `{{workdir}}`, `{{run.*}}`).
 Task text and step outputs could contain anything, so shell steps read them from environment
 variables instead: `$FACTORY_TASK`, `$FACTORY_OUT_<STEP_ID>`, `$FACTORY_VAR_<NAME>`,
-`$FACTORY_RUN_ID`, `$FACTORY_BRANCH`, `$FACTORY_NEXT_<REASON>`, `$FACTORY_FIRST_<REASON>`, `$FACTORY_FIRST_NOTHING` (also as `$SCF_…`).
+`$FACTORY_RUN_ID`, `$FACTORY_BRANCH`, `$FACTORY_NEXT_<REASON>`, `$FACTORY_FIRST_<REASON>`, `$FACTORY_FIRST_NOTHING`, `$FACTORY_FIRST_INFO` and the other report lines (also as `$SCF_…`).
 
 An agent step can **continue the session** of an earlier agent step ("Continue session of"), so
 it remembers the conversation.
@@ -677,9 +678,9 @@ Issues with an excluded label (e.g. `geni`) are never picked up, whatever other 
 | I want to… | Do this |
 |---|---|
 | Build an issue, or a whole epic | Add `Factory_go` to each issue (select them all in GitHub's issue list → Labels). Give stories a **Depends on** section so they are built in order. |
-| Answer the questions | Reply on the issue, or `/defaults` |
+| Answer the questions | Reply on the issue, or `/defaults` — or in the app, on Your turn |
 | Check a plan before it is coded | Add `Factory_review_plan` before (or together with) `Factory_go` |
-| Approve / reject a risky plan | `/approve` (+ notes), or `/reject` + what to change |
+| Approve / reject a risky plan | `/approve` (+ notes), or `/reject` + what to change — or in the app, on Your turn |
 | Retry after an error | Remove `Factory_ERROR` to start over, or resume the run on its page to continue at the failed step |
 | Stop the Foundry from touching an issue | Remove `Factory_go`, or add an excluded label |
 | Get the work into `main` | Merge the release pull request `develop` → `main` (gitflow), or the rolling Foundry pull request |
@@ -711,6 +712,28 @@ see at once what to do. For a risky plan it looks like this:
 …
 _The plan is risky and waits for your decision — …_
 ```
+
+A comment that only reports something says so too. In flows built from the `push-plan`,
+`push-result` and `triage` blocks the plan comment starts with `**Nothing needed from you**`. The result comment starts
+with `**What you need to do:** Review and merge the pull request.` when there is a pull request, else
+with `**What you need to do:** Open a pull request from the branch.` The comment that lists the new
+issues after a split starts with `**Nothing needed from you**`. In `github-auto` it starts with
+`**What you need to do:** Start the new issues when you want them built.` when the new issues are not
+picked up by themselves (`auto_subtasks` is `no`).
+
+The label-driven flows do the same:
+
+- The plan from `issue-plan` starts with
+`**What you need to do:** Add the code label to start coding.`
+- The result of `issue-code-daily`, `issue-deliver` and `issue-gitflow` starts with
+`**Nothing needed from you** — it goes to main with the release pull request.`
+- The reply of `pr-feedback` after review comments starts with
+`**What you need to do:** Look at the changes.`
+- The daily report (`daily-pr`) and the release check (`release-daily`) start with
+`**What you need to do:** Merge the release pull request when you like.` when the checks pass, and with
+`**Nothing needed from you** — it stays a draft until the checks pass.` when they fail.
+
+The empty line and the heading follow, as before.
 
 In `issue-gitflow`, a plan that starts coding by itself starts with
 `**Nothing needed from you** — it is being worked on.` The server gives
@@ -890,10 +913,23 @@ another admin first", changes nothing and exits 1. Change a role with
 `scf user role <e-mail> admin|user`. `scf user list` shows the last sign-in of each account
 ("never" when there is none).
 
+**What a block or delete stops.** A blocked or deleted account cannot start anything new. The jobs it
+queued are cancelled (the server checks every 2 seconds; a block made while the server was down is
+handled at the next start, before any job starts). A job it queued never starts, also after a
+restart. Its running runs finish, and runs that wait for approval stay as they are. An admin can
+still resume, approve or reject such a run, and that job runs. `scf user block <e-mail> --stop-work`
+also cancels the account's running runs and its runs that wait for approval; workspaces are kept.
+The server acts on `--stop-work` once, when it sees it (about 2 seconds, or at the next start), and
+it covers every run the account owns at that moment. An admin's resume made in that gap is
+cancelled too. `scf user unblock` restarts nothing and removes a stop-work request the server has
+not handled yet. Watchers of the account keep working: disable the watcher or change its owner. The
+server log says how many runs it cancelled, with the account id only.
+
 **Audit log.** Every `scf user` action that changes something (`create`, `password`, `role`,
 `block`, `unblock`, `delete`) adds one line to `audit.jsonl` in the data folder (mode `0600`), for
 example `{"time":"2026-10-02T09:46:46.000Z","by":"cli","action":"role","userId":"<id>","oldRole":"user","newRole":"admin"}`.
-Only a role change has `oldRole` and `newRole`. No line holds a name, e-mail, password, hash or
+Only a role change has `oldRole` and `newRole`. A `block` line has `stopWork` (`true` when
+`--stop-work` was given). No line holds a name, e-mail, password, hash or
 token, and a failed action is not logged. If the file cannot be written, the command stops before
 it changes anything. In the rare case that the line cannot be added after the change (for example a
 full disk), the command says so and exits 1. The file is a record, not a protection: anyone who runs
@@ -960,16 +996,31 @@ show as "n runs ahead of you", without ids.
 (`POST /api/runs/<id>/approve` or `/reject` with `{"note": "…"}`). The note reaches the run.
 
 **Repositories.** Every account has its own list of GitHub repositories, kept in `repos.json` in
-the data folder (mode `0600`). Three calls manage it:
+the data folder (mode `0600`). A repository is a record: `id`, `owner` (account id), `url`, `method`
+and `added`. It never holds a secret. These calls manage it:
 
-- `GET /api/repos` lists your repositories.
-- `POST /api/repos {"name": "owner/name"}` adds one (201; 409 if you have it; 400 for a bad name;
-  at most 50).
-- `DELETE /api/repos/<owner>/<name>` removes one (404 if you do not have it).
+- `GET /api/repos` lists your records.
+- `POST /api/repos {"url": …, "method": …, "username": …, "token": …}` adds one (201; 409 if you or
+  another account has it; 400 for a bad URL or method; at most 50). `{"name": "owner/name"}` still works.
+- `PUT /api/repos/<id>/auth` changes the method, user name, token or address. What you do not give
+  keeps its value. The old stored token is wiped. 404 for an id that is not yours.
+- `DELETE /api/repos/<id>` removes the repository and its stored token (404 if it is not yours).
+- `DELETE /api/repos/<owner>/<name>` removes a GitHub repository by name (the old form).
 
-A name is `owner/name` with letters, digits, `-`, `_` and `.`. The placeholder `owner/repo` and
-names like `a/..` are refused. Case does not matter when names are compared. If `repos.json`
-cannot be read, the calls answer "the repository list is not working; see the server log".
+The URL is `https://host/path`, `ssh://[user@]host[:port]/path` or `git@host:path`; `owner/name`
+means `https://github.com/owner/name`. Local paths, `file:`, `ext::` and other transports, a user
+name or password in the URL, and control characters give 400. The record keeps the address as you
+wrote it (for example `git@host:team/app.git` stays that way). The same repository in another case,
+with or without `.git`, or in https or ssh form counts as one repository. `PUT …/auth` may change the
+address only to another form of the same repository.
+
+Methods: `github-token` (a GitHub fine-grained token, only for `https://github.com/…`) and
+`https-token` (a user name and a token, any https host). The token is stored in the credential store
+as `repo:<repository id>`. `none` is the default without a method: the server's own access for an
+admin, "needs authentication" for a user, who cannot choose it. If a repository's token is removed
+with `DELETE /api/credentials/<id>`, set it again with `PUT …/auth`.
+
+If `repos.json` cannot be read, the calls answer "the repository list is not working; see the server log".
 
 **Which flows a user may start.** A user starts a *published* flow by name (`POST /api/runs
 {"flow": "<name>", "task": "…", "vars": {…}}`), never by `yaml` (403 "only an admin can run a
@@ -1050,15 +1101,19 @@ Change a role with `scf user role <e-mail> admin|user`, or create an admin with
 | `GET /api/your-turn` | yes | no | what waits for you |
 | `POST /api/your-turn/dismiss` | yes | no | dismiss an item |
 | `POST /api/your-turn/restore` | yes | no | restore dismissed items |
+| `GET /api/your-turn/detail` | yes | no | the questions, plan or split of an item |
+| `POST /api/your-turn/act` | yes | no | answer, approve, reject or retry an item, as a comment on the issue |
 | `GET /api/credentials` | yes | yes | your stored credentials |
 | `POST /api/credentials` | yes | yes | store a credential |
 | `DELETE /api/credentials/:id` | yes | yes | remove a credential |
 | `GET /api/repos` | yes | yes | your repositories |
-| `POST /api/repos` | yes | yes | add a repository |
-| `DELETE /api/repos/:owner/:name` | yes | yes | remove a repository |
+| `POST /api/repos` | yes | yes | add a repository (a URL, and a token for it) |
+| `PUT /api/repos/:id/auth` | yes | yes | change the method, user name, token or address of your repository |
+| `DELETE /api/repos/:id` | yes | yes | remove your repository and its stored token |
+| `DELETE /api/repos/:owner/:name` | yes | yes | remove a GitHub repository by name (old form) |
 
-**What comes later.** Runs that use a user's stored credentials, changing your own password in
-the UI, and pages for users (starting runs, repositories).
+**What comes later.** Runs that use a user's stored credentials or a repository's token, changing
+your own password in the UI, and pages for users (starting runs, repositories).
 
 ### Access from other computers
 
@@ -1151,7 +1206,8 @@ in Slack and notifications still point at `http://localhost:<port>`.
 (`POST /api/credentials`); there is no UI page yet, and runs do not use them yet. They are kept in
 `credentials.json` in the data folder (mode `0600`), encrypted with AES-256-GCM. The key is not in
 the data folder: it is in the macOS Keychain, as an item of the service
-`claude-factory-credential-key`. Only macOS is supported.
+`claude-factory-credential-key`. Only macOS is supported. The token of a repository is stored here
+too, as `repo:<repository id>`; your own names must not start with `repo:`.
 - **What the API shows.** Only type, name, created, last used and the fingerprint, never the
   secret. A token must be 8 to 4096 printable ASCII characters on one line. To check a fingerprint:
   `printf %s "$TOKEN" | shasum -a 256`, the first 16 digits.
@@ -1251,7 +1307,7 @@ The command is `scf`. `factory` still works as an alias and prints a short note.
 | `scf user list` | List accounts with the last sign-in (never shows passwords or hashes) |
 | `scf user role <e-mail> admin\|user` | Change the role of an account (not the last admin); counts from the next call |
 | `scf user password <e-mail>` | Set a new password and sign the account out |
-| `scf user block <e-mail>` / `scf user unblock <e-mail>` | Block (and sign out) or unblock an account (not the last admin) |
+| `scf user block <e-mail> [--stop-work]` / `scf user unblock <e-mail>` | Block (and sign out) or unblock an account (not the last admin). Queued jobs are cancelled; `--stop-work` also cancels running and waiting runs |
 | `scf user delete <e-mail>` | Delete an account, its sessions and its stored credentials (not the last admin) |
 | `scf credential rotate-key` | Re-encrypt all stored credentials under a new key |
 | `scf credential check` | Check that the macOS Keychain can store, read and remove the key |
@@ -1295,8 +1351,9 @@ who has the next move (the badge at the start of the line), what to do and why. 
 `Factory_review_plan`. Read the plan on the issue and reply `/approve` (with notes if you like)
 or `/reject` with what to change.
 
-**The Foundry pull request is a draft.** The daily full test run or build failed on it; the
-failing output is in the daily report comment. It becomes ready again when a later report passes.
+**The release pull request is a draft.** The daily full test run or build failed on it; the
+daily report or release check starts with `**Nothing needed from you** — it stays a draft until the checks pass.`
+and has the failing output. It becomes ready again when a later report passes.
 
 **A run failed, or a watcher shows an error.** The message says what happened, why, and what
 you can do first. Find yours in the table:

@@ -18,6 +18,21 @@ export interface TurnSource {
   prTitle?: string;
 }
 
+/** What the app can do for an item, as a comment on its issue (or a label). */
+export type TurnAct = "defaults" | "answer" | "approve" | "reject" | "retry" | "retry_hint";
+
+/** The actions for an item of this kind; none without a watcher or an issue (the GitHub link stays the way). */
+export function actsFor(kind: NextStep["kind"], watcher: string | undefined, issue: number | undefined): TurnAct[] {
+  if (!watcher || issue === undefined) return [];
+  switch (kind) {
+    case "questions": return ["defaults", "answer"];
+    case "planner_questions": return ["answer"];
+    case "approve_plan": case "approve_split": case "approval": return ["approve", "reject"];
+    case "failed": return ["retry", "retry_hint"];
+    default: return [];
+  }
+}
+
 export interface TurnItem {
   key: string;
   repo: string;
@@ -28,11 +43,15 @@ export interface TurnItem {
   unblocks: number;
   dismissable: boolean;
   watcher?: string;
+  /** What the app can do here (empty: use the link). */
+  acts: TurnAct[];
 }
 
 export interface YourTurn {
   count: number;
   groups: { repo: string; items: TurnItem[] }[];
+  /** Items the user just acted on; they continue by themselves. */
+  continuing?: TurnItem[];
   /** How many items are hidden by Dismiss. */
   dismissed: number;
   /** Set only when count is 0. */
@@ -42,6 +61,8 @@ export interface YourTurn {
 export interface TurnOptions {
   /** Dismissed keys → the stamp they were dismissed at. */
   dismissed?: Record<string, { since: string }>;
+  /** Acted keys → the stamp they were acted on at. */
+  acted?: Record<string, { since: string }>;
   /** Stories being built right now. */
   building?: number;
   /** "HH:MM" of the next release that the running work feeds. */
@@ -137,6 +158,7 @@ export function buildTurn(sources: TurnSource[], o: TurnOptions = {}): { data: Y
       key: s.key, repo: s.next.repo, what: s.next.title || s.next.where.label, next: s.next, since: s.since,
       unblocks: s.next.issue === undefined ? 0 : unblocksOf(s.next.repo, [s.next.issue], deps),
       dismissable: s.dismissable, watcher: s.watcher, stamp: s.stamp,
+      acts: actsFor(s.next.kind, s.watcher, s.next.issue),
     });
   }
   for (const [url, list] of releases) {
@@ -148,13 +170,16 @@ export function buildTurn(sources: TurnSource[], o: TurnOptions = {}): { data: Y
       since: earliest(list.map((s) => s.since)),
       unblocks: unblocksOf(first.next.repo, [...new Set(list.flatMap((s) => (s.next.issue === undefined ? [] : [s.next.issue])))], deps, true),
       dismissable: list.every((s) => s.dismissable), watcher: first.watcher ?? list.find((s) => s.watcher)?.watcher,
-      stamp: earliest(list.map((s) => s.stamp)) ?? "",
+      stamp: earliest(list.map((s) => s.stamp)) ?? "", acts: [],
     });
   }
 
   const dismissed = o.dismissed ?? {};
   const hidden = (i: TurnItem & { stamp: string }) => i.dismissable && dismissed[i.key] !== undefined && dismissed[i.key]!.since === i.stamp;
-  const shown = all.filter((i) => !hidden(i)).sort(byImportance);
+  const acted = o.acted ?? {};
+  const isActed = (i: TurnItem & { stamp: string }) => acted[i.key] !== undefined && acted[i.key]!.since === i.stamp;
+  const continuing = all.filter(isActed).sort(byImportance);
+  const shown = all.filter((i) => !isActed(i) && !hidden(i)).sort(byImportance);
 
   const groups: YourTurn["groups"] = [];
   for (const item of shown) {
@@ -163,7 +188,8 @@ export function buildTurn(sources: TurnSource[], o: TurnOptions = {}): { data: Y
     if (!g) groups.push((g = { repo, items: [] }));
     g.items.push(publicItem(item));
   }
-  const data: YourTurn = { count: shown.length, groups, dismissed: all.length - shown.length };
+  const data: YourTurn = { count: shown.length, groups, dismissed: all.filter((i) => !isActed(i) && hidden(i)).length };
+  if (continuing.length) data.continuing = continuing.map(publicItem);
   if (!shown.length) data.empty = emptyText(o.building ?? 0, o.releaseAt);
   return { data, all };
 }

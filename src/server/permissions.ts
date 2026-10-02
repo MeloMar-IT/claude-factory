@@ -60,12 +60,16 @@ export const RULES: Rule[] = [
   r("GET", "your-turn", "no", "what waits for you"),
   r("POST", "your-turn/dismiss", "no", "dismiss an item"),
   r("POST", "your-turn/restore", "no", "restore dismissed items"),
+  r("GET", "your-turn/detail", "no", "the questions, plan or split of an item"),
+  r("POST", "your-turn/act", "no", "answer, approve, reject or retry an item, as a comment on the issue"),
   r("GET", "credentials", "yes", "your stored credentials"),
   r("POST", "credentials", "yes", "store a credential"),
   r("DELETE", "credentials/:id", "yes", "remove a credential"),
   r("GET", "repos", "yes", "your repositories"),
-  r("POST", "repos", "yes", "add a repository"),
-  r("DELETE", "repos/:owner/:name", "yes", "remove a repository"),
+  r("POST", "repos", "yes", "add a repository (a URL, and a token for it)"),
+  r("PUT", "repos/:id/auth", "yes", "change the method, user name, token or address of your repository"),
+  r("DELETE", "repos/:id", "yes", "remove your repository and its stored token"),
+  r("DELETE", "repos/:owner/:name", "yes", "remove a GitHub repository by name (old form)"),
 ];
 
 /** The key of a rule, e.g. "POST runs/:id/approve". */

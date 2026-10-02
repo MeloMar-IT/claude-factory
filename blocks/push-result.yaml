@@ -9,10 +9,12 @@ steps:
     type: shell
     run: |
       branch=$(git branch --show-current)
+      pr=$(gh pr view "$branch" --repo "$FACTORY_VAR_GITHUB_REPO" --json url -q .url 2>/dev/null || true)
+      if [ -n "$pr" ]; then first="$FACTORY_FIRST_MERGE_PR"; else first="$FACTORY_FIRST_OPEN_PR"; fi
       {
+        echo "$first"; echo
         echo "✅ **Spaghetti Code Foundry finished this ticket**"
         echo
-        pr=$(gh pr view "$branch" --repo "$FACTORY_VAR_GITHUB_REPO" --json url -q .url 2>/dev/null || true)
         if [ -n "$pr" ]; then echo "Pull request: $pr"
         else echo "Branch: [\`$branch\`](https://github.com/$FACTORY_VAR_GITHUB_REPO/compare/$branch?expand=1) — open a pull request from there."; fi
         echo

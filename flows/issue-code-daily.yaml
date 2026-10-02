@@ -103,7 +103,8 @@ steps:
       {{steps.pull_ticket.output}}
 
       Follow the plan in the latest "Spaghetti Code Foundry plan" comment (older ones are headed
-      "claude-factory plan"), including any later comments from people, which override it.
+      "claude-factory plan"), including any later comments from people, which override it. The bold first
+      line of that comment is for the owner, not a step of the plan.
       Follow the repository's CLAUDE.md conventions.
       - Add or update tests for everything you change.
       - Do not add new dependencies. Do not change: {{vars.forbidden_paths}}
@@ -349,14 +350,15 @@ steps:
     run: |-
       branch=$(git branch --show-current); sha=$(git rev-parse HEAD)
       verdict() { printf '%s\n' "$1" | sed -n 's/^VERDICT: *//p' | tail -1; }
-      { echo "🤖 **Spaghetti Code Foundry** implemented this on branch \`$branch\` (commit https://github.com/$FACTORY_VAR_GITHUB_REPO/commit/$sha)."
+      { echo "$FACTORY_FIRST_SHIPS"; echo
+        echo "🤖 **Spaghetti Code Foundry** implemented this on branch \`$branch\` (commit https://github.com/$FACTORY_VAR_GITHUB_REPO/commit/$sha)."
         echo; echo "### What was done"; printf '%s\n' "$FACTORY_OUT_IMPLEMENT"
         echo; echo "### Review (Codex)"
         echo "- round 1: $(verdict "$FACTORY_OUT_REVIEW_1")"
         [ -n "$FACTORY_OUT_REVIEW_2" ] && echo "- round 2: $(verdict "$FACTORY_OUT_REVIEW_2")"
         echo; echo "### Tests"; echo '```'; cat "{{run.dir}}/last-tests.txt"; echo '```'
         echo; echo "### Files changed"; echo '```'; git show --stat --format= HEAD | tail -40; echo '```'
-        echo; echo "_This goes to main with the daily pull request._"
+        echo; echo "_This goes to main with the release pull request._"
         echo; echo "<!-- claude-factory run=$FACTORY_RUN_ID -->"; } \
         | gh issue comment "$FACTORY_VAR_ISSUE" --repo "$FACTORY_VAR_GITHUB_REPO" --body-file -
     on_success: end

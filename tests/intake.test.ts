@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runFlow } from "../src/engine/runner.js";
 import { loadFlow } from "../src/flow/load.js";
+import { reportFirst } from "../src/next-step.js";
 import { claudeBin, fakeGithub, flowPath } from "./helpers/fake-github.js";
 
 describe("github-auto (triage routes)", () => {
@@ -29,6 +30,7 @@ describe("github-auto (triage routes)", () => {
     process.env.FAKE_TRIAGE = "Bigger.\nROUTE: FEATURE";
     const s = await run();
     expect(ids(s).slice(3, 6)).toEqual(["triage", "plan", "push_plan"]);
+    expect(gh.comments().find((c) => c.body.includes("Foundry plan**"))!.body.split("\n")[0]).toBe(reportFirst("info"));
   });
 
   it("SPLIT creates labelled sub-issues and ends", async () => {
@@ -43,6 +45,19 @@ describe("github-auto (triage routes)", () => {
     expect(log).toContain("They are labelled `claude-factory` and will be picked up automatically.");
     expect(log).toContain(`<!-- claude-factory run=${s.runId} -->`);
     expect(log).toContain("https://github.com/owner/repo/issues/102");
+    const c = gh.comments().find((x) => x.body.includes("split this ticket"))!;
+    expect(c.body.split("\n").slice(0, 3)).toEqual([reportFirst("info"), "", "🤖 **Spaghetti Code Foundry** split this ticket into smaller ones:"]);
+    expect(c.body.split("\n").at(-1)).toBe(`<!-- claude-factory run=${s.runId} -->`);
+  });
+
+  it("SPLIT without auto_subtasks tells you to start the new issues", async () => {
+    process.env.FAKE_TRIAGE = "Too big.\nSUBTASK: Add model :: Create the User model.\nSUBTASK: Add API :: Expose /users.\nROUTE: SPLIT";
+    const s = await run();
+    expect(s.status).toBe("succeeded");
+    const c = gh.comments().find((x) => x.body.includes("split this ticket"))!;
+    expect(c.body.split("\n").slice(0, 3)).toEqual([reportFirst("start_parts"), "", "🤖 **Spaghetti Code Foundry** split this ticket into smaller ones:"]);
+    expect(c.body).not.toContain("They are labelled");
+    expect(gh.ghLog()).not.toContain("--label claude-factory");
   });
 
   it("NEEDS_INFO asks the triage questions and stops", async () => {
