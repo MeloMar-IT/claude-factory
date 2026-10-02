@@ -5,6 +5,7 @@ import type { ApprovalDecision } from "../engine/execute.js";
 import { cancelWaitingRun, newRunId, resumeRun, runFlow } from "../engine/runner.js";
 import { listRunBriefs, listRunIds, loadRun, readLiveLog, runUpdatedAt, type RunBrief, type RunSummary } from "../engine/state.js";
 import type { Flow } from "../flow/schema.js";
+import { redactText } from "../credentials/redact.js";
 
 const MAX_LOG_LINES = 5000;
 
@@ -242,7 +243,8 @@ export class Scheduler {
       claudeBin: this.o.claudeBin,
       signal: a.controller.signal,
       config: this.o.config(),
-      log: (line: string) => {
+      log: (raw: string) => {
+        const line = redactText(raw);
         a.lines.push(line);
         if (a.lines.length > MAX_LOG_LINES) a.lines.shift();
         emit({ type: "log", line });

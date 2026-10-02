@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { CANNOT_READ, redactedJson } from "../credentials/redact.js";
 import { supersededRuns } from "../stats.js";
 import { resolve } from "node:path";
 import { runDiff } from "../engine/diff.js";
@@ -11,6 +12,7 @@ import type { RunEvent } from "../queue/scheduler.js";
 import type { Route } from "./server.js";
 
 const NEXT_RECHECK_MS = 2_000;
+
 
 export const runRoutes: Route = async (ctx, req, res, seg, method) => {
   const { opts, scheduler } = ctx;
@@ -76,7 +78,9 @@ export const runRoutes: Route = async (ctx, req, res, seg, method) => {
         last = shown(next);
         out = { ...e, summary: { ...e.summary, next } };
       }
-      res.write(`event: ${e.type}\ndata: ${JSON.stringify(out)}\n\n`);
+      const data = redactedJson(out);
+      if (data === undefined) return void res.write(`event: log\ndata: ${JSON.stringify({ type: "log", line: CANNOT_READ })}\n\n`);
+      res.write(`event: ${e.type}\ndata: ${data}\n\n`);
     };
     const unsubscribe = scheduler.subscribe(id, write);
     // A wait for a code area shows up in the step log only, without an update event: look again now and then.

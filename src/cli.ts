@@ -44,6 +44,8 @@ Usage:
   scf user list                                  List accounts
   scf user password <e-mail>                     Set a new password
   scf user block <e-mail> | unblock <e-mail>     Block or unblock an account
+  scf user delete <e-mail>                       Delete an account and wipe its stored credentials
+  scf credential rotate-key | check              Re-encrypt stored credentials; check the macOS Keychain
   scf service install|uninstall|status          Keep \`scf serve\` running as a macOS login agent
   scf watch [flow] --var github_repo=o/r         Every 5 min, run the flow (default github-issue) on
         [--every 5m] [--label claude-factory]    each open issue with the label; results are marked
@@ -358,6 +360,11 @@ async function main(argv: string[]): Promise<number> {
       return userCommand({ positionals: positionals.slice(1), values: given }, terminalIo());
     }
 
+    case "credential": {
+      const { credentialCommand } = await import("./credentials/cli.js");
+      return credentialCommand(positionals.slice(1), (line) => void process.stdout.write(line + "\n"));
+    }
+
     default:
       throw new Error(`unknown command "${cmd}"\n\n${usage()}`);
   }
@@ -365,8 +372,15 @@ async function main(argv: string[]): Promise<number> {
 
 main(process.argv.slice(2)).then(
   (code) => process.exit(code),
-  (err: Error) => {
-    process.stderr.write(`error: ${err.message}\n`);
+  async (err: Error) => {
+    // the stored secrets are hidden from displayed errors; if that cannot load, show nothing from the message
+    let text = "(message hidden: the stored credentials cannot be read)";
+    try {
+      text = (await import("./credentials/redact.js")).redactText(err.message);
+    } catch {
+      // keep the safe text
+    }
+    process.stderr.write(`error: ${text}\n`);
     process.exit(1);
   },
 );

@@ -1,5 +1,5 @@
 import { createInterface } from "node:readline";
-import { checkEmail, checkName, checkPassword, createUser, findUserByEmail, hasAdmin, listUsers, setPassword, setStatus, type User } from "./users.js";
+import { checkEmail, checkName, checkPassword, createUser, deleteUser, findUserByEmail, hasAdmin, listUsers, setPassword, setStatus, type User } from "./users.js";
 
 /** Everything the commands need from the terminal; tests pass a fake. */
 export interface UserIo {
@@ -17,9 +17,10 @@ export const USER_USAGE = `usage: scf user create [--admin] [--name n] [--email 
        scf user list                                      List accounts
        scf user password <e-mail>                         Set a new password
        scf user block <e-mail> | scf user unblock <e-mail>
+       scf user delete <e-mail>                           Delete an account and wipe its stored credentials
 The password is asked twice on a terminal, or read from the first line of stdin.`;
 
-const ALLOWED: Record<string, string[]> = { create: ["admin", "name", "email"], list: [], password: [], block: [], unblock: [] };
+const ALLOWED: Record<string, string[]> = { create: ["admin", "name", "email"], list: [], password: [], block: [], unblock: [], delete: [] };
 
 export function terminalIo(stdin: NodeJS.ReadStream = process.stdin, stderr: NodeJS.WriteStream = process.stderr): UserIo {
   const cancelled = () => new Error("cancelled");
@@ -161,6 +162,16 @@ export async function userCommand(args: { positionals: string[]; values: Record<
       const status = sub === "block" ? "blocked" : "active";
       await setStatus(u.id, status);
       io.out(`${status === "blocked" ? "blocked" : "unblocked"} ${u.email}`);
+      return 0;
+    }
+    case "delete": {
+      const u = accountByEmail(operands[0]!);
+      const r = deleteUser(u.id);
+      io.out(`deleted ${r.email} (${r.credentials} credential(s) wiped)`);
+      if (r.oldKeysLeft) {
+        io.out(`an old credential key is still in the Keychain; run: scf credential rotate-key`);
+        return 1;
+      }
       return 0;
     }
     default:

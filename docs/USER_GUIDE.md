@@ -968,6 +968,24 @@ for a year.
 Every account can still do everything (see above), so only give accounts to people you trust. Links
 in Slack and notifications still point at `http://localhost:<port>`.
 
+**Stored credentials.** A token or an ssh key can be stored through the API
+(`POST /api/credentials`); there is no UI page yet, and runs do not use them yet. They are kept in
+`credentials.json` in the data folder (mode `0600`), encrypted with AES-256-GCM. The key is not in
+the data folder: it is in the macOS Keychain, as an item of the service
+`claude-factory-credential-key`. Only macOS is supported.
+- **What the API shows.** Only type, name, created, last used and the fingerprint, never the
+  secret. A token must be 8 to 4096 printable ASCII characters on one line. To check a fingerprint:
+  `printf %s "$TOKEN" | shasum -a 256`, the first 16 digits.
+- **Redaction.** A stored secret is replaced by `[redacted]` in step output, logs, transcripts,
+  errors and API answers. Limits: text written before a credential was saved stays on disk (the API
+  hides it), the task text and other encodings (such as base64 of `user:token`) are not matched.
+  If credentials exist and the Keychain is locked or the key is gone, runs fail before they start
+  and the API shows nothing until that is fixed.
+- **Deleting.** Deleting a credential or a user (`scf user delete`) replaces the key, so older
+  copies of `credentials.json` are useless. `scf credential rotate-key` does the same on demand.
+- **Who can read the key.** Anyone who runs commands as your macOS user, flow steps included. The
+  encryption protects copies of the data folder: backups, sync, another user.
+
 Global settings are stored in `~/.spaghetti-code-foundry/config.yaml`; runs in `~/.spaghetti-code-foundry/runs/`.
 
 ---
@@ -1054,6 +1072,9 @@ The command is `scf`. `factory` still works as an alias and prints a short note.
 | `scf user list` | List accounts (never shows passwords or hashes) |
 | `scf user password <e-mail>` | Set a new password and sign the account out |
 | `scf user block <e-mail>` / `scf user unblock <e-mail>` | Block (and sign out) or unblock an account |
+| `scf user delete <e-mail>` | Delete an account, its sessions and its stored credentials (not the only admin) |
+| `scf credential rotate-key` | Re-encrypt all stored credentials under a new key |
+| `scf credential check` | Check that the macOS Keychain can store, read and remove the key |
 
 The password is asked twice on a terminal, or read from the first line of stdin; it is never an
 option or an environment variable. No command needs a signed-in session; only the web UI does.
@@ -1170,6 +1191,11 @@ output lists the file, line and kind of secret.
 **Forgot the password.** Run `scf user password <e-mail>` on the machine. If no admin is left, run
 `scf user create --admin`.
 
+**The credential store is not working.** Run `scf credential check`. Unlock the login keychain if
+it fails. If the key is gone (for example the data folder was copied from another Mac), delete
+`credentials.json` and add the credentials again. "An old key is still in the Keychain" means a
+removal failed after a delete or rotation; `scf credential rotate-key` clears it.
+
 **Tests fail for reasons unrelated to the change.** Set the right command with the `test_cmd`
 variable, per repository in `<repo>/.claude-factory/config.yaml`.
 
@@ -1186,7 +1212,7 @@ learnings, queue, locks and evals. The copy is made next to the new folder and r
 in one step, so you never see a half-done move. Paths that point into the old folder (in run state,
 lock files, `queue.json` and `config.yaml`) are rewritten. If `config.yaml` can't be rewritten
 safely, it is kept as it was and a warning lists the values that still point to the old folder.
-`users.json` and `sessions.json` are copied unchanged, with their mode.
+`users.json`, `sessions.json` and `credentials.json` are copied unchanged, with their mode.
 
 **The backup.** `~/.claude-factory` is never changed or deleted, except for a note file
 `MOVED-TO-SPAGHETTI-CODE-FOUNDRY.txt`. Nothing there is used anymore: your settings now live in

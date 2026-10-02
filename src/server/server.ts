@@ -3,12 +3,14 @@ import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig, type Config } from "../config.js";
+import { redactText } from "../credentials/redact.js";
 import { FACTORY_HOME } from "../flow/load.js";
 import { homeMoved } from "../home.js";
 import { Scheduler } from "../queue/scheduler.js";
 import { WatcherManager } from "../queue/watchers.js";
 import { SESSION_RECHECK_MS, authRoutes, requireSession, sessionAlive } from "./api-auth.js";
 import { adminRoutes } from "./api-admin.js";
+import { credentialRoutes } from "./api-credentials.js";
 import { flowRoutes } from "./api-flows.js";
 import { runRoutes } from "./api-runs.js";
 import { HttpError, send, serveStatic } from "./http.js";
@@ -46,15 +48,23 @@ export interface ApiContext {
   restart?: RestartState;
   /** The address the server is bound to (a changed setting applies after a restart). */
   listen: string;
+  /**
+   * The log without redaction, only for diagnostics the code built itself from fixed words (a file name and a kind),
+   * never for exception text. They must stay readable when the credential store is the thing that is broken.
+   */
+  diagLog?: (msg: string) => void;
 }
 
 /** A route handler: returns true when it handled the request. */
 export type Route = (ctx: ApiContext, req: IncomingMessage, res: ServerResponse, seg: string[], method: string) => Promise<boolean>;
 
-const ROUTES: Route[] = [adminRoutes, flowRoutes, runRoutes, nextRoutes, yourTurnRoutes, sinceRoutes, boardRoutes, healthRoutes];
+const ROUTES: Route[] = [credentialRoutes, adminRoutes, flowRoutes, runRoutes, nextRoutes, yourTurnRoutes, sinceRoutes, boardRoutes, healthRoutes];
 
-export async function startServer(opts: ServerOptions): Promise<{ url: string; close: () => void; ctx: ApiContext; notifier?: TurnNotifier }> {
-  const log = opts.log ?? (() => {});
+export async function startServer(given: ServerOptions): Promise<{ url: string; close: () => void; ctx: ApiContext; notifier?: TurnNotifier }> {
+  // every free-form server, watcher and notifier log line passes the redaction (fail closed)
+  const sink = given.log ?? (() => {});
+  const log = (msg: string) => sink(redactText(msg));
+  const opts: ServerOptions = { ...given, log };
   let config = loadConfig();
   const listen = config.server.listen;
   // Before anything starts (queue, watchers): a non-local address needs accounts.
@@ -72,7 +82,7 @@ export async function startServer(opts: ServerOptions): Promise<{ url: string; c
     onFinished: (s) => { if (s.status === "succeeded") forgetHistory(ctx); },
   });
   const watchers = new WatcherManager({ scheduler, runsDir: opts.runsDir, repo: opts.repo, config: () => config, areaWait, log });
-  const ctx: ApiContext = { opts, scheduler, watchers, config: () => config, reloadConfig: () => (config = loadConfig()), listen };
+  const ctx: ApiContext = { opts, diagLog: sink, scheduler, watchers, config: () => config, reloadConfig: () => (config = loadConfig()), listen };
 
   async function api(req: IncomingMessage, res: ServerResponse, path: string) {
     const method = req.method ?? "GET";

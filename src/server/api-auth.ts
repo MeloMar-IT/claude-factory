@@ -148,6 +148,13 @@ export async function requireSession(ctx: ApiContext, req: IncomingMessage, meth
   if (typeof sent !== "string" || !sameToken(sent, csrfToken(cur.token))) throw new HttpError(403, "bad CSRF token");
 }
 
+/** The signed-in account of a request (call after requireSession). */
+export function sessionUser(ctx: ApiContext, req: IncomingMessage): User {
+  const cur = currentSession(ctx, req);
+  if (!cur) throw new HttpError(401, "sign in first");
+  return cur.user;
+}
+
 /** True while the request still has a live session; false when it ended or the store cannot be read. */
 export function sessionAlive(ctx: ApiContext, req: IncomingMessage): boolean {
   try {

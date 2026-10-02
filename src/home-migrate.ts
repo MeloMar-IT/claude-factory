@@ -155,7 +155,7 @@ export function sameSnapshot(a: Map<string, string>, b: Map<string, string>): bo
 }
 
 /** Top-level files the move copies byte for byte (they may hold text that looks like a path). */
-const VERBATIM_FILES = ["users.json", "sessions.json"];
+const VERBATIM_FILES = ["users.json", "sessions.json", "credentials.json"];
 
 /** Every `*.json` outside runs/<id>/workspace, except the top-level account files. */
 export function jsonFiles(root: string): string[] {
