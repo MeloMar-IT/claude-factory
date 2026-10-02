@@ -6,6 +6,7 @@ import { nextStepEnv } from "../next-step.js";
 import { loadConfig, loadRepoVars, type Config } from "../config.js";
 import { FACTORY_HOME } from "../flow/load.js";
 import { claimRunStart } from "../home.js";
+import { redactText, requireRedaction } from "../credentials/redact.js";
 import type { Flow, Step } from "../flow/schema.js";
 import { notifyRun } from "../notify.js";
 import {
@@ -79,7 +80,7 @@ export async function runFlow(flow: Flow, opts: RunOptions): Promise<RunSummary>
   try {
     if (flow.workspace !== "empty") repoVars = loadRepoVars(opts.repo);
   } catch (e) {
-    opts.log?.(`! ignoring repo config: ${(e as Error).message}`);
+    opts.log?.(redactText(`! ignoring repo config: ${(e as Error).message}`));
   }
   const summary: RunSummary = {
     runId,
@@ -102,6 +103,12 @@ export async function runFlow(flow: Flow, opts: RunOptions): Promise<RunSummary>
     saveRun(summary);
   });
   opts.onUpdate?.(summary);
+
+  try {
+    requireRedaction(); // before the workspace is made: output cannot be hidden when the stored secrets are unreadable
+  } catch (e) {
+    return finish(summary, opts, config, { outcome: "failed", reason: (e as Error).message, next: null, lastOutput: "" });
+  }
 
   try {
     const ws = prepareWorkspace(flow.workspace, opts.repo, runDir, runId);
@@ -146,10 +153,16 @@ async function drive(
   config: Config,
   resume: { startAt: string; decision?: Engine["decision"] } | null,
 ): Promise<RunSummary> {
-  const log = (line: string) => {
+  const log = (raw: string) => {
+    const line = redactText(raw);
     appendLiveLog(summary.runDir, line);
     opts.log?.(line);
   };
+  try {
+    requireRedaction();
+  } catch (e) {
+    return finish(summary, opts, config, { outcome: "failed", reason: (e as Error).message, next: summary.state.next, lastOutput: "" });
+  }
   const save = () => {
     saveRun(summary);
     opts.onUpdate?.(summary);
@@ -242,7 +255,7 @@ export function cancelWaitingRun(runsDir: string, runId: string, config: Config 
 
 async function finish(summary: RunSummary, opts: CommonOptions, config: Config, r: LoopResult): Promise<RunSummary> {
   summary.status = r.outcome;
-  summary.reason = r.reason;
+  summary.reason = r.reason === undefined ? undefined : redactText(r.reason);
   summary.state.next = r.next;
   if (r.outcome !== "waiting") summary.waiting = undefined;
   summary.finishedAt = new Date().toISOString();
@@ -333,6 +346,7 @@ async function loop(engine: Engine, scope: Scope, startAt: string | null, runsDi
       }
       res = applyChecks(step, res);
     }
+    res = { ...res, output: redactText(res.output), ...(res.error === undefined ? {} : { error: redactText(res.error) }) };
     recordStep(step, scope, engine, res, startedAt, logFile, visit);
     lastOutput = res.output;
     if (res.limited) {

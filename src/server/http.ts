@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { extname, join, normalize } from "node:path";
+import { CANNOT_READ, redactedJson } from "../credentials/redact.js";
 
 const MAX_BODY = 1_000_000;
 export const NAME_RE = /^[\w-]+$/;
@@ -21,9 +22,19 @@ export class HttpError extends Error {
   }
 }
 
+/**
+ * Answers with JSON. Every API answer passes through here, so the stored secrets are hidden now, even in text that
+ * was saved before they were stored. When the store cannot be read nothing is shown (fail closed).
+ */
 export function send(res: ServerResponse, status: number, body: unknown) {
+  const text = redactedJson(body);
+  if (text === undefined) {
+    res.writeHead(500, { "content-type": "application/json", "cache-control": "no-store" });
+    res.end(JSON.stringify({ error: CANNOT_READ }));
+    return;
+  }
   res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" });
-  res.end(JSON.stringify(body));
+  res.end(text);
 }
 
 export async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {

@@ -13,6 +13,9 @@ import { MARKER_NAME, migrateDataHome, NOTE_NAME, repairWorktrees, type MigrateO
 import { Scheduler } from "../src/queue/scheduler.js";
 import { Watcher } from "../src/queue/watcher.js";
 import { claudeBin, fakeGithub } from "./helpers/fake-github.js";
+import { randomUUID } from "node:crypto";
+import { addCredential, readSecret } from "../src/credentials/store.js";
+import { fakeKeychain, fakeToken } from "./helpers/keychain.js";
 
 const git = (cwd: string, ...a: string[]) =>
   execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", ...a], { cwd, encoding: "utf8", stdio: "pipe" });
@@ -74,13 +77,13 @@ const leftovers = () => readdirSync(tmp).filter((n) => n.includes(".migrating-")
 describe("account files in the move", () => {
   it("copies users.json and sessions.json byte for byte and keeps their mode", () => {
     const body = JSON.stringify({ version: 1, users: [{ name: `${from}/x` }] });
-    for (const f of ["users.json", "sessions.json"]) writeFileSync(join(from, f), body, { mode: 0o600 });
+    for (const f of ["users.json", "sessions.json", "credentials.json"]) writeFileSync(join(from, f), body, { mode: 0o600 });
     writeFileSync(join(from, "queue.json"), body);
     mkdirSync(join(from, "runs", "r9"), { recursive: true });
     writeFileSync(join(from, "runs", "r9", "users.json"), body);
     writeFileSync(join(from, "runs", "r9", "run.json"), JSON.stringify({ runId: "r9", status: "succeeded" }));
     expect(migrate().status).toBe("migrated");
-    for (const f of ["users.json", "sessions.json"]) {
+    for (const f of ["users.json", "sessions.json", "credentials.json"]) {
       expect(readFileSync(join(to, f))).toEqual(Buffer.from(body));
       expect(statSync(join(to, f)).mode & 0o777).toBe(0o600);
     }
@@ -102,6 +105,26 @@ describe("account files in the move", () => {
       expect(readFileSync(join(to, "sessions.json"))).toEqual(bytes);
       expect(statSync(join(to, "sessions.json")).mode & 0o777).toBe(0o600);
     } finally {
+      if (saved === undefined) delete process.env.FACTORY_HOME;
+      else process.env.FACTORY_HOME = saved;
+    }
+  });
+});
+
+describe("credentials in the move", () => {
+  it("a credential added in the old folder is read after the move", () => {
+    const saved = process.env.FACTORY_HOME;
+    const kc = fakeKeychain();
+    try {
+      process.env.FACTORY_HOME = from;
+      const token = fakeToken();
+      const owner = randomUUID();
+      const c = addCredential({ userId: owner, type: "token", name: "gh", secret: token }, { ownerOk: () => true });
+      expect(migrate().status).toBe("migrated");
+      process.env.FACTORY_HOME = to;
+      expect(readSecret(owner, c.id)).toBe(token);
+    } finally {
+      kc.remove();
       if (saved === undefined) delete process.env.FACTORY_HOME;
       else process.env.FACTORY_HOME = saved;
     }

@@ -106,10 +106,10 @@ describe("every route needs a session", () => {
   let who: TestSession;
   beforeAll(async () => void (who = await signInAs(s.base)));
 
-  const GETS = ["/api/info", "/api/config", "/api/watchers", "/api/providers", "/api/evals", "/api/stats", "/api/flows", "/api/flows/x", "/api/blocks", "/api/queue", "/api/runs", "/api/runs/x", "/api/runs/x/events", "/api/runs/x/diff", "/api/runs/x/transcript/0", "/api/next", "/api/your-turn", "/api/since", "/api/board", "/api/nope", "/api/setup"];
+  const GETS = ["/api/credentials", "/api/info", "/api/config", "/api/watchers", "/api/providers", "/api/evals", "/api/stats", "/api/flows", "/api/flows/x", "/api/blocks", "/api/queue", "/api/runs", "/api/runs/x", "/api/runs/x/events", "/api/runs/x/diff", "/api/runs/x/transcript/0", "/api/next", "/api/your-turn", "/api/since", "/api/board", "/api/nope", "/api/setup"];
   const PUTS = ["/api/config", "/api/flows/x", "/api/blocks/x", "/api/session"];
-  const DELETES = ["/api/flows/x", "/api/blocks/x"];
-  const POSTS = ["/api/watchers/x/tick", "/api/clean", "/api/providers/test", "/api/validate", "/api/generate", "/api/runs", "/api/runs/x/cancel", "/api/runs/x/resume", "/api/runs/x/approve", "/api/runs/x/reject", "/api/your-turn/dismiss", "/api/your-turn/restore", "/api/nope"];
+  const DELETES = ["/api/credentials/x", "/api/flows/x", "/api/blocks/x"];
+  const POSTS = ["/api/credentials", "/api/watchers/x/tick", "/api/clean", "/api/providers/test", "/api/validate", "/api/generate", "/api/runs", "/api/runs/x/cancel", "/api/runs/x/resume", "/api/runs/x/approve", "/api/runs/x/reject", "/api/your-turn/dismiss", "/api/your-turn/restore", "/api/nope"];
   const table = [...GETS.map((p) => ["GET", p]), ...PUTS.map((p) => ["PUT", p]), ...DELETES.map((p) => ["DELETE", p]), ...POSTS.map((p) => ["POST", p])] as [string, string][];
 
   const cases: [string, Record<string, string>][] = [

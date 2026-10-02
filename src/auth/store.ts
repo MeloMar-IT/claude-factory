@@ -27,6 +27,9 @@ const WAIT_MS = 2000;
 /** The lock this process holds (the account folder), set only inside withAuthLock. */
 let held: string | undefined;
 
+/** True while this process is inside withAuthLock. */
+export const authLockHeld = () => held !== undefined;
+
 const lockHeldByUs = (lock: string) => {
   try {
     return readFileSync(join(lock, "pid"), "utf8").trim() === String(process.pid);

@@ -1,10 +1,11 @@
 import { randomBytes, randomUUID, scrypt, timingSafeEqual } from "node:crypto";
 import { join } from "node:path";
 import { z } from "zod";
+import { removeCredentialsLocked } from "../credentials/store.js";
 import { addSessionLocked, removeSessionsLocked } from "./sessions.js";
 import { dataHome, readJsonFile, withAuthLock, writeJsonFile } from "./store.js";
 
-export type UserErrorCode = "bad-name" | "bad-email" | "bad-password" | "email-taken" | "admin-exists" | "not-found";
+export type UserErrorCode = "bad-name" | "bad-email" | "bad-password" | "email-taken" | "admin-exists" | "not-found" | "last-admin";
 
 /** A problem with what the caller asked for (not with the file). The message is safe to show. */
 export class UserError extends Error {
@@ -228,5 +229,32 @@ export function startSession(userId: string, verifiedHash: string, replaces?: st
     const user: User = { ...current, lastSignIn: new Date().toISOString() };
     writeJsonFile(usersPath(), { ...file, users: file.users.map((u, j) => (j === i ? user : u)) });
     return { user, token: addSessionLocked(userId, replaces) };
+  });
+}
+
+// ---- delete ----------------------------------------------------------------------------------------
+
+export interface DeletedUser {
+  email: string;
+  credentials: number;
+  oldKeysLeft: number;
+}
+
+/**
+ * Deletes an account. Order: sessions, then credentials (with a new key), then users.json, so every partial state is
+ * safe and a second run finishes the job. The only admin cannot be deleted.
+ */
+export function deleteUser(id: string): DeletedUser {
+  return withAuthLock(() => {
+    const file = read();
+    const user = file.users.find((u) => u.id === id);
+    if (!user) throw new UserError("not-found", "no such account");
+    if (user.role === "admin" && !file.users.some((u) => u.role === "admin" && u.id !== id)) {
+      throw new UserError("last-admin", "this is the only admin account; make another admin first");
+    }
+    removeSessionsLocked((s) => s.userId === id);
+    const wiped = removeCredentialsLocked(id);
+    writeJsonFile(usersPath(), { ...file, users: file.users.filter((u) => u.id !== id) });
+    return { email: user.email, credentials: wiped.removed, oldKeysLeft: wiped.oldKeysLeft };
   });
 }
