@@ -109,6 +109,7 @@ Changes that are merged but not yet in a release go under **Unreleased**. Newest
   - New state file `notifications.json` in the data folder (what was told, last send, summary day). A broken file reads as empty. The first start after the upgrade tells everything currently in Your turn once, as one grouped message.
   - Fix: a run's "last written" time (`updatedAt`, and `finishedAt` of an interrupted run) is rounded to the millisecond instead of cut off.
 
+- Faster stories: when a run ends its repository is checked at once; a run waiting for a code area steps aside instead of holding a slot; docs and whole test folders are not locked; low-risk plans skip the plan revision and the second Codex round unless round 1 found a [high] problem. Before starting an issue again, its current state is read directly (the issue list can lag).
 - Steps no longer inherit a Claude host session's variables (running the CLI from inside the Claude app could sign the command-line Claude Code out); the sign-out pause has its own clear message.
 - A run whose agent is signed out (expired Claude Code or Codex login) pauses and says how to sign in, instead of failing; it continues by itself afterwards.
 - Fix: find the Claude Code bundled with the Claude desktop app in its new folder layout (runs fell back to an old `claude` that can't use the newest models).

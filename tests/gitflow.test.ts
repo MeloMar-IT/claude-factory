@@ -15,7 +15,7 @@ import { claudeBin, fakeGithub } from "./helpers/fake-github.js";
 const REPO = "acme/app";
 const LABELS = { working: "Factory_working", done: "Factory_done", needs_info: "Factory_needs_info", waiting: "Factory_waiting", failed: "Factory_ERROR" };
 const VARS = { test_cmd: "! grep -q BUG feature.txt 2>/dev/null", docs_required: "docs/CHANGELOG.md", union_merge_files: "docs/CHANGELOG.md" };
-const FAKES = ["FAKE_SIZE", "FAKE_AREAS", "FAKE_RISK", "FAKE_GH_COMMENTS", "FAKE_GH_ISSUE_LABELS", "FAKE_ISSUE_PLAN"];
+const FAKES = ["FAKE_CODEX_VERDICT", "FAKE_CODEX_PLAN_VERDICT", "FAKE_CODEX_CODE_VERDICT", "FAKE_SIZE", "FAKE_AREAS", "FAKE_RISK", "FAKE_GH_COMMENTS", "FAKE_GH_ISSUE_LABELS", "FAKE_ISSUE_PLAN"];
 
 beforeAll(() => {
   process.env.FACTORY_CODEX_BIN = resolve("tests/fixtures/fake-codex.mjs");
@@ -113,6 +113,76 @@ describe("gitflow pipeline", () => {
     expect(runOf("6")!.history.find((h) => h.id === "feature_branch")!.output).toContain("brought develop up to date with main");
     expect(gh.remoteGit("show", "develop:hotfix.txt")).toBe("fix\n");
     expect(gh.remoteGit("log", "--format=%s", "develop")).toMatch(/Merge #6:[\s\S]*Merge main into develop/);
+  });
+
+  it("low-risk plan: no revision, Codex's notes go to the coder; riskier plan: Opus revises", async () => {
+    process.env.FAKE_CODEX_PLAN_VERDICT = "Use the existing helper.\nRISK_SCORE: 20\nVERDICT: CHANGES";
+    issues(5);
+    const w = watcher();
+    await w.tick();
+    await settle();
+    const low = runOf("5")!;
+    expect(low.status).toBe("succeeded");
+    const ids = low.history.map((h) => h.id);
+    expect(ids).toContain("revise_gate");
+    expect(ids).not.toContain("revise_plan");
+    expect(low.history.find((h) => h.id === "risk_gate")!.output).toContain("Use the existing helper."); // handed to the coder
+    expect(gh.ghLog()).toContain("low risk, so the coder works in Codex's notes below");
+
+    process.env.FAKE_RISK = "60"; // above 50, below the 75 approval gate
+    issues(6);
+    await w.tick();
+    await settle();
+    expect(runOf("6")!.history.map((h) => h.id)).toContain("revise_plan");
+  });
+
+  it("second review round only after a [high] finding (or for riskier stories)", async () => {
+    process.env.FAKE_CODEX_CODE_VERDICT = "[low] a name could be clearer\nSEVERITY: low\nVERDICT: CHANGES";
+    issues(5);
+    const w = watcher();
+    await w.tick();
+    await settle();
+    const ids = runOf("5")!.history.map((h) => h.id);
+    expect(ids).toContain("review_gate");
+    expect(ids).not.toContain("review_2");
+
+    process.env.FAKE_CODEX_CODE_VERDICT = "[high] crashes on empty input\nSEVERITY: high\nVERDICT: CHANGES";
+    issues(6);
+    await w.tick();
+    await settle();
+    expect(runOf("6")!.history.map((h) => h.id)).toContain("review_2");
+  });
+
+  it("steps aside (frees its slot) while another run holds its code area, and continues when it is free", async () => {
+    // Another live run holds src/area5.
+    const other = join(gh.tmp, "other-run");
+    mkdirSync(other, { recursive: true });
+    writeFileSync(join(other, "run.json"), JSON.stringify({ status: "running" }));
+    const lockTool = resolve("tools/area-lock");
+    const env = { ...process.env, FACTORY_VAR_GITHUB_REPO: REPO };
+    expect(spawnSync(lockTool, ["acquire", "other", other, "src/area5"], { env, encoding: "utf8" }).stdout).toContain("LOCKED");
+    issues(5);
+    const w = watcher();
+    await w.tick();
+    await settle();
+    const waiting = runOf("5")!;
+    expect(waiting.status).toBe("stopped");
+    expect(waiting.reason).toMatch(/stopped at step "wait_for_area"/);
+    expect(scheduler.queue().active).toHaveLength(0); // no slot held while waiting
+    // The other run finishes; the next check resumes it.
+    writeFileSync(join(other, "run.json"), JSON.stringify({ status: "succeeded" }));
+    await w.tick();
+    await settle();
+    expect(runOf("5")!.status).toBe("succeeded");
+  });
+
+  it("does not lock docs or whole test folders", () => {
+    const dir = mkdtempSync(join(tmpdir(), "lockign-"));
+    writeFileSync(join(dir, "run.json"), JSON.stringify({ status: "running" }));
+    const env = { ...process.env, FACTORY_VAR_GITHUB_REPO: "acme/ign", FACTORY_LOCK_DIR: join(dir, "locks") };
+    const r = spawnSync(resolve("tools/area-lock"), ["acquire", "r1", dir, "tests,docs/DEVELOPER_CHANGELOG.md,CLAUDE.md,website/tests,src/a.ts,tests/a.test.ts"], { env, encoding: "utf8" });
+    expect(r.stdout).toContain("not locked (merge safely): tests, docs/DEVELOPER_CHANGELOG.md, CLAUDE.md, website/tests");
+    expect(r.stdout).toContain("LOCKED: src/a.ts, tests/a.test.ts");
   });
 
   it("splits an issue whose plan is over the size limit", async () => {

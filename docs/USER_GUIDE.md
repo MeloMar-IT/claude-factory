@@ -756,7 +756,14 @@ flowchart LR
   both sides' entries are kept (`union_merge_files`).
 - **Several issues are coded at the same time** when they change different parts of the code:
   each plan names its code areas (`AREAS:`), and a run waits only while another run holds an
-  overlapping area. Issues in a **Depends on** chain are still built one after the other.
+  overlapping area — without holding a slot: it steps aside and continues as soon as that run is
+  done. Docs, the changelog and whole test folders are never locked (they merge safely). Issues
+  in a **Depends on** chain are still built one after the other.
+- **No waiting when nobody needs to act:** when a run ends, the Foundry checks that repository
+  at once, so the next story, a resume or a retry starts right away instead of at the next interval.
+- **Fewer rounds for low-risk work** (risk score 50 or lower): Codex's notes on the plan go straight
+  to the coder instead of Opus rewriting the plan first (`revise_above_risk`), and the second Codex
+  code review runs only when the first found a `[high]` problem (`review_twice_above_risk`).
 - Every day at **17:00** (`release-daily`) the Foundry runs the full tests and build on `develop`
   and opens (or updates) **one pull request `develop` → `main`** that lists and closes the day's
   issues — a draft while the checks fail. **You merge it once a day.**

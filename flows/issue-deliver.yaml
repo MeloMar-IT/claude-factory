@@ -350,6 +350,7 @@ steps:
       plan=$(printf '%s\n' "$out" | sed '/^PLAN_STATUS:/d; /^RISK_SCORE:/d; /^RISK_REASON:/d')
       reviewed=""; [ -n "$FACTORY_OUT_PLAN_REVIEW" ] && reviewed=" (checked against the code by Codex)"
       [ -n "$notes" ] && reviewed=" (draft — the revision did not finish; Codex's review notes are below)"
+      printf '%s\n' "$FACTORY_OUT_REVISE_GATE" | grep -q "^SKIPPED" && reviewed=" (checked against the code by Codex — low risk, so the coder works in Codex's notes below)"
       if [ "$gate" = yes ]; then first="$FACTORY_FIRST_APPROVE_PLAN"; else first="$FACTORY_FIRST_NOTHING"; fi
       { echo "$first"; echo
         echo "🤖 **Spaghetti Code Foundry plan**$reviewed"; echo; echo "**Risk: $risk/100**${reason:+ — $reason}"; echo
@@ -474,10 +475,12 @@ steps:
       uncommitted in this repository (run `git status` and `git diff HEAD`). Review them strictly for
       correctness, edge cases, security, error handling, test coverage and fit with the existing code.
       Report only real problems, each with file, line, problem and the fix. No style nitpicks.
+      Start each problem with [high] (wrong behaviour, data loss, security, a crash), [medium] or [low].
 
       {{steps.pull_ticket.output}}
 
-      End with exactly one line: VERDICT: APPROVE   or   VERDICT: CHANGES
+      End with these two lines: SEVERITY: high | medium | low | none   (the most serious problem)
+      VERDICT: APPROVE   or   VERDICT: CHANGES
     routes:
       - if: "^VERDICT: APPROVE\\s*$"
         goto: docs
@@ -530,10 +533,12 @@ steps:
       uncommitted in this repository (run `git status` and `git diff HEAD`). Review them strictly for
       correctness, edge cases, security, error handling, test coverage and fit with the existing code.
       Report only real problems, each with file, line, problem and the fix. No style nitpicks.
+      Start each problem with [high] (wrong behaviour, data loss, security, a crash), [medium] or [low].
 
       {{steps.pull_ticket.output}}
 
-      End with exactly one line: VERDICT: APPROVE   or   VERDICT: CHANGES
+      End with these two lines: SEVERITY: high | medium | low | none   (the most serious problem)
+      VERDICT: APPROVE   or   VERDICT: CHANGES
     routes:
       - if: "^VERDICT: APPROVE\\s*$"
         goto: docs

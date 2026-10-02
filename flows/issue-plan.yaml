@@ -196,6 +196,7 @@ steps:
       elif [ -n "$FACTORY_OUT_PLAN_REVIEW" ]; then notes="$FACTORY_OUT_PLAN_REVIEW"; fi
       reviewed=""; [ -n "$FACTORY_OUT_PLAN_REVIEW" ] && reviewed=" (checked against the code by Codex)"
       [ -n "$notes" ] && reviewed=" (draft — the revision did not finish; Codex's review notes are below)"
+      printf '%s\n' "$FACTORY_OUT_REVISE_GATE" | grep -q "^SKIPPED" && reviewed=" (checked against the code by Codex — low risk, so the coder works in Codex's notes below)"
       { echo "🤖 **Spaghetti Code Foundry plan**$reviewed"; echo
         printf '%s\n' "$out" | sed '/^PLAN_STATUS:/d'
         if [ -n "$notes" ]; then echo; echo "## Codex review notes (not yet worked in)"; echo

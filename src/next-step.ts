@@ -548,6 +548,7 @@ export function runNextStep(run: RunSummary, o: RunNextOptions = {}): NextStep {
       if (/interrupted/.test(reason)) return make("interrupted");
       const step = stoppedStep(reason);
       if (step === "send_back" || step === "ask_for_info") return make("planner_questions", { questions: o.questions });
+      if (step === "wait_for_area") return make("area_lock");
       if (step?.startsWith("wait_")) return make("release");
       return make("stopped");
     }

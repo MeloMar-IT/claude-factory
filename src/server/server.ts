@@ -83,8 +83,12 @@ export async function startServer(given: ServerOptions): Promise<{ url: string; 
     claudeBin: opts.claudeBin,
     config: () => config,
     queueFile: join(process.env.FACTORY_HOME ?? FACTORY_HOME, "queue.json"),
-    // A new succeeded run is a new sample: the next estimate must see it.
-    onFinished: (s) => { if (s.status === "succeeded") forgetHistory(ctx); },
+    onFinished: (s) => {
+      // A new succeeded run is a new sample: the next estimate must see it.
+      if (s.status === "succeeded") forgetHistory(ctx);
+      // When a run ends, the watchers of its repository check at once instead of at the next interval.
+      if (s.vars?.github_repo) watchers.kickRepo(s.vars.github_repo);
+    },
   });
   const watchers = new WatcherManager({ scheduler, runsDir: opts.runsDir, repo: opts.repo, config: () => config, areaWait, log });
   const ctx: ApiContext = { opts, diagLog: sink, scheduler, watchers, config: () => config, reloadConfig: () => (config = loadConfig()), listen };

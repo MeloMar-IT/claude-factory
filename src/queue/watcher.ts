@@ -168,6 +168,7 @@ export class Watcher {
   private tickToken = 0;
   /** A check that takes longer is given up, so "Check now" and the next check work again (gh has no timeout). */
   checkTimeoutMs = 10 * 60_000;
+  private kickAgain = false;
   private setupDone = false;
   private stopped = false;
   /** Runs whose end will set the label (so a run is waited for once). */
@@ -241,6 +242,13 @@ export class Watcher {
     this.setupDone = true;
   }
 
+  /** Check now (e.g. a run just finished): no human needed means no waiting for the next interval. */
+  kick() {
+    if (this.stopped) return;
+    if (this.ticking) this.kickAgain = true;
+    else void this.tick();
+  }
+
   async tick(): Promise<void> {
     if (this.ticking) return;
     this.ticking = true;
@@ -266,6 +274,10 @@ export class Watcher {
       clearTimeout(timer);
       this.status.lastTick = new Date().toISOString();
       this.ticking = false;
+      if (this.kickAgain && !this.stopped) {
+        this.kickAgain = false;
+        setTimeout(() => void this.tick(), 0);
+      }
     }
   }
 
@@ -552,6 +564,9 @@ export class Watcher {
         if (!budgetLeft) { holds.push(this.held("daily_budget", issue)); continue; }
         if (started >= this.cfg.max_per_tick) { holds.push(this.held("starting", issue, { maxPerTick: this.cfg.max_per_tick })); continue; }
         alive();
+        // It ran before: GitHub's issue list can lag behind (a just-failed or just-finished issue still
+        // listed without its new label, or as open). Ask for this issue directly before starting again.
+        if (run && run.status !== "running" && !(await this.reallyStartable(n))) continue;
         const runId = this.startNew(issue);
         track.runId = runId;
         await setLabels(this.repo, n, this.L.working, this.allStatus);
@@ -681,6 +696,16 @@ export class Watcher {
     }, { lockKey, source: `watcher ${this.cfg.id} precheck ${nums.map((x) => `#${x}`).join(" ")}` });
     this.act(`checking ${nums.map((x) => `#${x}`).join(", ")} for open questions → run ${runId}`);
     hold("checking");
+  }
+
+  /** The issue as GitHub has it right now (not the search list): open, and without a status label. */
+  private async reallyStartable(n: number): Promise<boolean> {
+    try {
+      const fresh = await ghJson<{ state: string; labels: { name: string }[] }>(["issue", "view", String(n), "--repo", this.repo, "--json", "state,labels"]);
+      return fresh.state.toUpperCase() === "OPEN" && !fresh.labels.some((l) => this.allStatus.includes(l.name));
+    } catch {
+      return false; // can't tell: try again at the next check rather than start twice
+    }
   }
 
   /** First /approve or /reject after the run's approval request, from someone with write access. */
