@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import type { Config } from "../config.js";
 import type { ApprovalDecision } from "../engine/execute.js";
 import { cancelWaitingRun, newRunId, resumeRun, runFlow } from "../engine/runner.js";
@@ -10,7 +10,7 @@ import { redactText } from "../credentials/redact.js";
 const MAX_LOG_LINES = 5000;
 
 export type Job =
-  | { kind: "run"; flow: Flow; task: string; repo: string; vars: Record<string, string> }
+  | { kind: "run"; flow: Flow; task: string; repo: string; vars: Record<string, string>; /** `vars` is final: the folder's settings were applied when it was queued. */ frozenVars?: boolean }
   | { kind: "resume"; runId: string; from?: string; decision?: ApprovalDecision };
 
 export interface QueuedJob {
@@ -20,6 +20,8 @@ export interface QueuedJob {
   lockKey?: string;
   /** Who queued it, e.g. "watcher acme/app#7" or "ui". */
   source?: string;
+  /** The id of the account that queued it. */
+  owner?: string;
   /** Set for one_per_repo flows: only one active job per repo key. */
   repoLock?: string;
   enqueuedAt: string;
@@ -43,7 +45,11 @@ export interface SchedulerOptions {
   /** Where pending jobs are saved so they survive restarts. */
   queueFile?: string;
   onFinished?: (summary: RunSummary, job: QueuedJob) => void;
+  /** Makes a run id (default: newRunId). Tests use it to force a clash. */
+  newId?: () => string;
 }
+
+const ID_TRIES = 20;
 
 /**
  * Runs jobs with a global concurrency limit and per-key locks. Pending jobs are
@@ -67,8 +73,29 @@ export class Scheduler {
     queueMicrotask(() => this.pump());
   }
 
-  submit(job: Job, meta: { lockKey?: string; source?: string } = {}): string {
-    const runId = job.kind === "run" ? newRunId() : job.runId;
+  /** A run id that no queued, active or saved run uses. */
+  private freeId(): string {
+    for (let i = 0; i < ID_TRIES; i++) {
+      const id = (this.o.newId ?? newRunId)();
+      if (!this.isQueued(id) && !this.isActive(id) && !existsSync(join(this.o.runsDir, id))) return id;
+    }
+    throw new Error("could not make a free run id; try again");
+  }
+
+  /** The account that started a run, also while it is still queued. Undefined: no owner, or the run cannot be read. Never throws. */
+  ownerOf(runId: string): string | undefined {
+    try {
+      const owner = this.get(runId)?.owner;
+      if (typeof owner === "string") return owner;
+    } catch {
+      // a run.json that cannot be read has no owner
+    }
+    const q = [...this.pending, ...[...this.active.values()].map((a) => a.queued)].find((p) => p.runId === runId && p.job.kind === "run");
+    return typeof q?.owner === "string" ? q.owner : undefined;
+  }
+
+  submit(job: Job, meta: { lockKey?: string; source?: string; owner?: string } = {}): string {
+    const runId = job.kind === "run" ? this.freeId() : job.runId;
     if (job.kind === "resume" && (this.isActive(runId) || this.isQueued(runId))) throw new Error(`run ${runId} is already queued or running`);
     const repoLock = this.repoLockFor(job);
     this.pending.push({ runId, job, ...meta, ...(repoLock ? { repoLock } : {}), enqueuedAt: new Date().toISOString() });
@@ -161,7 +188,13 @@ export class Scheduler {
   list(limit = 100): RunSummary[] {
     return listRunIds(this.o.runsDir)
       .slice(0, limit)
-      .map((id) => this.get(id))
+      .map((id) => {
+        try {
+          return this.get(id);
+        } catch {
+          return undefined; // a run.json that cannot be read is left out, as in briefs()
+        }
+      })
       .filter((s): s is RunSummary => !!s);
   }
 
@@ -257,7 +290,7 @@ export class Scheduler {
     const j = q.job;
     const promise =
       j.kind === "run"
-        ? runFlow(j.flow, { ...common, runId: q.runId, task: j.task, repo: j.repo, vars: j.vars, source: q.source })
+        ? runFlow(j.flow, { ...common, runId: q.runId, task: j.task, repo: j.repo, vars: j.vars, frozenVars: j.frozenVars, source: q.source, owner: q.owner })
         : resumeRun({ ...common, runId: j.runId, from: j.from, decision: j.decision });
     a.done = promise
       .then((summary) => {

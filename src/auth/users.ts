@@ -2,6 +2,7 @@ import { randomBytes, randomUUID, scrypt, timingSafeEqual } from "node:crypto";
 import { join } from "node:path";
 import { z } from "zod";
 import { removeCredentialsLocked } from "../credentials/store.js";
+import { removeReposLocked } from "./repos.js";
 import { addSessionLocked, removeSessionsLocked } from "./sessions.js";
 import { dataHome, readJsonFile, withAuthLock, writeJsonFile } from "./store.js";
 
@@ -252,6 +253,8 @@ export function deleteUser(id: string): DeletedUser {
     if (user.role === "admin" && !file.users.some((u) => u.role === "admin" && u.id !== id)) {
       throw new UserError("last-admin", "this is the only admin account; make another admin first");
     }
+    // The repository list first: a repos.json that cannot be read stops the delete before anything else changes.
+    removeReposLocked(id);
     removeSessionsLocked((s) => s.userId === id);
     const wiped = removeCredentialsLocked(id);
     writeJsonFile(usersPath(), { ...file, users: file.users.filter((u) => u.id !== id) });

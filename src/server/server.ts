@@ -19,7 +19,9 @@ import { healthRoutes } from "./health.js";
 import { boardRoutes } from "./board.js";
 import { TurnNotifier } from "./notifier.js";
 import { CSP, HSTS, listenProblem, localUrl, requestAccess } from "./net.js";
-import { hasAdmin } from "../auth/users.js";
+import { hasAdmin, type User } from "../auth/users.js";
+import { repoRoutes } from "./api-repos.js";
+import { authorize, findRule } from "./permissions.js";
 import { sinceRoutes } from "./since.js";
 import { yourTurnRoutes } from "./your-turn.js";
 
@@ -56,9 +58,9 @@ export interface ApiContext {
 }
 
 /** A route handler: returns true when it handled the request. */
-export type Route = (ctx: ApiContext, req: IncomingMessage, res: ServerResponse, seg: string[], method: string) => Promise<boolean>;
+export type Route = (ctx: ApiContext, req: IncomingMessage, res: ServerResponse, seg: string[], method: string, user: User) => Promise<boolean>;
 
-const ROUTES: Route[] = [credentialRoutes, adminRoutes, flowRoutes, runRoutes, nextRoutes, yourTurnRoutes, sinceRoutes, boardRoutes, healthRoutes];
+const ROUTES: Route[] = [credentialRoutes, repoRoutes, adminRoutes, flowRoutes, runRoutes, nextRoutes, yourTurnRoutes, sinceRoutes, boardRoutes, healthRoutes];
 
 export async function startServer(given: ServerOptions): Promise<{ url: string; close: () => void; ctx: ApiContext; notifier?: TurnNotifier }> {
   // every free-form server, watcher and notifier log line passes the redaction (fail closed)
@@ -89,11 +91,15 @@ export async function startServer(given: ServerOptions): Promise<{ url: string; 
     const seg = path.split("/").filter(Boolean).slice(1); // drop "api"
     // The guard comes first: without a session nothing is answered, not even the moved-folder message with its path.
     if (await authRoutes(ctx, req, res, seg, method)) return;
-    await requireSession(ctx, req, method);
+    const user = await requireSession(ctx, req, method);
+    // The table decides first: a call without a rule is 404, and a user only gets what the table gives.
+    const rule = findRule(method, seg);
+    if (!rule) throw new HttpError(404, "not found");
+    authorize(ctx, user, rule, seg);
     const moved = method === "GET" ? undefined : homeMoved();
     if (moved) throw new HttpError(503, `the data folder moved to ${moved}; the server restarts onto it — try again in a minute`);
     for (const route of ROUTES) {
-      if (await route(ctx, req, res, seg, method)) return watchSession(req, res);
+      if (await route(ctx, req, res, seg, method, user)) return watchSession(req, res);
     }
     throw new HttpError(404, "not found");
   }

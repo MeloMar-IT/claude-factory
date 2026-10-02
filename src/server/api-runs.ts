@@ -4,7 +4,13 @@ import { supersededRuns } from "../stats.js";
 import { resolve } from "node:path";
 import { runDiff } from "../engine/diff.js";
 import { readTranscript } from "../engine/transcript.js";
+import { ownsRepo } from "../auth/repos.js";
+import { effectiveVars } from "../engine/runner.js";
+import type { RunSummary } from "../engine/state.js";
 import { parseFlow, resolveFlowPath } from "../flow/load.js";
+import type { Flow } from "../flow/schema.js";
+import { guardedRepos } from "./api-repos.js";
+import { publishedFlows } from "./permissions.js";
 import { HttpError, NAME_RE, readJson, send, str } from "./http.js";
 import { nextFor, queueWithNext } from "./next.js";
 import type { NextStep } from "../next-step.js";
@@ -14,33 +20,70 @@ import type { Route } from "./server.js";
 const NEXT_RECHECK_MS = 2_000;
 
 
-export const runRoutes: Route = async (ctx, req, res, seg, method) => {
+export const runRoutes: Route = async (ctx, req, res, seg, method, user) => {
   const { opts, scheduler } = ctx;
+  const admin = user.role === "admin";
   if (seg[0] === "queue" && method === "GET") return send(res, 200, queueWithNext(ctx)), true;
   if (seg[0] !== "runs") return false;
   const id = seg[1];
 
   if (!id && method === "GET") {
-    const runs = scheduler.list(200);
+    const runs = admin
+      ? scheduler.list(200)
+      : scheduler.briefs().filter((b) => b.owner === user.id).slice(0, 200).map((b) => scheduler.get(b.runId)).filter((s): s is RunSummary => !!s);
     const replaced = supersededRuns(runs);
     const next = nextFor(ctx, runs);
     return send(res, 200, runs.map((r) => ({ ...r, ...(replaced.has(r.runId) ? { superseded: true } : {}), next: next(r) }))), true;
   }
   if (!id && method === "POST") {
     const body = await readJson(req);
+    // What a user may never do is refused first, before any other field is looked at.
+    if (!admin) {
+      if (body.yaml !== undefined) throw new HttpError(403, "only an admin can run a flow that is not saved");
+      if (body.repo !== undefined && body.repo !== null && body.repo !== "") throw new HttpError(403, "only an admin can choose the folder");
+    }
     const task = str(body, "task", false).trim();
-    const repo = resolve(str(body, "repo", false) || opts.repo);
-    if (!existsSync(repo)) throw new HttpError(400, `repo not found: ${repo}`);
     const vars: Record<string, string> = {};
     for (const [k, v] of Object.entries((body.vars as Record<string, unknown>) ?? {})) {
       if (!NAME_RE.test(k) || typeof v !== "string") throw new HttpError(400, `invalid var "${k}"`);
       vars[k] = v;
     }
-    const flow = typeof body.yaml === "string"
-      ? parseFlow(body.yaml)
-      : parseFlow(readFileSync(resolveFlowPath(str(body, "flow"), opts.repo), "utf8"));
-    const lockKey = vars.github_repo && (vars.issue || vars.pr) ? `${vars.github_repo}#${vars.issue || vars.pr}` : undefined;
-    const runId = scheduler.submit({ kind: "run", flow, task, repo, vars }, { lockKey, source: "ui" });
+    let flow: Flow;
+    let repo: string;
+    let runVars = vars;
+    if (admin) {
+      repo = resolve(str(body, "repo", false) || opts.repo);
+      if (!existsSync(repo)) throw new HttpError(400, `repo not found: ${repo}`);
+      flow = typeof body.yaml === "string"
+        ? parseFlow(body.yaml)
+        : parseFlow(readFileSync(resolveFlowPath(str(body, "flow"), opts.repo), "utf8"));
+    } else {
+      // A user starts a published, saved flow in the server's default folder, on one of their own repositories.
+      const name = str(body, "flow");
+      if (!NAME_RE.test(name)) throw new HttpError(400, "invalid flow name");
+      const listing = publishedFlows(opts.repo).find((f) => f.name === name);
+      if (!listing) throw new HttpError(404, "flow not found");
+      flow = parseFlow(readFileSync(listing.path, "utf8"), listing.path);
+      repo = resolve(opts.repo);
+      if (!existsSync(repo)) throw new HttpError(400, "the server's folder was not found");
+      // The folder's own settings are read now and kept with the job, so the check below is about the variables the run uses.
+      runVars = effectiveVars(flow, repo, vars, (m) => opts.log?.(m));
+      const given = vars.github_repo;
+      if (given === undefined) {
+        // A repository from the flow or the folder is fine only when it is one of the user's own.
+        const dflt = runVars.github_repo;
+        if (dflt !== undefined && !guardedRepos(ctx, () => ownsRepo(user.id, dflt))) throw new HttpError(403, 'set the var "github_repo" to one of your repositories');
+      } else if (given === "" || given.toLowerCase() === "owner/repo") {
+        throw new HttpError(403, 'set the var "github_repo" to one of your repositories');
+      } else if (!guardedRepos(ctx, () => ownsRepo(user.id, given))) {
+        throw new HttpError(403, `"${given}" is not one of your repositories`);
+      }
+    }
+    const lockKey = runVars.github_repo && (runVars.issue || runVars.pr) ? `${runVars.github_repo}#${runVars.issue || runVars.pr}` : undefined;
+    const runId = scheduler.submit(
+      { kind: "run", flow, task, repo, vars: runVars, ...(admin ? {} : { frozenVars: true }) },
+      { lockKey, source: "ui", owner: user.id },
+    );
     return send(res, 201, { runId, queued: scheduler.isQueued(runId) }), true;
   }
 

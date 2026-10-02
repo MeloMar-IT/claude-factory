@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { blockDir, listBlocks, parseBlock } from "../flow/blocks.js";
 import { flowDir, listFlows, parseFlow, type FlowScope } from "../flow/load.js";
 import { generateFlow } from "./generate.js";
+import { publishedFlows } from "./permissions.js";
 import { HttpError, NAME_RE, readJson, send, str } from "./http.js";
 import type { Route } from "./server.js";
 
@@ -12,11 +13,14 @@ function scopeOf(body: Record<string, unknown>): FlowScope {
   return scope;
 }
 
-export const flowRoutes: Route = async ({ opts }, req, res, seg, method) => {
+export const flowRoutes: Route = async ({ opts }, req, res, seg, method, user) => {
   if (seg[0] === "flows") {
     const name = seg[1];
     if (name !== undefined && !NAME_RE.test(name)) throw new HttpError(400, "invalid flow name");
-    if (!name && method === "GET") return send(res, 200, listFlows(opts.repo)), true;
+    if (!name && method === "GET") {
+      if (user.role !== "admin") return send(res, 200, publishedFlows(opts.repo).map((f) => ({ name: f.name, description: f.description ?? "" }))), true;
+      return send(res, 200, listFlows(opts.repo)), true;
+    }
     if (!name) throw new HttpError(405, "method not allowed");
     const listing = listFlows(opts.repo).find((f) => f.name === name);
     if (method === "GET") {

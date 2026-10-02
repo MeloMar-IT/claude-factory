@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { addRepo, listRepos, reposPath } from "../src/auth/repos.js";
 import { StoreError } from "../src/auth/store.js";
 import { readSessions } from "../src/auth/sessions.js";
 import { createUser, deleteUser, hashPassword, listUsers, startSession, usersPath, UserError, type User } from "../src/auth/users.js";
@@ -58,6 +59,27 @@ describe("deleteUser", () => {
     expect(readSecret(bob.id, b.id)).toBe(fakeToken("Bb2"));
     expect(Object.keys(kc.items())).toHaveLength(1);
     expect(Object.keys(kc.items())).not.toEqual(oldKeys);
+  });
+
+  it("removes the repository list of the account and keeps the other one", () => {
+    addRepo(ann.id, "acme/app");
+    addRepo(bob.id, "acme/web");
+    deleteUser(ann.id);
+    expect(listRepos(ann.id)).toEqual([]);
+    expect(listRepos(bob.id)).toEqual(["acme/web"]);
+  });
+
+  it("stops before anything else when repos.json cannot be read, and works once it is fixed", () => {
+    startSession(ann.id, ann.passwordHash);
+    cred(ann, "a", "Aa1");
+    writeFileSync(reposPath(), "not json");
+    const users = readFileSync(usersPath());
+    expect(code(() => deleteUser(ann.id))).toBeInstanceOf(StoreError);
+    expect(readFileSync(usersPath())).toEqual(users);
+    expect(readSessions().filter((s) => s.userId === ann.id)).toHaveLength(1);
+    expect(listCredentials(ann.id)).toHaveLength(1);
+    writeFileSync(reposPath(), JSON.stringify({ version: 1, repos: {} }));
+    expect(deleteUser(ann.id).credentials).toBe(1);
   });
 
   it("reports an unknown account", () => {

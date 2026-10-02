@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { nextStep, type NextStep } from "../src/next-step.js";
 import { FakeElement, installFakeDom } from "./helpers/fake-dom.js";
 
@@ -399,5 +399,105 @@ describe("the \"?\" and the status names", () => {
     expect(WatcherSchema.parse(admin.watcherConfig(item))).toEqual(base);
     expect(() => WatcherSchema.parse(item)).toThrow();
     expect(admin.watcherConfig()).toEqual({});
+  });
+});
+
+describe("the Runs pages for a user", () => {
+  const realFetch = globalThis.fetch;
+  const asked: string[] = [];
+  const RUN = { runId: "r1", flow: "walk", status: "succeeded", startedAt: new Date().toISOString(), history: [], totalCostUsd: 0, task: "do it", vars: {} };
+  const QUEUE = { pending: [], active: [], concurrency: 2 };
+  const answers: Record<string, unknown> = { "/api/runs": [RUN], "/api/queue": QUEUE };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    asked.length = 0;
+    (globalThis as any).fetch = async (url: string) => {
+      asked.push(url);
+      return { ok: true, status: 200, statusText: "OK", json: async () => answers[url] ?? {} };
+    };
+  });
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+    globalThis.fetch = realFetch;
+    delete (globalThis as any).EventSource;
+  });
+
+  const connected = () => {
+    const main = new FakeElement("div") as FakeElement & { isConnected: boolean };
+    main.isConnected = true;
+    return main;
+  };
+
+  it("the list of a user asks only for the runs, also after the refresh timer", async () => {
+    const runs = (await import("../ui/runs.js" as string)) as any;
+    const main = connected();
+    const stop = await runs.renderRunsList(main, { admin: false });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(asked.length).toBeGreaterThanOrEqual(3);
+    expect(new Set(asked)).toEqual(new Set(["/api/runs"]));
+    expect(main.textContent).toContain("walk");
+    expect(main.textContent).not.toContain("queued");
+    stop();
+  });
+
+  it("the list of an admin also asks for the queue", async () => {
+    const runs = (await import("../ui/runs.js" as string)) as any;
+    const main = connected();
+    const stop = await runs.renderRunsList(main);
+    expect(new Set(asked)).toEqual(new Set(["/api/runs", "/api/queue"]));
+    expect(main.textContent).toContain("0/2 running");
+    stop();
+  });
+
+  it("says 'No runs yet.' to a user without runs", async () => {
+    const runs = (await import("../ui/runs.js" as string)) as any;
+    answers["/api/runs"] = [];
+    try {
+      const main = connected();
+      (await runs.renderRunsList(main, { admin: false }))();
+      expect(main.textContent).toContain("No runs yet.");
+      expect(main.textContent).not.toContain("Open a flow");
+    } finally {
+      answers["/api/runs"] = [RUN];
+    }
+  });
+
+  const stubEventSource = () => {
+    const opened: string[] = [];
+    const handlers: Record<string, (e: { data: string }) => void> = {};
+    (globalThis as any).EventSource = class {
+      static CLOSED = 2;
+      readyState = 1;
+      constructor(url: string) { opened.push(url); }
+      addEventListener(type: string, fn: (e: { data: string }) => void) { handlers[type] = fn; }
+      close() {}
+    };
+    return { opened, handlers };
+  };
+  const flowLinks = (main: FakeElement) => main.all("a").filter((a) => (a.attrs.href ?? "").startsWith("#/flows/"));
+
+  it("the run page of a user opens only the event stream and has no link to the flow", async () => {
+    const runs = (await import("../ui/runs.js" as string)) as any;
+    const { opened, handlers } = stubEventSource();
+    const main = connected();
+    const stop = runs.renderRunDetail(main, "r1", { admin: false });
+    handlers.update!({ data: JSON.stringify({ summary: RUN }) });
+    expect(opened).toEqual(["/api/runs/r1/events"]);
+    expect(asked).toEqual([]);
+    expect(main.textContent).toContain("walk");
+    expect(flowLinks(main)).toHaveLength(0);
+    stop();
+  });
+
+  it("the run page of an admin links to the flow", async () => {
+    const runs = (await import("../ui/runs.js" as string)) as any;
+    const { handlers } = stubEventSource();
+    const main = connected();
+    const stop = runs.renderRunDetail(main, "r1");
+    handlers.update!({ data: JSON.stringify({ summary: RUN }) });
+    expect(flowLinks(main)).toHaveLength(1);
+    stop();
   });
 });

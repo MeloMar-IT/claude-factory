@@ -38,11 +38,12 @@ export function stepRow(s) {
 }
 
 /** Runs list; refreshes itself every 30 seconds. Returns a cleanup function that stops that. */
-export async function renderRunsList(main) {
+export async function renderRunsList(main, { admin = true } = {}) {
   mount(main, h("div", { class: "row" }, h("span", { class: "spinner" }), " Loading runs…"));
   let timer;
   const draw = async () => {
-    const [runs, queue] = await Promise.all([api.runs(), api.queue()]);
+    // A user has no queue: only the list of their own runs is asked for.
+    const [runs, queue] = await Promise.all([api.runs(), admin ? api.queue() : null]);
     if (!main.isConnected) return;
     const yours = needsYou(runs);
     const table = (list) => h("table", { class: "table" },
@@ -51,15 +52,15 @@ export async function renderRunsList(main) {
 
     mount(main,
       h("div", { class: "toolbar" }, h("h1", {}, "Runs"),
-        h("span", { class: "muted" }, `${queue.active.length}/${queue.concurrency} running · ${queue.pending.length} queued`),
+        queue ? h("span", { class: "muted" }, `${queue.active.length}/${queue.concurrency} running · ${queue.pending.length} queued`) : null,
         h("span", { class: "spacer" }),
         h("span", { class: "muted", style: { fontSize: "12px" } }, `updated ${new Date().toLocaleTimeString()} · refreshes every 30 s`),
         h("button", { onClick: () => draw() }, "↻ Refresh")),
-      queue.pending.length ? h("div", { class: "card", style: { marginBottom: "16px" } },
+      queue?.pending.length ? h("div", { class: "card", style: { marginBottom: "16px" } },
         h("h3", {}, "Queue"),
         queue.pending.map((p) => queueRow(p, async () => { await api.cancelRun(p.runId); draw(); }))) : null,
       yours.length ? h("div", { style: { marginBottom: "16px" } }, h("h3", { style: { marginBottom: "8px" } }, `Needs you (${yours.length})`), table(yours)) : null,
-      runs.length ? table(runs) : h("div", { class: "empty" }, "No runs yet. Open a flow and press ▶ Run."));
+      runs.length ? table(runs) : h("div", { class: "empty" }, admin ? "No runs yet. Open a flow and press ▶ Run." : "No runs yet."));
   };
   await draw();
   timer = setInterval(() => draw().catch(() => {}), REFRESH_MS);
@@ -174,7 +175,7 @@ function actions(s) {
 }
 
 /** Live run page. Returns a cleanup function that closes the event stream. */
-export function renderRunDetail(main, runId) {
+export function renderRunDetail(main, runId, { admin = true } = {}) {
   const logEl = h("pre", { class: "log" });
   const head = h("div");
   const tabBody = h("div");
@@ -213,7 +214,7 @@ export function renderRunDetail(main, runId) {
         s.resumes ? h("span", { class: "muted" }, `resumed ${s.resumes}×`) : null,
         h("span", { class: "spacer" }),
         ...actions(s),
-        h("a", { class: "btn", href: `#/flows/${encodeURIComponent(s.flow)}` }, "Open flow")),
+        admin ? h("a", { class: "btn", href: `#/flows/${encodeURIComponent(s.flow)}` }, "Open flow") : null),
       s.next ? nextBlock(s.next) : null,
       h("div", { class: "card", style: { marginBottom: "16px" } },
         s.task ? h("p", { style: { margin: 0, whiteSpace: "pre-wrap" } }, s.task) : null,
