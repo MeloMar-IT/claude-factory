@@ -6,6 +6,7 @@ import { SESSION_TTL_MS, csrfToken, findSession, revokeSession, sessionId } from
 import { StoreError } from "../auth/store.js";
 import { homeMoved } from "../home.js";
 import { HttpError, readJson, send, str } from "./http.js";
+import { isLoopback, requestAccess } from "./net.js";
 import type { ApiContext } from "./server.js";
 
 /** How often an open response re-checks its session (it must be gone within 5 seconds). */
@@ -51,6 +52,22 @@ export class SignInLimiter {
 
 const limiters = new WeakMap<ApiContext, SignInLimiter>();
 const limiterOf = (ctx: ApiContext) => limiters.get(ctx) ?? limiters.set(ctx, new SignInLimiter()).get(ctx)!;
+/** A second limit per client address (every try counts), so cycling e-mail addresses does not get around the per-e-mail one. */
+const CLIENT_TRY_LIMIT = 60;
+const clientLimiters = new WeakMap<ApiContext, SignInLimiter>();
+const clientLimiterOf = (ctx: ApiContext) => clientLimiters.get(ctx) ?? clientLimiters.set(ctx, new SignInLimiter(CLIENT_TRY_LIMIT)).get(ctx)!;
+/** At most this many password checks (scrypt) run at the same time. */
+const MAX_CHECKS = 16;
+let checking = 0;
+const MAX_EMAIL = 254;
+
+/** The caller's address. X-Forwarded-For counts only when the connection comes from the proxy on this Mac. */
+function clientKey(req: IncomingMessage): string {
+  const peer = req.socket.remoteAddress ?? "unknown";
+  const fwd = req.headers["x-forwarded-for"];
+  if (isLoopback(peer) && typeof fwd === "string") return fwd.split(",").pop()!.trim().slice(0, 64) || peer;
+  return peer;
+}
 const BAD_LOGIN = "wrong e-mail or password";
 const INTERNAL = "sign-in is not working; see the server log";
 
@@ -82,10 +99,14 @@ function cookieToken(ctx: ApiContext, req: IncomingMessage): string | undefined 
   return undefined;
 }
 
-const setCookie = (ctx: ApiContext, res: ServerResponse, token: string) =>
-  res.setHeader("set-cookie", `${cookieName(ctx)}=${token}; ${COOKIE_ATTRS}; Max-Age=${SESSION_TTL_MS / 1000}`);
-const clearCookie = (ctx: ApiContext, res: ServerResponse) =>
-  res.setHeader("set-cookie", `${cookieName(ctx)}=; ${COOKIE_ATTRS}; Max-Age=0`);
+const accessOf = (ctx: ApiContext, req: IncomingMessage) => requestAccess(req, ctx.config().server, ctx.opts.port);
+/** `Secure` only when the browser reached us over HTTPS (through the proxy). */
+const secure = (ctx: ApiContext, req: IncomingMessage) => (accessOf(ctx, req).https ? "; Secure" : "");
+
+const setCookie = (ctx: ApiContext, req: IncomingMessage, res: ServerResponse, token: string) =>
+  res.setHeader("set-cookie", `${cookieName(ctx)}=${token}; ${COOKIE_ATTRS}; Max-Age=${SESSION_TTL_MS / 1000}${secure(ctx, req)}`);
+const clearCookie = (ctx: ApiContext, req: IncomingMessage, res: ServerResponse) =>
+  res.setHeader("set-cookie", `${cookieName(ctx)}=; ${COOKIE_ATTRS}; Max-Age=0${secure(ctx, req)}`);
 
 interface Current {
   token: string;
@@ -146,12 +167,20 @@ async function signIn(ctx: ApiContext, req: IncomingMessage, res: ServerResponse
   const limiter = limiterOf(ctx);
   const email = str(body, "email").trim().toLowerCase();
   const password = passwordOf(body);
+  // Nothing long is kept or hashed: an over-long address is simply a wrong sign-in.
+  if (email.length > MAX_EMAIL) throw new HttpError(401, BAD_LOGIN);
+  const clients = clientLimiterOf(ctx);
+  const client = clientKey(req);
+  if (clients.blocked(client)) throw new HttpError(429, "too many tries; wait 15 minutes");
+  if (checking >= MAX_CHECKS) throw new HttpError(429, "the server is busy; try again in a moment");
   if (limiter.blocked(email)) throw new HttpError(429, "too many wrong tries; wait 15 minutes");
   // Count the try before the slow password check: requests that run at the same time must not all pass the limit.
   // A matching password gives the try back (below).
   limiter.fail(email);
+  clients.fail(client);
+  checking++;
   await guarded(ctx, async () => {
-    const user = await checkSignIn(email, password);
+    const user = await checkSignIn(email, password).finally(() => checking--);
     if (!user) throw new HttpError(401, BAD_LOGIN);
     if (user.status === "blocked") {
       limiter.clear(email);
@@ -161,13 +190,14 @@ async function signIn(ctx: ApiContext, req: IncomingMessage, res: ServerResponse
     const started = startSession(user.id, user.passwordHash, old ? sessionId(old) : undefined);
     if (!started) throw new HttpError(401, BAD_LOGIN);
     limiter.clear(email);
-    setCookie(ctx, res, started.token);
+    setCookie(ctx, req, res, started.token);
     send(res, 200, sessionBody({ token: started.token, user: started.user }));
   });
 }
 
 async function setup(ctx: ApiContext, req: IncomingMessage, res: ServerResponse) {
   notMoved();
+  if (!accessOf(ctx, req).local) throw new HttpError(403, "the first account can only be created on the Mac itself");
   const body = await readJson(req);
   const name = str(body, "name");
   const email = str(body, "email");
@@ -184,7 +214,7 @@ async function setup(ctx: ApiContext, req: IncomingMessage, res: ServerResponse)
     }
     const started = startSession(user.id, user.passwordHash);
     if (!started) throw new Error("no session after setup");
-    setCookie(ctx, res, started.token);
+    setCookie(ctx, req, res, started.token);
     send(res, 201, sessionBody({ token: started.token, user: started.user }));
   });
 }
@@ -211,7 +241,7 @@ export async function authRoutes(ctx: ApiContext, req: IncomingMessage, res: Ser
         if (typeof sent !== "string" || !sameToken(sent, csrfToken(cur.token))) throw new HttpError(403, "bad CSRF token");
         revokeSession(sessionId(cur.token));
       }
-      clearCookie(ctx, res);
+      clearCookie(ctx, req, res);
       send(res, 200, { ok: true });
     });
     return true;

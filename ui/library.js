@@ -1,4 +1,4 @@
-import YAML from "yaml";
+import YAML from "/vendor/yaml/index.js";
 import { api } from "./api.js";
 import { h, modal, mount, toast } from "./dom.js";
 

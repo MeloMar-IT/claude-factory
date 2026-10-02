@@ -16,6 +16,8 @@ import { areaWait, forgetHistory, nextRoutes, type RestartState } from "./next.j
 import { healthRoutes } from "./health.js";
 import { boardRoutes } from "./board.js";
 import { TurnNotifier } from "./notifier.js";
+import { CSP, HSTS, listenProblem, localUrl, requestAccess } from "./net.js";
+import { hasAdmin } from "../auth/users.js";
 import { sinceRoutes } from "./since.js";
 import { yourTurnRoutes } from "./your-turn.js";
 
@@ -42,6 +44,8 @@ export interface ApiContext {
   reloadConfig: () => void;
   /** Set while the server waits to restart (new version, moved data folder). */
   restart?: RestartState;
+  /** The address the server is bound to (a changed setting applies after a restart). */
+  listen: string;
 }
 
 /** A route handler: returns true when it handled the request. */
@@ -52,6 +56,13 @@ const ROUTES: Route[] = [adminRoutes, flowRoutes, runRoutes, nextRoutes, yourTur
 export async function startServer(opts: ServerOptions): Promise<{ url: string; close: () => void; ctx: ApiContext; notifier?: TurnNotifier }> {
   const log = opts.log ?? (() => {});
   let config = loadConfig();
+  const listen = config.server.listen;
+  // Before anything starts (queue, watchers): a non-local address needs accounts.
+  const problem = listenProblem(listen, hasAdmin);
+  if (problem) {
+    log(problem);
+    throw new Error(problem);
+  }
   const scheduler = new Scheduler({
     runsDir: opts.runsDir,
     claudeBin: opts.claudeBin,
@@ -61,8 +72,7 @@ export async function startServer(opts: ServerOptions): Promise<{ url: string; c
     onFinished: (s) => { if (s.status === "succeeded") forgetHistory(ctx); },
   });
   const watchers = new WatcherManager({ scheduler, runsDir: opts.runsDir, repo: opts.repo, config: () => config, areaWait, log });
-  const ctx: ApiContext = { opts, scheduler, watchers, config: () => config, reloadConfig: () => (config = loadConfig()) };
-  const allowedHosts = new Set([`127.0.0.1:${opts.port}`, `localhost:${opts.port}`]);
+  const ctx: ApiContext = { opts, scheduler, watchers, config: () => config, reloadConfig: () => (config = loadConfig()), listen };
 
   async function api(req: IncomingMessage, res: ServerResponse, path: string) {
     const method = req.method ?? "GET";
@@ -89,14 +99,19 @@ export async function startServer(opts: ServerOptions): Promise<{ url: string; c
   }
 
   const server = createServer((req, res) => {
-    // Only answer to our own origin: blocks DNS rebinding and cross-site requests,
+    res.setHeader("content-security-policy", CSP);
+    res.setHeader("x-content-type-options", "nosniff");
+    // Only answer to our own host and origin: blocks DNS rebinding and cross-site requests,
     // since this server can execute code on the machine.
-    if (!allowedHosts.has(req.headers.host ?? "")) return void res.writeHead(403).end("forbidden host");
-    const origin = req.headers.origin;
-    if (req.method !== "GET" && origin && !allowedHosts.has(origin.replace(/^https?:\/\//, ""))) {
-      return void res.writeHead(403).end("forbidden origin");
+    const acc = requestAccess(req, config.server, opts.port);
+    if (acc.https) res.setHeader("strict-transport-security", HSTS);
+    if (acc.refusal) return void res.writeHead(403).end(acc.refusal);
+    let path: string;
+    try {
+      path = decodeURIComponent(new URL(req.url ?? "/", "http://x").pathname);
+    } catch {
+      return void res.writeHead(400).end("bad request");
     }
-    const path = decodeURIComponent(new URL(req.url ?? "/", "http://x").pathname);
     if (path.startsWith("/api/")) {
       api(req, res, path).catch((e: Error) => {
         const status = e instanceof HttpError ? e.status : 400;
@@ -111,16 +126,16 @@ export async function startServer(opts: ServerOptions): Promise<{ url: string; c
 
   await new Promise<void>((ok, fail) => {
     server.once("error", fail);
-    server.listen(opts.port, "127.0.0.1", () => ok());
+    server.listen(opts.port, listen, () => ok());
   });
   if (opts.watchers !== false) watchers.sync();
   let notifier: TurnNotifier | undefined;
   if (process.env.FACTORY_NO_NOTIFY !== "1") {
-    notifier = new TurnNotifier(ctx, { baseUrl: `http://localhost:${opts.port}`, log });
+    notifier = new TurnNotifier(ctx, { baseUrl: localUrl(listen, opts.port), log });
     notifier.start();
   }
   return {
-    url: `http://localhost:${opts.port}`,
+    url: localUrl(listen, opts.port),
     ctx,
     notifier,
     close: () => {

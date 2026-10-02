@@ -484,6 +484,14 @@ describe("the sign-in limit", () => {
     });
   });
 
+  it("limits one client that cycles e-mail addresses, and refuses over-long ones", async () => {
+    await withServer(async (s) => {
+      expect((await login(s, `${"a".repeat(300)}@example.com`, "x")).status).toBe(401);
+      for (let i = 0; i < 60; i++) expect((await login(s, `nobody-${i}@example.com`, "wrong-password-123")).status).toBe(401);
+      expect((await login(s, "nobody-last@example.com", "wrong-password-123")).status).toBe(429);
+    });
+  });
+
   it("a right password clears the count", async () => {
     await withServer(async (s) => {
       const a = await newUser(s);
