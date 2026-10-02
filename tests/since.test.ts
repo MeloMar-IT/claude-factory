@@ -75,7 +75,7 @@ describe("buildSince", () => {
   });
 
   it("keeps a fixed group order and sums the total", () => {
-    const w = { key: "k", repo: "o/a", what: "Q", next: nextStep("questions", { repo: "o/a", issue: 3, title: "Q" }, {}), unblocks: 0, dismissable: true, stamp: at(11) };
+    const w = { key: "k", repo: "o/a", what: "Q", next: nextStep("questions", { repo: "o/a", issue: 3, title: "Q" }, {}), unblocks: 0, dismissable: true, acts: [], stamp: at(11) };
     const s = build({
       runs: [entry(run("f", { status: "failed", vars: { github_repo: "o/b", issue: "2" }, history: [] })), entry(run("d")), entry(run("p", { vars: { github_repo: "o/a", issue: "8" }, history: [step("push_develop")] }))],
       merged: [read({ prs: [pr(1, at(11))] })], waiting: [w],

@@ -98,6 +98,7 @@ When a run finishes, its branch stays in your repository. Review it, merge it, o
 - **Order:** the item that holds back the most stories comes first, then the one that waits longest. Items are grouped by repository.
 - **Each item:** what it is, why it waits, the action, and since when. The button opens the place to do it (GitHub in a new tab, or the run page).
 - **Runs you started yourself** (UI or `scf run`) count when they wait for approval, at any age, or when they failed or stopped in the last 7 days. Failed release, CI-fix and review runs started by a watcher show the same way. Runs of older versions have no record of who started them and are treated like watcher runs.
+- **Answer and approve here:** for an item of a watcher, buttons next to the GitHub link do the work. **Show questions** has **Accept all recommendations** (only for questions asked up front) and **Answer…** (a box per question; each needs an answer, and **Use recommendation** fills one in visibly). **Show plan**, **Show split** and **Show request** show the risk and **Approve** / **Reject** (say what to change). A failed item has **Retry** and **Retry with a hint…**. Each action is a normal comment on the issue under the Foundry's GitHub login, signed with your name, so replying on GitHub still works. Approve and reject need write access for that login. The item then shows under **Done — continuing**.
 - **Dismiss** hides an item. It stays hidden until its situation changes (a new question, a new approval, a new failure). **Show again** at the bottom brings all dismissed items back. Watcher errors cannot be dismissed. Dismissals are kept in `your-turn.json` in the data folder.
 - **No refresh needed:** the page updates every 5 seconds. When you come back from a GitHub link, the watcher checks GitHub at once. An answer you give elsewhere shows at the next watcher check.
 - **Empty:** it says "Nothing needs you." and, when it can, how many stories are being built and when the next release pull request is expected.
@@ -674,9 +675,9 @@ Issues with an excluded label (e.g. `geni`) are never picked up, whatever other 
 | I want to… | Do this |
 |---|---|
 | Build an issue, or a whole epic | Add `Factory_go` to each issue (select them all in GitHub's issue list → Labels). Give stories a **Depends on** section so they are built in order. |
-| Answer the questions | Reply on the issue, or `/defaults` |
+| Answer the questions | Reply on the issue, or `/defaults` — or in the app, on Your turn |
 | Check a plan before it is coded | Add `Factory_review_plan` before (or together with) `Factory_go` |
-| Approve / reject a risky plan | `/approve` (+ notes), or `/reject` + what to change |
+| Approve / reject a risky plan | `/approve` (+ notes), or `/reject` + what to change — or in the app, on Your turn |
 | Retry after an error | Remove `Factory_ERROR` to start over, or resume the run on its page to continue at the failed step |
 | Stop the Foundry from touching an issue | Remove `Factory_go`, or add an excluded label |
 | Get the work into `main` | Merge the release pull request `develop` → `main` (gitflow), or the rolling Foundry pull request |
@@ -1037,6 +1038,8 @@ Change a role with `scf user role <e-mail> admin|user`, or create an admin with
 | `GET /api/your-turn` | yes | no | what waits for you |
 | `POST /api/your-turn/dismiss` | yes | no | dismiss an item |
 | `POST /api/your-turn/restore` | yes | no | restore dismissed items |
+| `GET /api/your-turn/detail` | yes | no | the questions, plan or split of an item |
+| `POST /api/your-turn/act` | yes | no | answer, approve, reject or retry an item, as a comment on the issue |
 | `GET /api/credentials` | yes | yes | your stored credentials |
 | `POST /api/credentials` | yes | yes | store a credential |
 | `DELETE /api/credentials/:id` | yes | yes | remove a credential |

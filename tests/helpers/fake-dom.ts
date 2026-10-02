@@ -46,6 +46,7 @@ export class FakeElement extends FakeNode {
     return this.children.map((c) => (typeof c === "string" ? c : c instanceof FakeElement ? c.textContent : "")).join("");
   }
   set textContent(v: string) { this.children = []; this.text = v; }
+  querySelector(_selector: string): FakeElement | null { return null; }
   all(tag: string): FakeElement[] {
     return this.children.flatMap((c) => (c instanceof FakeElement ? [...(c.tag === tag ? [c] : []), ...c.all(tag)] : []));
   }

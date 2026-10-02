@@ -39,7 +39,7 @@ const data = (items: unknown[], extra: Record<string, unknown> = {}) => ({
   count: items.length, groups: items.length ? [{ repo: "o/a", items }] : [], dismissed: 0, ...(items.length ? {} : { empty: "Nothing needs you." }), ...extra,
 });
 const handlers = () => ({ onDismiss: vi.fn(), onRestore: vi.fn(), onLeave: vi.fn() });
-const view = (d: unknown, h = handlers()) => {
+const view = (d: unknown, h: ReturnType<typeof handlers> & { onAct?: unknown } = handlers()) => {
   const root = new FakeElement("div");
   root.append(...(ui.turnView(d, h) as unknown[]).filter(Boolean) as FakeElement[]);
   return root;
@@ -122,6 +122,31 @@ describe("turnView", () => {
     expect(buttons).toHaveLength(1);
     click(buttons[0]!);
     expect(h.onDismiss).toHaveBeenCalledWith("k5");
+  });
+
+  it("shows the in-app buttons for an item with acts, and keeps the GitHub link beside them", () => {
+    const h = { ...handlers(), onAct: vi.fn() };
+    const root = view(data([item({ acts: ["defaults", "answer"] })]), h);
+    const labels = root.all("button").map((b) => b.textContent);
+    expect(labels).toEqual(["Show questions", "Dismiss"]);
+    const a = link(root)!;
+    expect(a.attrs.class).toBe("btn");
+    click(a);
+    expect(h.onLeave).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves an item without acts as it was", () => {
+    const root = view(data([item({ acts: [] }), item({ key: "k7" })]), { ...handlers(), onAct: vi.fn() });
+    expect(root.all("button").map((b) => b.textContent)).toEqual(["Dismiss", "Dismiss"]);
+    expect(link(root)!.attrs.class).toBe("btn primary");
+  });
+
+  it("lists items under Done — continuing, without buttons", () => {
+    const root = view(data([], { continuing: [item({ what: "Five" })], empty: "Nothing needs you." }));
+    expect(root.all("h3").map((x) => x.textContent)).toContain("Done — continuing");
+    expect(root.textContent).toContain("done — continuing");
+    expect(root.textContent).toContain("#5");
+    expect(root.all("button")).toHaveLength(0);
   });
 
   it("shows the empty text and the dismissed line", () => {
@@ -226,6 +251,21 @@ describe("renderYourTurn", () => {
     await flush();
     expect(main.textContent).toContain("Nothing needs you.");
     expect(document.title).toBe("Spaghetti Code Foundry");
+    cleanup();
+  });
+
+  it("an action's answer wins over a poll that started after the action and finished first", async () => {
+    const { main, cleanup } = await open(data([item({ acts: ["retry"] }, nextStep("failed", { repo: "o/a", issue: 5 }, { watched: true, issueUrl: "https://github.com/o/a/issues/5" }))]));
+    click(main.all("button").find((b) => b.textContent === "Retry")!);
+    const act = calls.shift()!;
+    expect(act.method).toBe("POST");
+    await vi.advanceTimersByTimeAsync(5000);
+    const poll = calls.shift()!;
+    poll.answer(data([item()])); // the old state, answered first
+    await flush();
+    act.answer(data([], { continuing: [item({ what: "Five" })], empty: "Nothing needs you." }));
+    await flush();
+    expect(main.textContent).toContain("Done — continuing");
     cleanup();
   });
 

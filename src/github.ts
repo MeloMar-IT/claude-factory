@@ -9,13 +9,17 @@ export const BOT_MARKER = "<!-- claude-factory";
 export const BOT_MARKERS = [BOT_MARKER, "<!-- spaghetti-code-foundry"] as const;
 
 /** `timeoutMs` kills the process and rejects; without it gh may take as long as it likes. */
-export async function gh(args: string[], env?: NodeJS.ProcessEnv, timeoutMs?: number): Promise<string> {
-  const { stdout } = await exec(process.env.FACTORY_GH_BIN ?? "gh", args, {
+export async function gh(args: string[], env?: NodeJS.ProcessEnv, timeoutMs?: number, input?: string): Promise<string> {
+  const p = exec(process.env.FACTORY_GH_BIN ?? "gh", args, {
     maxBuffer: 20_000_000,
     env: env ? { ...process.env, ...env } : process.env,
     timeout: timeoutMs,
   });
-  return stdout;
+  if (input !== undefined) {
+    p.child.stdin?.on("error", () => {}); // gh may exit before it reads everything; its exit code tells
+    p.child.stdin?.end(input);
+  }
+  return (await p).stdout;
 }
 
 export async function ghJson<T>(args: string[], env?: NodeJS.ProcessEnv, timeoutMs?: number): Promise<T> {
@@ -39,19 +43,36 @@ export interface Issue {
 
 export const isBot = (c: { body: string }) => BOT_MARKERS.some((m) => c.body.includes(m));
 
-export async function issueComments(repo: string, issue: number | string): Promise<Comment[]> {
-  const r = await ghJson<{ comments: Comment[] }>(["issue", "view", String(issue), "--repo", repo, "--json", "comments,labels"]);
+export async function issueComments(repo: string, issue: number | string, timeoutMs?: number): Promise<Comment[]> {
+  const r = await ghJson<{ comments: Comment[] }>(["issue", "view", String(issue), "--repo", repo, "--json", "comments,labels"], undefined, timeoutMs);
   return r.comments ?? [];
 }
 
-/** Can this user push to the repo? Used to trust /approve and /reject. */
+/** The permission GitHub reports for this user on the repo ("admin", "write", "read", …). Rejects when GitHub cannot tell. */
+export async function repoPermission(repo: string, login: string, timeoutMs?: number): Promise<string> {
+  return (await gh(["api", `repos/${repo}/collaborators/${login}/permission`, "--jq", ".permission"], undefined, timeoutMs)).trim();
+}
+
+/** Does this permission allow pushing? */
+export const mayWrite = (perm: string) => ["admin", "maintain", "write"].includes(perm);
+
+/** Can this user push to the repo? Used to trust /approve and /reject. A failing call counts as no. */
 export async function canWrite(repo: string, login: string): Promise<boolean> {
   try {
-    const perm = (await gh(["api", `repos/${repo}/collaborators/${login}/permission`, "--jq", ".permission"])).trim();
-    return ["admin", "maintain", "write"].includes(perm);
+    return mayWrite(await repoPermission(repo, login));
   } catch {
     return false;
   }
+}
+
+/** The login `gh` acts as. */
+export async function ghLogin(timeoutMs?: number): Promise<string> {
+  return (await gh(["api", "user", "--jq", ".login"], undefined, timeoutMs)).trim();
+}
+
+/** Posts a comment; the text goes through stdin (not a shell, not the process list). */
+export async function commentOnIssue(repo: string, issue: number, body: string, timeoutMs?: number): Promise<void> {
+  await gh(["issue", "comment", String(issue), "--repo", repo, "--body-file", "-"], undefined, timeoutMs, body);
 }
 
 /** The human comments posted after the latest comment matching `after` (or all, if none matches). */
@@ -63,11 +84,11 @@ export function commentsAfter(comments: Comment[], after: (c: Comment) => boolea
   return comments.slice(idx + 1).filter((c) => !isBot(c));
 }
 
-export async function setLabels(repo: string, issue: number, add: string | undefined, remove: string[]) {
+export async function setLabels(repo: string, issue: number, add: string | undefined, remove: string[], timeoutMs?: number) {
   const args = ["issue", "edit", String(issue), "--repo", repo];
   for (const l of remove) if (l !== add) args.push("--remove-label", l);
   if (add) args.push("--add-label", add);
-  await gh(args);
+  await gh(args, undefined, timeoutMs);
 }
 
 export async function ensureLabel(repo: string, name: string, color: string, description: string) {
