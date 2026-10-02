@@ -53,6 +53,28 @@ export function lockHolder(lock: string): number | undefined {
  * took in the meantime is not removed by path: when the renamed lock turns out to be alive, it is put back.
  */
 export function breakStaleLock(lock: string): void {
+  // Only one process breaks a lock at a time, and it checks again under that guard: otherwise a second
+  // process that also saw the dead lock could move aside the fresh lock the first one just took.
+  const guard = `${lock}.break`;
+  try {
+    mkdirSync(guard);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+    try {
+      if (Date.now() - statSync(guard).mtimeMs > 10_000) rmSync(guard, { recursive: true, force: true }); // its owner died
+    } catch {
+      // removed meanwhile
+    }
+    return; // someone else is breaking it; the caller just tries again
+  }
+  try {
+    if (lockHolder(lock) === undefined) moveAsideStaleLock(lock);
+  } finally {
+    rmSync(guard, { recursive: true, force: true });
+  }
+}
+
+function moveAsideStaleLock(lock: string): void {
   const aside = `${lock}.stale-${process.pid}-${randomBytes(4).toString("hex")}`;
   try {
     renameSync(lock, aside);
@@ -84,7 +106,8 @@ export function acquireLock(lock: string, waitMs = 0): boolean {
     }
     if (lockHolder(lock) === undefined) {
       breakStaleLock(lock);
-      continue;
+      if (!existsSync(lock)) continue; // broken: take it now
+      // another process is breaking it, or took it: wait like for any held lock
     }
     if (Date.now() >= until) return false;
     sleepSync(50);

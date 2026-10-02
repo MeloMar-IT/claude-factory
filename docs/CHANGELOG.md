@@ -4,6 +4,7 @@ Changes that are merged but not yet in a release go under **Unreleased**. Newest
 
 ## Unreleased
 
+- Fix a race when several processes take over a dead lock at once (one could remove the fresh lock of another).
 - Roles and permissions (#6). The role of an account (`admin` or `user`) is now checked on every API call, and the UI shows a user only **Runs**.
   - **After the upgrade:** accounts with the role `user` can only use Runs, their own repository list and their own credentials. No command changes a role yet; create an admin with `scf user create --admin` under another e-mail if you need one.
   - **What users may do.** List and read their own runs, start a saved flow, follow, cancel, resume, approve and reject (with a note) their own runs, list the published flows (name and description only), and manage their repositories and credentials. Everything else answers `403 {"error":"not allowed for your role"}`. A run that is not theirs, unknown, without an owner or with an unreadable `run.json` answers `403 {"error":"not your run"}`. Starting a run: `yaml` gives 403 "only an admin can run a flow that is not saved", `repo` gives 403 "only an admin can choose the folder", a bad flow name gives 400, an unknown flow 404, and a `github_repo` that is not one of the user's repositories gives 403 `"<name>" is not one of your repositories` (or `set the var "github_repo" to one of your repositories`). A flow without `github_repo` runs in the server's default folder, with the variables it had when it was queued.
