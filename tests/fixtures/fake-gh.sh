@@ -2,6 +2,7 @@
 # Stand-in for the GitHub CLI. Logs every call to $FAKE_GH_LOG; "repo clone" clones $FAKE_GH_REMOTE.
 # State lives next to the log: $FAKE_GH_LOG.pr (PR url once created), $FAKE_GH_LOG.checks (CI call count).
 echo "gh $*" >> "$FAKE_GH_LOG"
+if [ -n "$FAKE_GH_SLEEP" ]; then sleep "$FAKE_GH_SLEEP"; fi
 # $FAKE_GH_FAIL="issue list": that call prints $FAKE_GH_FAIL_TEXT (default "boom") to stderr and fails.
 if [ -n "$FAKE_GH_FAIL" ] && [ "$FAKE_GH_FAIL" = "$1 $2" ]; then printf '%s\n' "${FAKE_GH_FAIL_TEXT:-boom}" >&2; exit 1; fi
 case "$1 $2" in
@@ -58,6 +59,8 @@ case "$1 $2" in
   "run view")    echo "FAIL src/app.test.js: expected 2, got 3" ;;
   "pr merge")    echo "merged" ;;
   "pr checkout") git fetch -q origin "factory/pr-$3" && git checkout -q -B "factory/pr-$3" FETCH_HEAD && git branch -q --set-upstream-to="origin/factory/pr-$3" 2>/dev/null; git config "branch.factory/pr-$3.remote" origin; git config "branch.factory/pr-$3.merge" "refs/heads/factory/pr-$3" ;;
-  "api "*)       case "$2" in *permission*) echo "${FAKE_GH_PERMISSION:-write}" ;; *) printf '%s' "${FAKE_GH_API:-[]}" ;; esac ;;
+  "api "*)       case "$2" in user) echo "${FAKE_GH_LOGIN:-foundry-owner}" ;; *permission*) l=${2#*collaborators/}; l=${l%/permission}
+                       # $FAKE_GH_READONLY: logins that only have read access
+                       case " $FAKE_GH_READONLY " in *" $l "*) echo read ;; *) echo "${FAKE_GH_PERMISSION:-write}" ;; esac ;; *) printf '%s' "${FAKE_GH_API:-[]}" ;; esac ;;
   *) echo "fake gh: unsupported: $*" >&2; exit 1 ;;
 esac

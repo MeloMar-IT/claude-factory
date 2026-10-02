@@ -254,6 +254,11 @@ steps:
     expect(html).toContain('id="turn-badge"');
     expect(html).toContain("<title>Spaghetti Code Foundry</title>");
     expect((await fetch(base + "/turn.js")).status).toBe(200);
+    expect((await fetch(base + "/turn-act.js")).status).toBe(200);
+    expect((await json("GET", "/api/your-turn/detail?key=nope")).status).toBe(404);
+    expect((await json("GET", "/api/your-turn/detail")).status).toBe(400);
+    expect((await json("POST", "/api/your-turn/act", { key: "nope", action: "retry" })).status).toBe(404);
+    expect((await json("POST", "/api/your-turn/act", { key: "nope", action: "explode" })).status).toBe(400);
     const app = await text("/app.js");
     for (const s of ["renderYourTurn", "startHash(", 'section === "your-turn"']) expect(app).toContain(s);
     expect(await text("/api.js")).toContain("/api/your-turn");

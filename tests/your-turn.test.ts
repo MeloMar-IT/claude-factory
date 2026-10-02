@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { nextStep, type NextKind, type NextStep } from "../src/next-step.js";
-import { buildTurn, emptyText, needsUser, runOrigin, soonestAt, type TurnSource } from "../src/your-turn.js";
+import { actsFor, buildTurn, emptyText, needsUser, runOrigin, soonestAt, type TurnSource } from "../src/your-turn.js";
 
 const rec = (kind: NextKind, base: { repo?: string; issue?: number; title?: string; runId?: string } = {}, data = {}) =>
   nextStep(kind, { repo: "o/a", ...base }, { watched: true, issueUrl: base.issue ? `https://github.com/o/a/issues/${base.issue}` : undefined, ...data });
@@ -118,6 +118,43 @@ describe("buildTurn", () => {
     const s = src(rec("questions", { issue: 1 }));
     const t = buildTurn([s], { dismissed: { [s.key]: { since: "" } }, building: 2 }).data;
     expect(t.empty).toBe("Nothing needs you. 2 stories are being built.");
+  });
+});
+
+describe("actsFor and acted items", () => {
+  const w = (n: NextStep) => src(n, { watcher: "a" });
+  it("gives the actions per kind, and none without a watcher, an issue or for a joined release", () => {
+    expect(actsFor("questions", "a", 1)).toEqual(["defaults", "answer"]);
+    expect(actsFor("planner_questions", "a", 1)).toEqual(["answer"]);
+    for (const k of ["approve_plan", "approve_split", "approval"] as NextKind[]) expect(actsFor(k, "a", 1)).toEqual(["approve", "reject"]);
+    expect(actsFor("failed", "a", 1)).toEqual(["retry", "retry_hint"]);
+    expect(actsFor("questions", undefined, 1)).toEqual([]);
+    expect(actsFor("questions", "a", undefined)).toEqual([]);
+    expect(actsFor("stopped", "a", 1)).toEqual([]);
+    const pr = { number: 4, url: "https://github.com/o/a/pull/4" };
+    const t = buildTurn([w(rec("release", { issue: 1 }, { pr })), w(rec("release", {}, { pr }))]);
+    expect(t.data.groups[0]!.items[0]!.acts).toEqual([]);
+  });
+
+  it("moves an item acted on at the same stamp to continuing", () => {
+    const s = w(rec("questions", { issue: 1 }));
+    const other = w(rec("questions", { issue: 2 }));
+    const t = buildTurn([s], { acted: { [s.key]: { since: "" } } }).data;
+    expect(t.count).toBe(0);
+    expect(t.groups).toEqual([]);
+    expect(t.dismissed).toBe(0);
+    expect(t.empty).toBeDefined();
+    expect(t.continuing!.map((i) => i.key)).toEqual([s.key]);
+    const two = buildTurn([s, other], { acted: { [s.key]: { since: "" } } }).data;
+    expect(two.count).toBe(1);
+    expect(two.empty).toBeUndefined();
+  });
+
+  it("keeps the item when its stamp changed", () => {
+    const s = w(rec("questions", { issue: 1 }));
+    const t = buildTurn([{ ...s, stamp: "2026-10-01T10:00:00Z" }], { acted: { [s.key]: { since: "2026-10-01T09:00:00Z" } } }).data;
+    expect(t.count).toBe(1);
+    expect(t.continuing).toBeUndefined();
   });
 });
 

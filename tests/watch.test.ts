@@ -214,6 +214,42 @@ describe("watcher", () => {
     expect(done.history.find((h) => h.id === "approve")!.output).toBe("approved by marcel: ship it");
   });
 
+  it("resumes an approval from the /approve comment the app composes (the signature is not in the note)", async () => {
+    const { composeComment } = await import("../src/turn-actions.js");
+    issues([6]);
+    const w = watcher({ flow: "github-pr", vars: { test_cmd: "test -f feature.txt", require_approval: "yes", ci_settle_sec: "0" } });
+    await w.tick();
+    await settle();
+    const run = runFor("6");
+    issues([6, "factory:waiting-approval"]);
+    const request = { author: { login: "bot" }, body: `ready <!-- claude-factory run=${run.runId} approval -->`, createdAt: "2026-01-01T00:00:00Z" };
+    const body = composeComment("approve", { name: "Marcel K", text: "ship it\nplease" });
+    process.env.FAKE_GH_COMMENTS = JSON.stringify({ comments: [request, { author: { login: "marcel" }, body, createdAt: "2026-01-01T02:00:00Z" }] });
+    await w.tick();
+    await settle();
+    expect(runFor("6").history.find((h) => h.id === "approve")!.output).toBe("approved by marcel: ship it please");
+  });
+
+  it("resumes a needs-info run from the /defaults comment the app composes", async () => {
+    const { composeComment } = await import("../src/turn-actions.js");
+    process.env.FAKE_PLAN = "Which DB?\nPLAN_STATUS: NEEDS_INFO";
+    issues([4]);
+    const w = watcher();
+    await w.tick();
+    await settle();
+    const first = runFor("4");
+    delete process.env.FAKE_PLAN;
+    issues([4, "factory:needs-info"]);
+    process.env.FAKE_GH_COMMENTS = JSON.stringify({ comments: [
+      { author: { login: "bot" }, body: "questions <!-- claude-factory run=x questions -->", createdAt: "2026-01-01T00:00:00Z" },
+      { author: { login: "marcel" }, body: composeComment("defaults", { name: "Marcel K" }), createdAt: "2026-01-01T01:00:00Z" },
+    ] });
+    await w.tick();
+    await settle();
+    expect(runFor("4").runId).toBe(first.runId);
+    expect(runFor("4").status).toBe("succeeded");
+  });
+
   it("the approval request github-pr posts keeps the old marker, and /approve on it resumes the run", async () => {
     issues([6]);
     const w = watcher({ flow: "github-pr", vars: { test_cmd: "test -f feature.txt", require_approval: "yes", ci_settle_sec: "0" } });
