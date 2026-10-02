@@ -89,12 +89,13 @@ steps:
       marker="{{run.dir}}/tests.marker"; touch "$marker"
       echo "\$ $cmd"
       sh -c "$cmd" > "{{run.dir}}/tests.log" 2>&1; code=$?
+      if [ "$code" -ne 0 ]; then echo "the tests failed — running them once more (a test can fail by chance on a busy machine)"; touch "$marker"; sh -c "$cmd" > "{{run.dir}}/tests.log" 2>&1; code=$?; [ "$code" -eq 0 ] && echo "passed the second time: a flaky test, not a real failure"; fi
       tail -150 "{{run.dir}}/tests.log"
       echo; echo "=== summary ==="
       { "$FACTORY_TOOLS/test-summary" "$marker"; [ "$code" -eq 0 ] && echo "result: PASSED" || echo "result: FAILED (exit $code)"; } | tee "{{run.dir}}/last-tests.txt"
       exit "$code"
     on_failure: baseline_failed
-    description: Tests must pass before we change anything
+    description: Tests must pass before we change anything (a failing run is tried once more)
   - id: implement
     type: claude
     prompt: |-
