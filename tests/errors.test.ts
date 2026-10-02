@@ -127,3 +127,42 @@ describe("explainError", () => {
     expect(e.detail).toBe(raw);
   });
 });
+
+describe("explainError for a user", () => {
+  const user = (raw: string) => explainError(raw, "run", true);
+  const MONEY = /\$|budget|Codex|claude|Settings/i;
+
+  it.each([
+    ['step "plan" failed: claude result: error_max_budget_usd', "The step plan failed", "the administrator's limit was reached"],
+    ["run budget of $2 reached", "The run stopped", "the administrator's limit was reached"],
+    ['step "review" failed: codex CLI not found — install it with: npm i -g @openai/codex', "The step review failed", "an AI tool of the Foundry is not set up"],
+    ['step "review" failed: 401 Unauthorized — run `codex login`', "The step review failed", "the Foundry is signed out of an AI account"],
+    ["boom", "The run failed", "the error is not one the Foundry can explain"],
+  ])("%s", (raw, what, why) => {
+    const e = user(raw);
+    expect(e.what).toBe(what);
+    expect(e.why).toBe(why);
+    expect(e.todo).toBe("Ask the administrator");
+    for (const part of [e.what, e.why, e.todo]) {
+      expect(part).not.toMatch(MONEY);
+      expect(part).not.toMatch(/[.!?]\s|\n|\$|"/);
+    }
+  });
+
+  it("marks a limit, only for a user", () => {
+    expect(user("run budget of $2 reached")).toMatchObject({ limit: true, startOver: true });
+    expect(explainError("run budget of $2 reached").limit).toBeUndefined();
+    expect(user("exit code 1").limit).toBeUndefined();
+  });
+
+  it("sends a user to the log, not to output they cannot read", () => {
+    expect(explainError("exit code 1").todo).toBe("Look at the output of the step and fix the cause");
+    expect(user("exit code 1").todo).toBe("Look at the log on the run page");
+  });
+
+  it("leaves the other rows as they are", () => {
+    for (const raw of ['step "x" failed: rejected', "internal error: x"]) {
+      expect(user(raw)).toEqual(explainError(raw));
+    }
+  });
+});

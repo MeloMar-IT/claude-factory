@@ -597,3 +597,42 @@ describe("releaseAtFor and trackingWatcher", () => {
     expect(trackingWatcher([issues], run({ vars: { github_repo: "acme/app" } }))).toBeUndefined();
   });
 });
+
+describe("records for a user", () => {
+  const BAD = /\$|budget|Settings|in the flow|Codex|claude/i;
+  const failed = (reason: string) => run({ status: "failed", reason, state: { next: "a", steps: {}, visits: {} } });
+  const asUser = (r: RunSummary, o: Record<string, unknown> = {}) => runNextStep(r, { forUser: true, ...o });
+
+  it("says nothing of money or setup for a limit, a signed-out agent or a failure", () => {
+    const cases: [RunSummary, Record<string, unknown>][] = [
+      [run({ status: "stopped", reason: "daily budget of $5 reached — resume tomorrow" }), {}],
+      [run({ status: "stopped", reason: "usage limit reached: You've hit your limit · resets 3:50pm" }), {}],
+      [run({ status: "stopped", reason: "usage limit reached: limit" }), { limitAgent: "codex" }],
+      [run({ status: "stopped", reason: "signed out — the Claude Code login has expired" }), {}],
+      [run({ status: "stopped", reason: "signed out — the Codex login has expired" }), {}],
+      [failed("run budget of $2 reached"), {}],
+      [failed('step "a" failed: claude result: error_max_budget_usd'), {}],
+      [failed('step "a" failed: exit code 1'), {}],
+    ];
+    for (const [r, o] of cases) {
+      const n = asUser(r, o);
+      for (const t of [n.status, n.help, n.why, n.action, n.text, n.until ?? "", n.where.label]) expect(t, `${r.reason}: ${t}`).not.toMatch(BAD);
+    }
+  });
+
+  it("words a limit as the administrator's and a signed-out agent as something to ask", () => {
+    const budget = run({ status: "stopped", reason: "daily budget of $5 reached" });
+    expect(asUser(budget).status).toBe("paused — the administrator's limit was reached");
+    expect(runNextStep(budget).status).toBe("paused — daily budget");
+    const out = asUser(run({ status: "stopped", reason: "signed out — the Claude Code login has expired" }));
+    expect(out.who).not.toBe("You");
+    expect(out.text).toContain("administrator");
+    expect(asUser(failed("run budget of $2 reached")).status).toBe("stopped — the administrator's limit was reached");
+  });
+
+  it("leaves a usage limit without the agent name, and keeps the admin record", () => {
+    const r = run({ status: "stopped", reason: "usage limit reached: x" });
+    expect(asUser(r, { limitAgent: "codex" }).why).toBe("The usage limit is reached");
+    expect(runNextStep(r, { limitAgent: "codex" }).why).toBe("The Codex usage limit is reached");
+  });
+});

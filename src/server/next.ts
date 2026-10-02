@@ -9,6 +9,7 @@ import type { WatcherConfig } from "../config.js";
 import { supersededRuns } from "../stats.js";
 import { watcherState, type WatcherState } from "../words.js";
 import { send } from "./http.js";
+import { userRecord } from "./user-view.js";
 import type { ApiContext, Route } from "./server.js";
 
 /** Why the server waits to restart, and since when. */
@@ -77,7 +78,7 @@ function waitLeftFor(ctx: ApiContext): (rec: NextStep) => NextStep {
  * Builds the record of any run. Reads the context when called, so do not keep the returned
  * function across requests or events.
  */
-export function nextFor(ctx: ApiContext, runs?: RunSummary[]): (run: RunSummary) => NextStep {
+export function nextFor(ctx: ApiContext, runs?: RunSummary[], forUser = false): (run: RunSummary) => NextStep {
   const cfg = ctx.config();
   const pending = ctx.scheduler.queue().pending;
   const tracked = ctx.watchers.tracked();
@@ -105,6 +106,7 @@ export function nextFor(ctx: ApiContext, runs?: RunSummary[]): (run: RunSummary)
       releaseAt: run.status === "succeeded" ? releaseAtFor(cfg.watchers, run, load()) : undefined,
       title,
       areaWait: areaWait(run),
+      forUser,
     });
     // A closed issue whose run is still busy: the watcher's record says so.
     if (queued || run.status === "running" || run.status === "waiting") {
@@ -112,7 +114,10 @@ export function nextFor(ctx: ApiContext, runs?: RunSummary[]): (run: RunSummary)
       if (closed) return closed;
     }
     // The watcher's hold for the same run and reason knows more (pull request, question count).
-    const hold = tracked.flatMap((t) => t.status.holds ?? []).find((h) => h.next.runId === run.runId && h.next.kind === rec.kind);
+    // A hold of a limit or a failure carries the administrator's wording: a user keeps the record of the run.
+    const hold = forUser && (rec.kind === "daily_budget" || rec.kind === "usage_limit" || rec.kind === "failed")
+      ? undefined
+      : tracked.flatMap((t) => t.status.holds ?? []).find((h) => h.next.runId === run.runId && h.next.kind === rec.kind);
     const out = waitLeft(hold?.next ?? rec);
     if (out.kind === "done" || out.kind === "superseded") return out;
     const timing = out.kind === "running" && run.status === "running" ? runTiming(run, historyFor(ctx)) : runProgress(run);
@@ -147,9 +152,9 @@ export function watcherProblem(w: WatcherConfig, status: WatcherStatus | undefin
 }
 
 /** GET /api/queue: the queue, each pending job with its record as `next`. */
-export function queueWithNext(ctx: ApiContext): Omit<Queue, "pending"> & { pending: (PendingJob & { next: NextStep })[] } {
+export function queueWithNext(ctx: ApiContext, forUser = false): Omit<Queue, "pending"> & { pending: (PendingJob & { next: NextStep })[] } {
   const q = ctx.scheduler.queue();
-  const next = nextFor(ctx);
+  const next = nextFor(ctx, undefined, forUser);
   const tracked = ctx.watchers.tracked();
   const waitLeft = waitLeftFor(ctx);
   return { ...q, pending: q.pending.map((p) => {
@@ -184,20 +189,30 @@ export function hideForeign<T>(value: T, mine: (runId: string) => boolean): T {
   return JSON.parse(text.replace(/waiting for run ([\w-]+)/g, (all, id: string) => (mine(id) ? all : "waiting for another run"))) as T;
 }
 
+/** What a user sees of a queued job: not the folder, the source, the locks or how many runs work at once. */
+export interface OwnJob { runId: string; kind: string; enqueuedAt: string; waitingFor?: string; githubRepo?: string; issue?: string; task?: string; next: NextStep; ahead: number }
+
 /** GET /api/queue for a user: their own queued jobs, each with the number of other accounts' jobs in front of it. */
-export function ownQueue(ctx: ApiContext, userId: string): { pending: (PendingJob & { next: NextStep; ahead: number })[]; active: Queue["active"]; concurrency: number } {
-  const q = queueWithNext(ctx);
+export function ownQueue(ctx: ApiContext, userId: string): { pending: OwnJob[]; active: { runId: string }[] } {
+  const q = queueWithNext(ctx, true);
   const mine = (id: string) => ctx.scheduler.ownerOf(id) === userId;
-  const pending: (PendingJob & { next: NextStep; ahead: number })[] = [];
+  const pending: OwnJob[] = [];
   let ahead = 0;
   for (const p of q.pending) {
     if (!mine(p.runId)) {
       ahead++;
       continue;
     }
-    pending.push({ ...p, waitingFor: p.waitingFor && mine(p.waitingFor) ? p.waitingFor : undefined, next: ownRecord(p.next, mine), ahead });
+    pending.push({
+      runId: p.runId, kind: p.kind, enqueuedAt: p.enqueuedAt,
+      ...(p.waitingFor && mine(p.waitingFor) ? { waitingFor: p.waitingFor } : {}),
+      ...(p.githubRepo !== undefined ? { githubRepo: p.githubRepo } : {}),
+      ...(p.issue !== undefined ? { issue: p.issue } : {}),
+      ...(p.task !== undefined ? { task: p.task } : {}),
+      next: userRecord(ownRecord(p.next, mine)), ahead,
+    });
   }
-  return { pending, active: q.active.filter((a) => mine(a.runId)), concurrency: q.concurrency };
+  return { pending, active: q.active.filter((a) => mine(a.runId)).map((a) => ({ runId: a.runId })) };
 }
 
 /** GET /api/watchers: each watcher carries its own `state` (words for active, error, disabled); one with a problem also has its record as `status.next`. Holds are copies that may say how long the run they wait for still needs. */

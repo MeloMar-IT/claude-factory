@@ -25,6 +25,7 @@ import { repoRoutes } from "./api-repos.js";
 import { authorize, findRule } from "./permissions.js";
 import { sinceRoutes } from "./since.js";
 import { yourTurnRoutes } from "./your-turn.js";
+import { USER_ERROR, movedText } from "./user-view.js";
 
 const UI_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../../ui");
 const YAML_BROWSER_DIR = join(dirname(createRequire(import.meta.url).resolve("yaml/package.json")), "browser");
@@ -95,16 +96,26 @@ export async function startServer(given: ServerOptions): Promise<{ url: string; 
     // The guard comes first: without a session nothing is answered, not even the moved-folder message with its path.
     if (await authRoutes(ctx, req, res, seg, method)) return;
     const user = await requireSession(ctx, req, method);
-    // The table decides first: a call without a rule is 404, and a user only gets what the table gives.
-    const rule = findRule(method, seg);
-    if (!rule) throw new HttpError(404, "not found");
-    authorize(ctx, user, rule, seg);
-    const moved = method === "GET" ? undefined : homeMoved();
-    if (moved) throw new HttpError(503, `the data folder moved to ${moved}; the server restarts onto it — try again in a minute`);
-    for (const route of ROUTES) {
-      if (await route(ctx, req, res, seg, method, user)) return watchSession(req, res);
+    const admin = user.role === "admin";
+    let where = seg.join("/");
+    try {
+      // The table decides first: a call without a rule is 404, and a user only gets what the table gives.
+      const rule = findRule(method, seg);
+      if (!rule) throw new HttpError(404, "not found");
+      where = rule.path;
+      authorize(ctx, user, rule, seg);
+      const moved = method === "GET" ? undefined : homeMoved();
+      if (moved) throw new HttpError(503, movedText(moved, admin));
+      for (const route of ROUTES) {
+        if (await route(ctx, req, res, seg, method, user)) return watchSession(req, res);
+      }
+      throw new HttpError(404, "not found");
+    } catch (e) {
+      // An unexpected error can hold a folder, a setting or a command: a user gets a fixed sentence, the log the message.
+      if (admin || e instanceof HttpError) throw e;
+      log(`api ${method} ${where}: ${(e as Error).message}`);
+      throw new HttpError(500, USER_ERROR);
     }
-    throw new HttpError(404, "not found");
   }
 
   /** A response that stays open (the run log stream) is closed when its session ends. */

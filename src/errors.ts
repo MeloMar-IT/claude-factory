@@ -12,17 +12,22 @@ export interface Explained {
   detail: string;
   /** True when the fix is a change to the flow: it only counts for a new run, not for a resume. */
   startOver: boolean;
+  /** Only for a user: a limit the administrator set stopped the run. */
+  limit?: true;
 }
 
-type Parts = { what: string; why: string; todo: string; startOver?: boolean };
+type Parts = { what: string; why: string; todo: string; startOver?: boolean; limit?: true };
 type Ctx = { step?: string };
 interface Row {
   re: RegExp;
   only?: ErrorAbout;
   startOver?: true;
+  /** What a user reads instead: no money, no setup. */
+  user?: (m: RegExpExecArray, s: Ctx) => Parts;
   make: (m: RegExpExecArray, s: Ctx) => Parts;
 }
 
+const ASK = "Ask the administrator";
 const RUN_PAGE_LOG = "Look at the steps and the log on the run page";
 const WATCHER_TODO = "Look at Error details on the Watchers page";
 
@@ -34,15 +39,15 @@ const ROWS: Row[] = [
   { re: /^exit code \S+/, make: (_m, s) => ({ what: stepWhat(s), why: "its command ended with an error", todo: OUTPUT }) },
   { re: /^timed out\b/, make: (_m, s) => ({ what: stepWhat(s), why: "it ran longer than its time limit", todo: "Look at the output of the step to see what took so long" }) },
   { re: /^claude exited with code/, make: (_m, s) => ({ what: stepWhat(s), why: "the agent stopped without a result", todo: LOG }) },
-  { re: /^codex CLI not found/, make: (_m, s) => ({ what: stepWhat(s), why: "Codex is not installed on this computer", todo: "Install Codex on the computer that runs the Foundry" }) },
-  { re: /codex login/i, only: "run", make: (_m, s) => ({ what: stepWhat(s), why: "Codex is not logged in", todo: "Log in to Codex on the computer that runs the Foundry" }) },
+  { re: /^codex CLI not found/, user: (_m, s) => ({ what: stepWhat(s), why: "an AI tool of the Foundry is not set up", todo: ASK }), make: (_m, s) => ({ what: stepWhat(s), why: "Codex is not installed on this computer", todo: "Install Codex on the computer that runs the Foundry" }) },
+  { re: /codex login/i, only: "run", user: (_m, s) => ({ what: stepWhat(s), why: "the Foundry is signed out of an AI account", todo: ASK }), make: (_m, s) => ({ what: stepWhat(s), why: "Codex is not logged in", todo: "Log in to Codex on the computer that runs the Foundry" }) },
   { re: /^codex exited with code/, make: (_m, s) => ({ what: stepWhat(s), why: "the agent stopped with an error", todo: LOG }) },
   { re: /^claude result: error_max_turns\b/, make: (_m, s) => ({ what: stepWhat(s), why: "the agent used all its turns", todo: LOG }) },
-  { re: /^claude result: error_max_budget_usd\b/, startOver: true, make: (_m, s) => ({ what: stepWhat(s), why: "the agent used up the budget of the step", todo: "Give the step a larger budget in the flow" }) },
+  { re: /^claude result: error_max_budget_usd\b/, startOver: true, user: (_m, s) => ({ what: stepWhat(s), why: "the administrator's limit was reached", todo: ASK, startOver: true, limit: true }), make: (_m, s) => ({ what: stepWhat(s), why: "the agent used up the budget of the step", todo: "Give the step a larger budget in the flow" }) },
   { re: /^claude result: error_during_execution\b/, make: (_m, s) => ({ what: stepWhat(s), why: "the agent hit an error while it worked", todo: LOG }) },
   { re: /^claude result: /, make: (_m, s) => ({ what: stepWhat(s), why: "the agent ended with an error", todo: LOG }) },
   { re: /^exceeded max_visits \((\d+)\)/, make: (_m, s) => ({ what: stepWhat(s), why: "it used all its attempts", todo: "Look at why the step keeps failing in its log on the run page" }) },
-  { re: /^run budget of /, startOver: true, make: () => ({ what: "The run reached its budget", why: "it used the amount the flow allows for one run", todo: "Allow a larger budget for one run in the flow" }) },
+  { re: /^run budget of /, startOver: true, user: () => ({ what: "The run stopped", why: "the administrator's limit was reached", todo: ASK, startOver: true, limit: true }), make: () => ({ what: "The run reached its budget", why: "it used the amount the flow allows for one run", todo: "Allow a larger budget for one run in the flow" }) },
   { re: /^rejected\b/, make: (_m, s) => ({ what: stepWhat(s), why: "a person rejected it", todo: "Read the note of the person and change the work as asked" }) },
   { re: /^invalid interval\b/, only: "watcher", make: () => ({ what: "The watcher cannot start", why: "its check interval is not a valid time", todo: "Change the check interval of the watcher to a time like 5m" }) },
   { re: /^interval must be\b/, only: "watcher", make: () => ({ what: "The watcher cannot start", why: "its check interval is outside what is allowed", todo: "Change the check interval of the watcher to a time like 5m" }) },
@@ -63,14 +68,24 @@ export function errorLine(raw: string | undefined): string {
   return text.slice(0, 300);
 }
 
-/** Pure. Never throws; `undefined` and "" give the "no reason" text. */
-export function explainError(raw: string | undefined, about: ErrorAbout = "run"): Explained {
+/** A user cannot read the output of a step and has no "Details" row on the run page. */
+const forUserTodo = (todo: string) => (/output of the step/.test(todo) ? "Look at the log on the run page" : todo === DETAILS ? ASK : todo);
+const DETAILS = "Look at Details on the run page";
+
+/**
+ * Pure. Never throws; `undefined` and "" give the "no reason" text. For a user (`forUser`) the words hold no money
+ * and no setup: a limit is "the administrator's limit", and what a user cannot fix says to ask the administrator.
+ */
+export function explainError(raw: string | undefined, about: ErrorAbout = "run", forUser = false): Explained {
   const detail = (raw ?? "").trim();
-  const fin = (p: Parts): Explained => ({ ...p, detail, startOver: p.startOver ?? false });
+  const fin = (p: Parts): Explained => {
+    const { limit, ...rest } = p;
+    return { ...rest, ...(forUser ? { todo: forUserTodo(p.todo) } : {}), detail, startOver: p.startOver ?? false, ...(forUser && limit ? { limit } : {}) };
+  };
   const general = (s: Ctx): Parts =>
     about === "watcher"
       ? { what: "The watcher has an error", why: "the error is not one the Foundry can explain", todo: WATCHER_TODO }
-      : { what: stepWhat(s), why: "the error is not one the Foundry can explain", todo: "Look at Details on the run page" };
+      : { what: stepWhat(s), why: "the error is not one the Foundry can explain", todo: DETAILS };
   if (!detail) {
     return fin(about === "watcher"
       ? { what: "The watcher has an error", why: "no reason was saved", todo: WATCHER_TODO }
@@ -94,7 +109,7 @@ export function explainError(raw: string | undefined, about: ErrorAbout = "run")
   for (const row of ROWS) {
     if (row.only && row.only !== about) continue;
     const m = row.re.exec(text);
-    if (m) return fin({ ...row.make(m, ctx), startOver: row.startOver ?? false });
+    if (m) return fin({ startOver: row.startOver ?? false, ...(forUser && row.user ? row.user(m, ctx) : row.make(m, ctx)) });
   }
   return fin(general(ctx));
 }

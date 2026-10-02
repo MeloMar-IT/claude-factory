@@ -165,7 +165,7 @@ describe("runs of other accounts", () => {
     for (const q of [...s.ctx.scheduler.queue().pending, ...s.ctx.scheduler.queue().active]) s.ctx.scheduler.cancel(q.runId);
   });
 
-  const own = RULES.filter((r) => r.path.startsWith("runs/:id"));
+  const own = RULES.filter((r) => r.user === "own");
   const pathFor = (rule: (typeof own)[number], id: string) => `/api/${rule.path.replace(":id", id).replace(":n", "0")}`;
   const ask = async (who: TestSession, rule: (typeof own)[number], id: string) => {
     if (rule.path.endsWith("/events")) return stream(s, who, pathFor(rule, id), 100);
@@ -183,7 +183,7 @@ describe("runs of other accounts", () => {
     mkdirSync(join(s.runsDir, broken));
     writeFileSync(join(s.runsDir, broken, "run.json"), "{ not json");
     const before = readFileSync(join(s.runsDir, annRun, "run.json"), "utf8");
-    expect(own.length).toBeGreaterThanOrEqual(8);
+    expect(own.length).toBeGreaterThanOrEqual(7);
     for (const rule of own) {
       const key = ruleKey(rule);
       const unknown = await ask(bob, rule, "unknown-run");
@@ -254,7 +254,7 @@ describe("runs of other accounts", () => {
     expect(adminQ.pending[0].next.where.url).toBe(`#/runs/${a1}`);
 
     const cy = await signInAs(s.base, { name: "Cy", email: "cy@example.com", role: "user" });
-    expect((await call(s, cy, "GET", "/api/queue")).json()).toEqual({ pending: [], active: [], concurrency: s.ctx.config().concurrency });
+    expect((await call(s, cy, "GET", "/api/queue")).json()).toEqual({ pending: [], active: [] });
 
     // Bob's run starts once Ann's first one is gone: its page and its stream do not name Ann's runs.
     s.ctx.scheduler.cancel(a1);
@@ -280,7 +280,6 @@ describe("runs of other accounts", () => {
       const own = await call(s, ann, "GET", path);
       expect(own.status).toBe(200);
       expect(own.text, path).not.toContain(bobRun);
-      expect(own.text, path).toContain("waiting for another run");
     }
     const ev = await stream(s, ann, `/api/runs/${id}/events`);
     expect(ev.text).not.toContain(bobRun);

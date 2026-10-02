@@ -111,6 +111,14 @@ describe("credentials API", () => {
     expect(incomplete.json().error).toContain("old key is still in the Keychain");
     kc.fail();
     expect(logs.some((l) => l.includes("old key(s)"))).toBe(true);
+    // a user gets the same answer without the setup (Keychain, the command line)
+    const mine = (await call(bob, "POST", "/api/credentials", { type: "token", name: "bobs", secret: fakeToken("Bb2") })).json();
+    kc.fail("delete");
+    const bobs = await call(bob, "DELETE", `/api/credentials/${mine.id}`);
+    kc.fail();
+    expect(bobs.status).toBe(500);
+    expect(bobs.json().error).toBe("the credential was removed, but the clean-up is not complete; try again, or ask the administrator");
+    expect(bobs.text).not.toMatch(/Keychain|scf/);
     // a retry cleans the old key, although the credential is already gone
     expect((await call(ann, "DELETE", `/api/credentials/${two.id}`)).status).toBe(404);
     expect(JSON.parse(readFileSync(credentialsPath(), "utf8")).retiredKeyIds).toEqual([]);

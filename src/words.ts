@@ -8,6 +8,10 @@ export interface WordFacts {
   blockers?: number[];
   /** The Foundry itself failed, not the code. */
   factory?: boolean;
+  /** The words are for a user: no money, no setup. */
+  user?: boolean;
+  /** `failed`: a limit of the administrator stopped the run. */
+  limit?: boolean;
 }
 
 interface Words {
@@ -42,7 +46,10 @@ const GLOSSARY: Record<NextKind, Words> = {
   one_at_a_time: { status: "waiting for another run", help: "Only one run at a time works here, and another run is active. Nothing to do — it starts when that run is finished." },
   area_lock: { status: "waiting for another run in the same code", help: "Another run is changing the same part of the code. Nothing to do — it goes on when that run is finished." },
   usage_limit: { status: "paused — usage limit", help: "The usage limit of the AI account is reached. Nothing to do — the Foundry tries again after the limit resets." },
-  daily_budget: { status: "paused — daily budget", help: "Today's budget is used up. Nothing to do — it goes on tomorrow." },
+  daily_budget: {
+    status: (f) => (f.user ? "paused — the administrator's limit was reached" : "paused — daily budget"),
+    help: (f) => (f.user ? "The administrator's limit for today is reached. Nothing to do — it goes on tomorrow." : "Today's budget is used up. Nothing to do — it goes on tomorrow."),
+  },
   checking: { status: "checking for questions", help: "The Foundry reads the new issues and looks for questions only you can answer. Nothing to do — an issue without questions starts after the check." },
   starting: { status: "starting soon", help: "Nothing is in the way, it only waits for the watcher's next check. Nothing to do — it starts by itself." },
   queued: { status: "queued", help: "It waits in the queue until a run finishes. Nothing to do — it starts by itself." },
@@ -50,10 +57,14 @@ const GLOSSARY: Record<NextKind, Words> = {
   interrupted: { status: "interrupted", help: "The run was cut off, for example by a restart of the server. A watched issue resumes by itself at the next check, any other run you resume on its page." },
   cancelled: { status: "cancelled", help: "Someone cancelled the run. A watched issue resumes by itself at the next check, any other run you resume on its page if you still want it." },
   failed: {
-    status: "failed",
-    help: (f) => (f.factory
-      ? "The Foundry itself failed, not the code: a blocked command, a marker it could not read or a broken setting. Follow the suggested fix, then start over or resume the run."
-      : "A step failed and the run could not go on. Fix the cause if needed, then start over or resume the run at the failed step."),
+    status: (f) => (f.user && f.limit ? "stopped — the administrator's limit was reached" : "failed"),
+    help: (f) => {
+      if (f.user && f.limit) return "The administrator's limit for one run was reached, so the run stopped. Ask the administrator, then start a new run.";
+      if (f.user && f.factory) return "The Foundry itself failed, not the code. Ask the administrator, then start over or resume the run.";
+      return f.factory
+        ? "The Foundry itself failed, not the code: a blocked command, a marker it could not read or a broken setting. Follow the suggested fix, then start over or resume the run."
+        : "A step failed and the run could not go on. Fix the cause if needed, then start over or resume the run at the failed step.";
+    },
   },
   watcher_error: { status: "watcher error", help: "The watcher could not do its check, so its issues do not move. Look at the error on the Watchers page and fix the cause, it then tries again at the next check." },
   watcher_stale: { status: "watcher silent", help: "The watcher has not finished a check for a long time, so its issues do not move. Press Check now on the Watchers page." },

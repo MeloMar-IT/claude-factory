@@ -44,7 +44,10 @@ export const credentialRoutes: Route = async (ctx, req, res, seg, method) => {
   if (r.oldKeysLeft) {
     log?.(`credentials: ${r.oldKeysLeft} old key(s) still in the Keychain; run scf credential rotate-key`);
     // the wipe is not complete: say so, and let a retry of this call clean up
-    throw new HttpError(500, `${r.removed ? "the credential was removed, but " : ""}an old key is still in the Keychain, so older copies of the data could be read; try again, or run scf credential rotate-key`);
+    const removed = r.removed ? "the credential was removed, but " : "";
+    throw new HttpError(500, user.role === "admin"
+      ? `${removed}an old key is still in the Keychain, so older copies of the data could be read; try again, or run scf credential rotate-key`
+      : `${removed}the clean-up is not complete; try again, or ask the administrator`);
   }
   if (!r.removed) throw new HttpError(404, "no such credential");
   send(res, 200, { ok: true });

@@ -209,11 +209,11 @@ describe("plain error text in the UI", () => {
 
   it("stepEntry keeps the raw error out of the summary and shows it under Details", async () => {
     const runs = (await import("../ui/runs.js" as string)) as any;
-    const bad = runs.stepEntry("r", { id: "a", type: "shell", ok: false, visit: 1, durationMs: 5, error: "exit code 1" }, 0) as FakeElement;
+    const bad = runs.stepEntry("r", { id: "a", type: "shell", ok: false, visit: 1, durationMs: 5, output: "", error: "exit code 1" }, 0) as FakeElement;
     expect(bad.all("summary")[0]!.textContent).not.toContain("exit code 1");
     expect(bad.textContent).toContain("Details");
     expect(bad.textContent).toContain("exit code 1");
-    const ok = runs.stepEntry("r", { id: "a", type: "shell", ok: true, visit: 1, durationMs: 5 }, 0) as FakeElement;
+    const ok = runs.stepEntry("r", { id: "a", type: "shell", ok: true, visit: 1, durationMs: 5, output: "" }, 0) as FakeElement;
     expect(ok.textContent).not.toContain("Details");
   });
 
@@ -381,6 +381,18 @@ describe("the \"?\" and the status names", () => {
     }
     expect(runs.stepRow({ status: "succeeded", state: { next: "a" } })).toBeNull();
     expect(runs.stepRow({ status: "failed" })).toBeNull();
+    // A user's view calls the agent step "agent".
+    expect(dd({ status: "failed", state: { next: "c" }, flowDef: flowDef({ id: "c", type: "agent" }) }).endsWith("Agent")).toBe(true);
+  });
+
+  it("stepEntry of a user's view is a plain row: no output, no transcript, no Details", async () => {
+    const runs = (await import("../ui/runs.js" as string)) as any;
+    const row = runs.stepEntry("r", { id: "think", type: "agent", ok: false, visit: 1, durationMs: 5, error: "One of its steps failed" }, 0) as FakeElement;
+    expect(row.tag).not.toBe("details");
+    expect(row.all("details")).toHaveLength(0);
+    expect(row.textContent).toContain("Agent");
+    expect(row.textContent).toContain("One of its steps failed");
+    expect(row.textContent).not.toContain("Details");
   });
 
   it("watcherStateMark takes its words from the state", () => {
@@ -512,6 +524,7 @@ describe("the Runs pages for a user", () => {
   it("runRow has an owner cell only when asked for", async () => {
     const runs = (await import("../ui/runs.js" as string)) as any;
     expect(runs.runRow(RUN).all("td")).toHaveLength(6);
+    expect(runs.runRow(RUN, { cost: false }).all("td")).toHaveLength(5);
     expect(runs.runRow({ ...RUN, ownerName: "Ann" }, { owner: true }).all("td")).toHaveLength(7);
   });
 
@@ -558,7 +571,25 @@ describe("the Runs pages for a user", () => {
     expect(asked).toEqual([]);
     expect(main.textContent).toContain("walk");
     expect(flowLinks(main)).toHaveLength(0);
+    expect(main.textContent).not.toContain("$");
+    expect(main.all("button").map((b) => b.textContent)).toContain("Steps");
+    expect(main.textContent).not.toContain("transcripts");
     stop();
+  });
+
+  it("the list of a user has no Cost column, the list of an admin has", async () => {
+    const runs = (await import("../ui/runs.js" as string)) as any;
+    const user = connected();
+    (await runs.renderRunsList(user, { admin: false }))();
+    expect(user.all("th").map((t) => t.textContent)).not.toContain("Cost");
+    const admin = connected();
+    answers["/api/run-owners"] = [];
+    try {
+      (await runs.renderRunsList(admin))();
+    } finally {
+      delete answers["/api/run-owners"];
+    }
+    expect(admin.all("th").map((t) => t.textContent)).toContain("Cost");
   });
 
   it("the run page of an admin links to the flow", async () => {

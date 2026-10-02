@@ -145,3 +145,24 @@ describe("words in the app", () => {
     for (const t of texts) expect(all, t).not.toContain(t);
   });
 });
+
+describe("words for a user", () => {
+  const MONEY = /\$|budget|Settings|in the flow|Codex|claude/i;
+  const facts: [NextKind, WordFacts, string][] = [
+    ["daily_budget", { user: true }, "paused — the administrator's limit was reached"],
+    ["failed", { user: true, limit: true }, "stopped — the administrator's limit was reached"],
+    ["failed", { user: true }, "failed"],
+    ["failed", { user: true, factory: true }, "failed"],
+  ];
+  it.each(facts)("%s %j", (kind, f, name) => {
+    expect(statusName(kind, f)).toBe(name);
+    expect(statusHelp(kind, f)).toMatch(/^[^.!?]+[.!?] [^.!?]+[.!?]$/);
+    expect(statusName(kind, f) + statusHelp(kind, f)).not.toMatch(MONEY);
+    for (const w of BANNED) expect(statusHelp(kind, f).toLowerCase()).not.toContain(w);
+  });
+
+  it("keeps the words of an admin", () => {
+    expect(statusName("daily_budget")).toBe("paused — daily budget");
+    expect(statusName("failed", { limit: true })).toBe("failed");
+  });
+});

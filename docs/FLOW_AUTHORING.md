@@ -225,6 +225,10 @@ steps:
 - Names of inputs use letters, digits, `_` and `-`, and must not give the same environment name as
   another variable (`foo-bar` and `foo_bar` do).
 - In a shell step read an input as `$FACTORY_VAR_NAME`, never as `{{vars.name}}`.
+- The `message` of an approval step is shown to users. In a published flow it may only use
+  `{{task}}`, `{{vars.<name>}}` of a `fixed` or `input` variable (or `github_repo` or `issue`) and
+  `{{steps.<id>.output}}`. `{{vars}}`, `{{workdir}}`, `{{run.*}}`, `{{learnings}}` and other step
+  fields are refused.
 
 ## Templates and environment variables
 

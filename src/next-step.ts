@@ -114,6 +114,8 @@ export interface NextData {
   limitAgent?: string;
   /** `failed`: why the run did not finish; the factory wording is used for "factory". */
   cause?: FailureCause;
+  /** The record is for a user: no money, no setup, no agent, no command, no raw reason. */
+  forUser?: boolean;
   /** `failed`: what went wrong, and the suggested fix. */
   what?: string;
   fix?: string;
@@ -226,6 +228,7 @@ export function nextStep(kind: NextKind, base: NextBase = {}, d: NextData = {}):
   let action = "Nothing — it continues by itself";
   let say = "";
   let w = where;
+  let limit = false;
   let until: string | undefined;
   const q = d.questions;
 
@@ -294,6 +297,14 @@ export function nextStep(kind: NextKind, base: NextBase = {}, d: NextData = {}):
       break;
     }
     case "usage_limit": {
+      if (/signed out/.test(d.reason ?? "") && d.forUser) {
+        // Only the administrator can sign in again; the run is retried by itself.
+        why = "The Foundry is signed out of its AI account";
+        until = limitRetry(d, LIMIT_RETRY_MS);
+        action = "Ask the administrator to sign in again";
+        say = "ask the administrator to sign in again. It continues by itself after that";
+        break;
+      }
       if (/signed out/.test(d.reason ?? "")) {
         // The agent CLI lost its login: only the owner can fix that; the run is retried by itself.
         const codex = /Codex login/.test(d.reason ?? "");
@@ -304,6 +315,12 @@ export function nextStep(kind: NextKind, base: NextBase = {}, d: NextData = {}):
         break;
       }
       who = "A time limit";
+      if (d.forUser) {
+        why = "The usage limit is reached";
+        until = limitRetry(d, LIMIT_RETRY_MS);
+        say = "nothing to do, it is tried again after the limit resets";
+        break;
+      }
       why = d.limitAgent ? `The ${upperFirst(d.limitAgent)} usage limit is reached` : "The usage limit is reached";
       until = limitReset(d.reason) ?? limitRetry(d, LIMIT_RETRY_MS);
       say = "nothing to do, it is tried again after the limit resets";
@@ -311,9 +328,9 @@ export function nextStep(kind: NextKind, base: NextBase = {}, d: NextData = {}):
       break;
     }
     case "daily_budget":
-      who = "A time limit"; why = "The daily budget is used up"; until = "tomorrow";
+      who = "A time limit"; why = d.forUser ? "The administrator's limit was reached" : "The daily budget is used up"; until = "tomorrow";
       say = "nothing to do, it starts tomorrow";
-      if (!issueWhere && !runWhere) {
+      if (!d.forUser && !issueWhere && !runWhere) {
         action = "Raise the daily budget in Settings, or wait until tomorrow";
         say = "raise the daily budget in Settings, or wait until tomorrow";
         w = SETTINGS;
@@ -338,16 +355,19 @@ export function nextStep(kind: NextKind, base: NextBase = {}, d: NextData = {}):
     }
     case "failed": {
       who = "Something is wrong";
-      const e = explainError(d.reason);
+      const e = explainError(d.reason, "run", d.forUser);
       const factory = d.cause === "factory";
+      limit = !!e.limit;
       const startOver = (!factory && e.startOver) || d.canResume === false;
-      if (factory) {
+      if (factory && d.forUser) {
+        why = "The Foundry failed, not the code";
+      } else if (factory) {
         const what = clean(d.what) || clean(d.reason);
         why = `The Foundry failed, not the code${what ? `: ${what}` : ""}`;
       } else {
         why = `${e.what}: ${e.why}`;
         // A blocked command is only a hint for a code failure.
-        const hint = [clean(d.what), clean(d.fix)].filter(Boolean).join(", ");
+        const hint = d.forUser ? "" : [clean(d.what), clean(d.fix)].filter(Boolean).join(", ");
         if (hint) why += ` (${hint})`;
       }
       let retry: string;
@@ -360,7 +380,7 @@ export function nextStep(kind: NextKind, base: NextBase = {}, d: NextData = {}):
         retry = startOver ? "then start a new run" : "then resume the run on its page";
         w = runWhere ?? where;
       }
-      const todo = factory ? clean(d.fix) : lowerFirst(e.todo);
+      const todo = factory ? (d.forUser ? "ask the administrator" : clean(d.fix)) : lowerFirst(e.todo);
       say = todo ? `${todo}, ${retry}` : retry.replace(/^then /, "");
       action = upperFirst(say);
       break;
@@ -444,7 +464,7 @@ export function nextStep(kind: NextKind, base: NextBase = {}, d: NextData = {}):
       break;
   }
 
-  const facts = { releaseAt: kind === "release" && !d.pr ? d.releaseAt : undefined, blockers: (d.blockers ?? []).map((b) => b.issue), factory: kind === "failed" && d.cause === "factory" };
+  const facts = { releaseAt: kind === "release" && !d.pr ? d.releaseAt : undefined, blockers: (d.blockers ?? []).map((b) => b.issue), factory: kind === "failed" && d.cause === "factory", user: d.forUser, limit };
   return {
     kind, status: statusName(kind, facts), help: statusHelp(kind, facts), who, why, action, where: w, until,
     repo: base.repo ?? "", user: "", issue, title: base.title ?? "", runId: base.runId,
