@@ -1,5 +1,5 @@
 import { createInterface } from "node:readline";
-import { checkEmail, checkName, checkPassword, createUser, deleteUser, findUserByEmail, hasAdmin, listUsers, setPassword, setStatus, type User } from "./users.js";
+import { checkEmail, checkName, checkPassword, createUser, deleteUser, findUserByEmail, hasAdmin, listUsers, setPassword, setStatus, updateUser, type User } from "./users.js";
 
 /** Everything the commands need from the terminal; tests pass a fake. */
 export interface UserIo {
@@ -16,11 +16,12 @@ export interface UserIo {
 export const USER_USAGE = `usage: scf user create [--admin] [--name n] [--email e]   Create an account (the first one: --admin)
        scf user list                                      List accounts
        scf user password <e-mail>                         Set a new password
+       scf user role <e-mail> admin|user                  Change the role of an account
        scf user block <e-mail> | scf user unblock <e-mail>
        scf user delete <e-mail>                           Delete an account and wipe its stored credentials
 The password is asked twice on a terminal, or read from the first line of stdin.`;
 
-const ALLOWED: Record<string, string[]> = { create: ["admin", "name", "email"], list: [], password: [], block: [], unblock: [], delete: [] };
+const ALLOWED: Record<string, string[]> = { create: ["admin", "name", "email"], list: [], password: [], role: [], block: [], unblock: [], delete: [] };
 
 export function terminalIo(stdin: NodeJS.ReadStream = process.stdin, stderr: NodeJS.WriteStream = process.stderr): UserIo {
   const cancelled = () => new Error("cancelled");
@@ -93,6 +94,8 @@ export function terminalIo(stdin: NodeJS.ReadStream = process.stdin, stderr: Nod
   };
 }
 
+const BY = { by: "cli" } as const;
+
 const syntax = (why: string) => new Error(`${why}\n${USER_USAGE}`);
 
 async function newPassword(io: UserIo): Promise<string> {
@@ -123,8 +126,11 @@ export async function userCommand(args: { positionals: string[]; values: Record<
   for (const [k, v] of Object.entries(args.values)) {
     if (v !== undefined && !allowed.includes(k)) throw syntax(`scf user ${sub}: unexpected option --${k}`);
   }
-  const need = sub === "create" || sub === "list" ? 0 : 1;
-  if (operands.length !== need) throw syntax(`scf user ${sub}: ${need ? "expects one e-mail address" : "takes no operands"}`);
+  const need = sub === "create" || sub === "list" ? 0 : sub === "role" ? 2 : 1;
+  if (operands.length !== need) {
+    throw syntax(`scf user ${sub}: ${need === 2 ? "expects an e-mail address and a role (admin or user)" : need ? "expects one e-mail address" : "takes no operands"}`);
+  }
+  if (sub === "role" && operands[1] !== "admin" && operands[1] !== "user") throw syntax("scf user role: the role must be admin or user");
 
   switch (sub) {
     case "create": {
@@ -139,34 +145,40 @@ export async function userCommand(args: { positionals: string[]; values: Record<
       checkName(name);
       checkEmail(email);
       const password = await newPassword(io);
-      const u = await createUser({ name, email, password, role });
+      const u = await createUser({ name, email, password, role }, BY);
       io.out(`created ${u.role} ${u.email}`);
       return 0;
     }
     case "list": {
       const users = listUsers();
       if (!users.length) io.out("no accounts");
-      for (const u of users) io.out(`${u.email}  ${u.name}  ${u.role}  ${u.status}`);
+      for (const u of users) io.out(`${u.email}  ${u.name}  ${u.role}  ${u.status}  last sign-in: ${u.lastSignIn ?? "never"}`);
       return 0;
     }
     case "password": {
       const u = accountByEmail(operands[0]!);
       const password = await newPassword(io);
-      await setPassword(u.id, password);
+      await setPassword(u.id, password, BY);
       io.out(`password changed for ${u.email}`);
+      return 0;
+    }
+    case "role": {
+      const u = accountByEmail(operands[0]!);
+      const now = await updateUser(u.id, { role: operands[1] as "admin" | "user" }, BY);
+      io.out(`${now.email} is now ${now.role}`);
       return 0;
     }
     case "block":
     case "unblock": {
       const u = accountByEmail(operands[0]!);
       const status = sub === "block" ? "blocked" : "active";
-      await setStatus(u.id, status);
+      await setStatus(u.id, status, BY);
       io.out(`${status === "blocked" ? "blocked" : "unblocked"} ${u.email}`);
       return 0;
     }
     case "delete": {
       const u = accountByEmail(operands[0]!);
-      const r = deleteUser(u.id);
+      const r = deleteUser(u.id, BY);
       io.out(`deleted ${r.email} (${r.credentials} credential(s) wiped)`);
       if (r.oldKeysLeft) {
         io.out(`an old credential key is still in the Keychain; run: scf credential rotate-key`);

@@ -5,6 +5,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { addRepo, listRepos, reposPath } from "../src/auth/repos.js";
 import { StoreError } from "../src/auth/store.js";
 import { readSessions } from "../src/auth/sessions.js";
+import { randomUUID } from "node:crypto";
 import { createUser, deleteUser, hashPassword, listUsers, startSession, usersPath, UserError, type User } from "../src/auth/users.js";
 import { KeyError } from "../src/credentials/keychain.js";
 import { addCredential, credentialsPath, listCredentials, readSecret } from "../src/credentials/store.js";
@@ -127,5 +128,57 @@ describe("deleteUser", () => {
     expect(listUsers().map((u) => u.id)).not.toContain(ann.id);
     expect(existsSync(usersPath())).toBe(true);
     expect(UserError).toBeDefined();
+  });
+});
+
+describe("deleteUser and the last admin and the audit log", () => {
+  const auditFile = () => join(home, "audit.jsonl");
+  const auditLines = () => (existsSync(auditFile()) ? readFileSync(auditFile(), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as Record<string, unknown>) : []);
+
+  it("writes one `delete` line with the account id", () => {
+    deleteUser(ann.id, { by: "cli" });
+    expect(auditLines()).toEqual([expect.objectContaining({ action: "delete", by: "cli", userId: ann.id })]);
+  });
+
+  it("an unwritable log stops the delete before anything changes", () => {
+    startSession(ann.id, ann.passwordHash);
+    cred(ann, "a", "Aa1");
+    mkdirSync(auditFile());
+    const users = readFileSync(usersPath());
+    const err = code(() => deleteUser(ann.id, { by: "cli" })) as StoreError;
+    expect(err).toBeInstanceOf(StoreError);
+    expect(err.kind).toBe("cannot-write");
+    expect(readFileSync(usersPath())).toEqual(users);
+    expect(readSessions()).toHaveLength(1);
+    expect(listCredentials(ann.id)).toHaveLength(1);
+    rmSync(auditFile(), { recursive: true });
+    expect(deleteUser(ann.id, { by: "cli" }).credentials).toBe(1);
+    expect(auditLines()).toHaveLength(1);
+  });
+
+  it("no line when the account is not found or is the last admin", () => {
+    expect((code(() => deleteUser(randomUUID(), { by: "cli" })) as UserError).code).toBe("not-found");
+    expect((code(() => deleteUser(admin.id, { by: "cli" })) as UserError).code).toBe("last-admin");
+    expect(auditLines()).toHaveLength(0);
+  });
+
+  it("a blocked second admin does not help, and a blocked admin can be deleted", () => {
+    const file = JSON.parse(readFileSync(usersPath(), "utf8")) as { users: User[] };
+    const second = { ...admin, id: randomUUID(), email: "second@example.com", status: "blocked" };
+    writeFileSync(usersPath(), JSON.stringify({ ...file, users: [...file.users, second] }), { mode: 0o600 });
+    const before = readFileSync(usersPath());
+    expect((code(() => deleteUser(admin.id)) as UserError).code).toBe("last-admin");
+    expect(readFileSync(usersPath())).toEqual(before);
+    deleteUser(second.id);
+    expect(listUsers().map((u) => u.id)).not.toContain(second.id);
+  });
+
+  it("keeps the runs of the account", () => {
+    mkdirSync(join(home, "runs", "r1"), { recursive: true });
+    const run = join(home, "runs", "r1", "run.json");
+    writeFileSync(run, JSON.stringify({ runId: "r1", owner: ann.id }));
+    const before = readFileSync(run);
+    deleteUser(ann.id, { by: "cli" });
+    expect(readFileSync(run)).toEqual(before);
   });
 });

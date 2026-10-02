@@ -142,7 +142,7 @@ describe("createUser", () => {
     await createUser(ann({ role: "admin" }), { onlyIfNoAdmin: true });
     expect(await code(createUser(ann({ email: "b@example.com" }), { onlyIfNoAdmin: true }))).toBe("admin-exists");
     const u = findUserByEmail("ann@example.com")!;
-    await setStatus(u.id, "blocked");
+    put([record({ id: u.id, status: "blocked", passwordHash: u.passwordHash, created: u.created })]);
     expect(await code(createUser(ann({ email: "c@example.com" }), { onlyIfNoAdmin: true }))).toBe("admin-exists");
   });
 
@@ -164,8 +164,7 @@ describe("accounts", () => {
   it("hasAdmin counts a blocked admin and ignores users", async () => {
     await createUser(ann());
     expect(hasAdmin()).toBe(false);
-    const a = await createUser(ann({ email: "b@example.com", role: "admin" }));
-    await setStatus(a.id, "blocked");
+    put([record({ email: "b@example.com", status: "blocked" })]);
     expect(hasAdmin()).toBe(true);
   });
 

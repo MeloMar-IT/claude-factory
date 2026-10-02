@@ -1,4 +1,4 @@
-import { lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, fchmodSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { ZodType } from "zod";
 import { FACTORY_HOME, claimHomeWrite } from "../home.js";
@@ -138,4 +138,69 @@ export function writeJsonFile(path: string, data: unknown): void {
     if (e instanceof StoreError) throw e;
     throw new StoreError("cannot-write", path, `cannot be written (${(e as NodeJS.ErrnoException).code ?? "error"})`);
   }
+}
+
+export interface AppendFile {
+  /** Appends one line (no newline in it); a cut-off last line in the file is first ended with a newline. */
+  append(line: string): void;
+  close(): void;
+}
+
+/**
+ * Opens a file for appending (created or set to 0600), only inside withAuthLock. Checks what can fail before the caller
+ * changes anything: the path must be a regular file or missing, and the lock must still be ours.
+ */
+export function openAppendLocked(path: string): AppendFile {
+  if (!held) throw new Error("openAppendLocked must run inside withAuthLock");
+  if (dirname(path) !== dirname(held)) throw new Error("openAppendLocked: the file is not in the locked folder");
+  const fail = (e: unknown) => new StoreError("cannot-write", path, `cannot be written (${(e as NodeJS.ErrnoException).code ?? "error"})`);
+  const notFile = () => Object.assign(new Error("not a regular file"), { code: "ENOTSUP" });
+  let fd: number | undefined;
+  let needsBreak = false;
+  try {
+    try {
+      if (!lstatSync(path).isFile()) throw notFile();
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+    }
+    fd = openSync(path, "a+", 0o600);
+    if (!fstatSync(fd).isFile()) throw notFile();
+    fchmodSync(fd, 0o600);
+    const size = fstatSync(fd).size;
+    if (size > 0) {
+      const last = Buffer.alloc(1);
+      readSync(fd, last, 0, 1, size - 1);
+      needsBreak = last[0] !== 0x0a;
+    }
+    if (!lockHeldByUs(held)) throw new StoreError("locked", held, "was taken over while writing; try again");
+  } catch (e) {
+    if (fd !== undefined) closeSync(fd);
+    if (e instanceof StoreError) throw e;
+    throw fail(e);
+  }
+  const open = fd;
+  let closed = false;
+  return {
+    append(line) {
+      if (closed) throw fail({ code: "EBADF" });
+      if (line.includes("\n")) throw new Error("append: a line must not hold a newline");
+      const buf = Buffer.from((needsBreak ? "\n" : "") + line + "\n", "utf8");
+      try {
+        let off = 0;
+        while (off < buf.length) off += writeSync(open, buf, off, buf.length - off);
+      } catch (e) {
+        throw fail(e);
+      }
+      needsBreak = false;
+    },
+    close() {
+      if (closed) return;
+      closed = true;
+      try {
+        closeSync(open);
+      } catch {
+        // nothing more to do
+      }
+    },
+  };
 }

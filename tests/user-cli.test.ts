@@ -93,6 +93,12 @@ describe("scf user (child process)", () => {
       ["create", "extra", "--name", "x", "--email", "x@example.com"],
       ["block", "ann@example.com", "--repo", "."],
       ["block"],
+      ["role"],
+      ["role", "ann@example.com"],
+      ["role", "ann@example.com", "root"],
+      ["role", "ann@example.com", "Admin"],
+      ["role", "ann@example.com", "admin", "x"],
+      ["role", "ann@example.com", "admin", "--admin"],
     ];
     for (const a of bad) {
       const r = run(["user", ...a], PW + "\n");
@@ -121,12 +127,132 @@ describe("scf user (child process)", () => {
 
   it("blocks and unblocks", () => {
     create();
-    expect(run(["user", "block", "ann@example.com"], "").code).toBe(0);
-    expect(stored().users[0]!.status).toBe("blocked");
-    expect(run(["user", "unblock", "ann@example.com"], "").code).toBe(0);
-    expect(stored().users[0]!.status).toBe("active");
+    create("bob@example.com", []);
+    expect(run(["user", "block", "bob@example.com"], "").code).toBe(0);
+    expect(stored().users[1]!.status).toBe("blocked");
+    expect(run(["user", "unblock", "bob@example.com"], "").code).toBe(0);
+    expect(stored().users[1]!.status).toBe("active");
     expect(run(["user", "block", "nobody@example.com"], "").code).toBe(1);
     expect(run(["user", "unblock", "nobody@example.com"], "").code).toBe(1);
+  });
+
+  const auditFile = () => join(home, "audit.jsonl");
+  const auditLines = () =>
+    existsSync(auditFile())
+      ? readFileSync(auditFile(), "utf8")
+          .split("\n")
+          .filter(Boolean)
+          .map((l) => JSON.parse(l) as Record<string, unknown>)
+      : [];
+
+  it("`role` changes the role and protects the last admin", () => {
+    create();
+    create("bob@example.com", []);
+    const r = run(["user", "role", "BOB@example.com", "admin"], "");
+    expect(r.code).toBe(0);
+    expect(r.out).toContain("bob@example.com is now admin");
+    expect(stored().users[1]).toMatchObject({ role: "admin" });
+    expect(run(["user", "role", "ann@example.com", "user"], "").code).toBe(0);
+    const before = readFileSync(usersFile());
+    const last = run(["user", "role", "bob@example.com", "user"], "");
+    expect(last.code).toBe(1);
+    expect(last.err).toContain("make another admin first");
+    expect(readFileSync(usersFile())).toEqual(before);
+  });
+
+  it("`role` with the same role or an unknown e-mail", () => {
+    create();
+    const lines = auditLines().length;
+    const before = readFileSync(usersFile());
+    const r = run(["user", "role", "ann@example.com", "admin"], "");
+    expect(r.code).toBe(0);
+    expect(r.out).toContain("is now");
+    expect(readFileSync(usersFile())).toEqual(before);
+    expect(auditLines()).toHaveLength(lines);
+    expect(run(["user", "role", "nobody@example.com", "admin"], "").code).toBe(1);
+  });
+
+  it("`block` and `delete` refuse the only admin", () => {
+    create();
+    const users = readFileSync(usersFile());
+    const audit = readFileSync(auditFile());
+    for (const sub of ["block", "delete"]) {
+      const r = run(["user", sub, "ann@example.com"], "");
+      expect(r.code, sub).toBe(1);
+      expect(r.err).toContain("make another admin first");
+    }
+    expect(readFileSync(usersFile())).toEqual(users);
+    expect(readFileSync(auditFile())).toEqual(audit);
+  });
+
+  it("an unwritable audit log stops the command", () => {
+    create();
+    create("bob@example.com", []);
+    rmSync(auditFile());
+    mkdirSync(auditFile());
+    const r = run(["user", "block", "bob@example.com"], "");
+    expect(r.code).toBe(1);
+    expect(r.err).toContain("audit.jsonl");
+    expect(stored().users[1]!.status).toBe("active");
+  });
+
+  it("`list` shows the last sign-in", () => {
+    create();
+    expect(run(["user", "list"], "").out).toContain("last sign-in: never");
+    const process_ = process.env.FACTORY_HOME;
+    process.env.FACTORY_HOME = home;
+    try {
+      const u = listUsers()[0]!;
+      startSession(u.id, u.passwordHash);
+    } finally {
+      if (process_ === undefined) delete process.env.FACTORY_HOME;
+      else process.env.FACTORY_HOME = process_;
+    }
+    expect(run(["user", "list"], "").out).toMatch(/last sign-in: \d{4}-\d\d-\d\dT/);
+  });
+
+  it("writes one audit line per action and no personal data", () => {
+    create();
+    expect(run(["user", "create", "--name", "Zebulon Quux", "--email", "zeb@example.com"], PW2 + "\n").code).toBe(0);
+    const id = (stored().users as unknown as { id: string; email: string }[]).find((u) => u.email === "zeb@example.com")!.id;
+    expect(run(["user", "password", "zeb@example.com"], "another-password-999\n").code).toBe(0);
+    expect(run(["user", "role", "zeb@example.com", "admin"], "").code).toBe(0);
+    expect(run(["user", "block", "zeb@example.com"], "").code).toBe(0);
+    expect(run(["user", "unblock", "zeb@example.com"], "").code).toBe(0);
+    expect(run(["user", "delete", "zeb@example.com"], "").code).toBe(0);
+    const lines = auditLines().slice(1);
+    expect(mode(auditFile())).toBe(0o600);
+    expect(lines.map((l) => l.action)).toEqual(["create", "password", "role", "block", "unblock", "delete"]);
+    for (const l of lines) {
+      expect(l.by).toBe("cli");
+      expect(l.userId).toBe(id);
+      expect(Object.keys(l)).toHaveLength(l.action === "role" ? 6 : 4);
+    }
+    expect(lines[2]).toMatchObject({ oldRole: "user", newRole: "admin" });
+    const text = readFileSync(auditFile(), "utf8");
+    for (const w of [PW, PW2, "another-password-999", "scrypt$", "passwordHash", "Zebulon", "zeb@example.com"]) expect(text).not.toContain(w);
+  });
+
+  it("failed commands write no line", () => {
+    create();
+    const n = auditLines().length;
+    expect(create("ANN@example.com", []).code).toBe(1);
+    expect(create("b@example.com", [], "short").code).toBe(1);
+    expect(run(["user", "create", "--name", "B", "--email", "b@example.com"], "").code).toBe(1);
+    for (const sub of ["password", "block", "unblock", "delete"]) expect(run(["user", sub, "nobody@example.com"], PW2 + "\n").code).toBe(1);
+    expect(run(["user", "role", "nobody@example.com", "user"], "").code).toBe(1);
+    expect(auditLines()).toHaveLength(n);
+  });
+
+  it("two processes at the same time write four audit lines", async () => {
+    const codes = await Promise.all(["a", "b", "c", "d"].map((n) => runAsync(["user", "create", "--name", n, "--email", `${n}@example.com`], PW + "\n")));
+    expect(codes).toEqual([0, 0, 0, 0]);
+    expect(auditLines()).toHaveLength(4);
+  });
+
+  it("the usage mentions `role`", () => {
+    expect(run(["user"], "").err).toContain("scf user role");
+    expect(run(["--help"], "").out).toContain("scf user role");
   });
 
   it("prints the usage", () => {
@@ -359,11 +485,11 @@ describe("accounts and sessions", () => {
   });
 
   it("`block` signs the account out, and `unblock` does not bring it back", () => {
-    const { bob } = twoWithSessions();
-    expect(run(["user", "block", "ann@example.com"], "").code).toBe(0);
-    expect(readSessions().map((s) => s.userId)).toEqual([bob.id]);
-    expect(run(["user", "unblock", "ann@example.com"], "").code).toBe(0);
-    expect(readSessions().map((s) => s.userId)).toEqual([bob.id]);
+    const { ann } = twoWithSessions();
+    expect(run(["user", "block", "bob@example.com"], "").code).toBe(0);
+    expect(readSessions().map((s) => s.userId)).toEqual([ann.id]);
+    expect(run(["user", "unblock", "bob@example.com"], "").code).toBe(0);
+    expect(readSessions().map((s) => s.userId)).toEqual([ann.id]);
   });
 
   it("adminHint is set until an admin exists", () => {

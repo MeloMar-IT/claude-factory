@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { userCommand } from "../src/auth/cli.js";
 import { RULES, findRule, permissionTable, ruleKey } from "../src/server/permissions.js";
 import { startServer } from "../src/server/server.js";
 import { fakeKeychain, type FakeKeychain } from "./helpers/keychain.js";
@@ -411,6 +412,24 @@ describe("starting a run as a user", () => {
     const { runId } = r.json() as { runId: string };
     await ctx.scheduler.wait(runId);
     expect(runJson(runId)).toMatchObject({ owner: admin.user.id, repo: tmp, source: "ui" });
+  });
+});
+
+describe("a role change", () => {
+  it("a demoted admin loses admin rights on the next call", async () => {
+    const dana = await signInAs(base, { name: "Dana", email: "dana@example.com", role: "admin" });
+    expect((await call(dana, "GET", "/api/config")).status).toBe(200);
+    const io = { isTTY: false, ask: async () => "", askHidden: async () => "", readStdinLine: async () => undefined, out: () => {} };
+    expect(await userCommand({ positionals: ["role", "dana@example.com", "user"], values: {} }, io)).toBe(0);
+    const denied = await call(dana, "GET", "/api/config");
+    expect(denied.status).toBe(403);
+    expect(JSON.parse(denied.text)).toEqual({ error: "not allowed for your role" });
+    const session = await call(dana, "GET", "/api/session");
+    expect(session.status).toBe(200);
+    expect(JSON.parse(session.text).user.role).toBe("user");
+    expect((await call(dana, "GET", "/api/runs")).status).toBe(200);
+    expect(await userCommand({ positionals: ["role", "dana@example.com", "admin"], values: {} }, io)).toBe(0);
+    expect((await call(dana, "GET", "/api/config")).status).toBe(200);
   });
 });
 

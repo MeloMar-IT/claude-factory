@@ -860,6 +860,20 @@ Anyone who can run commands on the machine as you has admin rights: they can rea
 `scf user create --admin`. This includes the agent and shell steps of flows, which run as your
 user. A file that cannot be read or is not valid is an error, never "no accounts".
 
+The last admin that is not blocked cannot be demoted, blocked or deleted: the command says "make
+another admin first", changes nothing and exits 1. Change a role with
+`scf user role <e-mail> admin|user`. `scf user list` shows the last sign-in of each account
+("never" when there is none).
+
+**Audit log.** Every `scf user` action that changes something (`create`, `password`, `role`,
+`block`, `unblock`, `delete`) adds one line to `audit.jsonl` in the data folder (mode `0600`), for
+example `{"time":"2026-10-02T09:46:46.000Z","by":"cli","action":"role","userId":"<id>","oldRole":"user","newRole":"admin"}`.
+Only a role change has `oldRole` and `newRole`. No line holds a name, e-mail, password, hash or
+token, and a failed action is not logged. If the file cannot be written, the command stops before
+it changes anything. In the rare case that the line cannot be added after the change (for example a
+full disk), the command says so and exits 1. The file is a record, not a protection: anyone who runs
+commands as you can edit it.
+
 **Sign-in and sessions.** The UI and its API need a signed-in account; only the sign-in, sign-out
 and first-admin calls and the static files are open. A session is kept on the server in
 `sessions.json` (mode `0600`): it holds only a SHA-256 of the session token, never the token. It
@@ -875,7 +889,8 @@ The cookie gets the `Secure` flag when you reach the UI over HTTPS (through a pr
   for that e-mail until the 15 minutes are over. A server restart also clears the count. The
   answer for a wrong password and for an unknown e-mail is the same.
 - **Ending sessions.** Signing out, expiry, `scf user password` and `scf user block` end sessions.
-  A run log that is open in the browser stops within 5 seconds.
+  A run log that is open in the browser stops within 5 seconds. A role change does not end
+  sessions; the new role counts from the next call.
 - **Problems with the files.** If `users.json` or `sessions.json` cannot be read or written, or
   another `scf` process holds the lock, sign-in shows "sign-in is not working; see the server
   log". The log names the file and the kind of problem, never a password or a hash.
@@ -928,8 +943,8 @@ account only to people you would give an admin account. To switch user runs off,
 `POST runs` to `no` in `src/server/permissions.ts`.
 
 **After an upgrade.** Existing accounts with the role `user` lose access to everything but Runs.
-No command changes a role yet; create an admin with `scf user create --admin` under another
-e-mail if you need one.
+Change a role with `scf user role <e-mail> admin|user`, or create an admin with
+`scf user create --admin` under another e-mail.
 
 **The table.** An admin may make every call.
 
@@ -1170,10 +1185,11 @@ The command is `scf`. `factory` still works as an alias and prints a short note.
 | `scf eval <suite.yaml> [--flows a,b] [--models …]` | Run an eval suite |
 | `scf clean [--older-than 7] [--purge] [--dry-run]` | Remove old run workspaces |
 | `scf user create [--admin] [--name n] [--email e]` | Create an account. The first one needs `--admin`. Name and e-mail are asked for on a terminal |
-| `scf user list` | List accounts (never shows passwords or hashes) |
+| `scf user list` | List accounts with the last sign-in (never shows passwords or hashes) |
+| `scf user role <e-mail> admin\|user` | Change the role of an account (not the last admin); counts from the next call |
 | `scf user password <e-mail>` | Set a new password and sign the account out |
-| `scf user block <e-mail>` / `scf user unblock <e-mail>` | Block (and sign out) or unblock an account |
-| `scf user delete <e-mail>` | Delete an account, its sessions and its stored credentials (not the only admin) |
+| `scf user block <e-mail>` / `scf user unblock <e-mail>` | Block (and sign out) or unblock an account (not the last admin) |
+| `scf user delete <e-mail>` | Delete an account, its sessions and its stored credentials (not the last admin) |
 | `scf credential rotate-key` | Re-encrypt all stored credentials under a new key |
 | `scf credential check` | Check that the macOS Keychain can store, read and remove the key |
 
