@@ -1122,14 +1122,22 @@ write("issue-plan", {
       'dev="$FACTORY_VAR_DEVELOP_BRANCH"; f=$(git rev-parse --abbrev-ref HEAD); [ "$f" = "$dev" ] && f=$(cat "{{run.dir}}/feature-branch")',
       'echo "$f" > "{{run.dir}}/feature-branch"',
       'git merge --abort >/dev/null 2>&1 || true',
-      'git fetch -q origin "$dev" && git checkout -q -B "$dev" "origin/$dev"',
+      '# Work left uncommitted on the feature branch (e.g. after an interruption) is committed, never dropped.',
+      'if [ "$(git rev-parse --abbrev-ref HEAD)" = "$f" ] && [ -n "$(git status --porcelain)" ]; then',
+      '  git add -A && git commit -q -m "Resolve #$FACTORY_VAR_ISSUE: remaining changes" && git push -q origin "$f" && echo "committed and pushed changes left on $f"',
+      'fi',
+      'git fetch -q origin "$dev" || { echo "cannot fetch $dev"; exit 2; }',
+      'git checkout -q -B "$dev" "origin/$dev" || { echo "cannot switch to $dev (see above)"; exit 2; }',
+      '[ "$(git rev-parse --abbrev-ref HEAD)" = "$dev" ] || { echo "not on $dev"; exit 2; }',
       'git rev-parse HEAD > "{{run.dir}}/develop-before"',
       'title=$(gh issue view "$FACTORY_VAR_ISSUE" --repo "$FACTORY_VAR_GITHUB_REPO" --json title -q .title 2>/dev/null)',
       'if git merge --no-ff --no-edit -m "Merge #$FACTORY_VAR_ISSUE: $title ($f)" "$f" >/dev/null 2>&1; then echo "MERGED: $f into $dev"; exit 0; fi',
-      'echo "CONFLICTS merging $f into $dev:"; git diff --name-only --diff-filter=U; exit 1',
+      'if [ -z "$(git diff --name-only --diff-filter=U)" ]; then echo "the merge failed without conflicts:"; git status --short | head -20; exit 2; fi',
+      'echo "CONFLICTS merging $f into $dev:"; git diff --name-only --diff-filter=U; echo "CONFLICTS"; exit 0',
     ].join("\n"),
+    // Conflicts go to the agent; any other problem stops the run with the real message.
+    routes: [{ if: "^CONFLICTS\\s*$", goto: "resolve_conflicts" }],
     on_success: "test_develop",
-    on_failure: "resolve_conflicts",
   };
   const resolveConflicts = {
     id: "resolve_conflicts",
@@ -1208,9 +1216,12 @@ write("issue-plan", {
       '  fi',
       '  exit 0',
       'fi',
-      'echo "develop moved meanwhile — merging again"; exit 1',
+      'out=$(git push origin "$dev" 2>&1); printf \'%s\\n\' "$out"',
+      'if printf \'%s\\n\' "$out" | grep -qE "rejected|fetch first|non-fast-forward"; then echo "develop moved meanwhile — merging again"; echo "MOVED"; exit 0; fi',
+      'echo "pushing $dev failed (see above)"; exit 1',
     ].join("\n"),
-    on_failure: "merge_develop",
+    // Only a develop that moved meanwhile means "merge again"; any other push error stops the run.
+    routes: [{ if: "^MOVED\\s*$", goto: "merge_develop" }],
   };
   const gitflowReport = structuredClone(report);
   gitflowReport.run = gitflowReport.run
