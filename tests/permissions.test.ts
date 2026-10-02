@@ -136,17 +136,18 @@ const EXAMPLES: Record<string, Example> = {
   "DELETE blocks/:id": no("blocks/nope", 404),
   "POST validate": no("validate", 200, {}),
   "POST generate": no("generate", 400, {}),
-  "GET queue": no("queue", 200),
+  "GET queue": { path: "queue", user: 200, admin: 200 },
   "GET runs": { path: "runs", user: 200, admin: 200 },
+  "GET run-owners": { path: "run-owners", user: 403, admin: 200 },
   "POST runs": { path: "runs", body: {}, user: 400, admin: 400 },
-  "GET runs/:id": { path: "runs/nope", user: 403, admin: 404 },
-  "POST runs/:id/cancel": { path: "runs/nope/cancel", body: {}, user: 403, admin: 200 },
-  "POST runs/:id/resume": { path: "runs/nope/resume", body: {}, user: 403, admin: 404 },
-  "POST runs/:id/approve": { path: "runs/nope/approve", body: {}, user: 403, admin: 404 },
-  "POST runs/:id/reject": { path: "runs/nope/reject", body: {}, user: 403, admin: 404 },
-  "GET runs/:id/events": { path: "runs/nope/events", user: 403, admin: 200 },
-  "GET runs/:id/diff": { path: "runs/nope/diff", user: 403, admin: 404 },
-  "GET runs/:id/transcript/:n": { path: "runs/nope/transcript/0", user: 403, admin: 404 },
+  "GET runs/:id": { path: "runs/nope", user: 404, admin: 404 },
+  "POST runs/:id/cancel": { path: "runs/nope/cancel", body: {}, user: 404, admin: 200 },
+  "POST runs/:id/resume": { path: "runs/nope/resume", body: {}, user: 404, admin: 404 },
+  "POST runs/:id/approve": { path: "runs/nope/approve", body: {}, user: 404, admin: 404 },
+  "POST runs/:id/reject": { path: "runs/nope/reject", body: {}, user: 404, admin: 404 },
+  "GET runs/:id/events": { path: "runs/nope/events", user: 404, admin: 200 },
+  "GET runs/:id/diff": { path: "runs/nope/diff", user: 404, admin: 404 },
+  "GET runs/:id/transcript/:n": { path: "runs/nope/transcript/0", user: 404, admin: 404 },
   "GET next": no("next", 200),
   "GET health": no("health", 200),
   "GET board": no("board", 200),
@@ -293,8 +294,8 @@ describe("own runs", () => {
     expect(r.status).toBe(OWN[key]);
     for (const id of [foreign, "unknown-run", noOwner, broken]) {
       const x = await send(ann, rule, id);
-      expect(x.status, `${key} ${id}`).toBe(403);
-      expect(JSON.parse(x.text), `${key} ${id}`).toEqual({ error: "not your run" });
+      expect(x.status, `${key} ${id}`).toBe(404);
+      expect(JSON.parse(x.text), `${key} ${id}`).toEqual({ error: "run not found" });
     }
     await ctx.scheduler.idle();
   });

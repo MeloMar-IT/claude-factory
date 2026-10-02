@@ -44,7 +44,9 @@ async function saveConfig(mutate, okMsg) {
 // ── watchers ──
 
 /** The watcher as config.yaml has it: without what GET /api/watchers adds (the config rejects unknown keys). */
-export const watcherConfig = ({ status: _status, state: _state, ...cfg } = {}) => cfg;
+/** The watcher's `owner` from the form field: left out of the saved config when empty. */
+export const ownerSetting = (text) => String(text ?? "").trim() || undefined;
+export const watcherConfig =({ status: _status, state: _state, ...cfg } = {}) => cfg;
 /** The watcher's own state with its "?". */
 export const watcherStateMark = (w) => (w.state ? statusMark(w.state, `state-${w.state.name}`) : null);
 
@@ -92,6 +94,7 @@ async function editWatcher(existing, flows) {
     const every = input(w.every, { class: "mono", placeholder: "5m" });
     const max = input(String(w.max_per_tick), { type: "number", min: 1 });
     const vars = h("textarea", { rows: 3, class: "mono", placeholder: "test_cmd=npm test\nrequire_approval=yes", value: Object.entries(w.vars ?? {}).map(([k, v]) => `${k}=${v}`).join("\n") });
+    const owner = input(w.owner ?? "", { placeholder: "name@example.com" });
     const enabled = check(w.enabled, "Enabled");
     const err = h("p", { class: "status bad", style: { margin: 0 } });
     const save = h("button", { class: "primary", onClick: async () => {
@@ -109,6 +112,7 @@ async function editWatcher(existing, flows) {
         task: source.value === "schedule" ? task.value.trim() : undefined,
         branch: source.value === "ci-failures" ? branch.value.trim() || undefined : undefined,
         exclude_labels: list(exclude),
+        owner: ownerSetting(owner.value),
         at: source.value === "schedule" ? at.value.trim() || undefined : undefined,
         timezone: source.value === "schedule" ? tz.value.trim() || undefined : undefined };
       try {
@@ -142,6 +146,7 @@ async function editWatcher(existing, flows) {
       atField,
       h("div", { class: "grid" }, f("Check every", every, "e.g. 5m, 1h — for chores: how often it runs, e.g. 1d, 7d"), f("Max new runs per check", max)),
       f("Variables for each run", vars, "One name=value per line. github_repo and issue/pr are set automatically."),
+      f("Owner of the runs", owner, "E-mail of an account. Empty: the first admin."),
       enabled.row, err, h("div", { class: "row" }, h("span", { class: "spacer" }), save));
   });
 }

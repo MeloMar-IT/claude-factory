@@ -53,6 +53,8 @@ const WatcherSchema = z
     at: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "HH:MM").optional(),
     /** schedule: IANA time zone for `at`, e.g. Europe/Berlin (default: this Mac's). */
     timezone: z.string().optional(),
+    /** The e-mail of the account that owns this watcher's runs (default: the first admin). Only an admin can set it. */
+    owner: z.string().max(254).optional(),
   })
   .strict()
   .refine((w) => w.source !== "schedule" || !!w.task?.trim(), { message: "a schedule watcher needs a task", path: ["task"] })

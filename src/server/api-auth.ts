@@ -1,6 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { basename } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { adoptRuns } from "../auth/run-owner.js";
 import { createUser, checkSignIn, getUser, hasAdmin, startSession, UserError, type User } from "../auth/users.js";
 import { SESSION_TTL_MS, csrfToken, findSession, revokeSession, sessionId } from "../auth/sessions.js";
 import { StoreError } from "../auth/store.js";
@@ -223,6 +224,11 @@ async function setup(ctx: ApiContext, req: IncomingMessage, res: ServerResponse)
     const started = startSession(user.id, user.passwordHash);
     if (!started) throw new Error("no session after setup");
     setCookie(ctx, req, res, started.token);
+    try {
+      adoptRuns(ctx.opts.runsDir, ctx.opts.log); // runs of older versions have no owner: the first admin takes them
+    } catch {
+      ctx.opts.log?.("! could not give runs to the first admin; the server tries again later"); // the account exists: setup succeeded
+    }
     send(res, 201, sessionBody({ token: started.token, user: started.user }));
   });
 }

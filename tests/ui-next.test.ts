@@ -430,25 +430,95 @@ describe("the Runs pages for a user", () => {
     return main;
   };
 
-  it("the list of a user asks only for the runs, also after the refresh timer", async () => {
+  it("the list of a user asks for the runs and the queue, never for the owners, also after the refresh timer", async () => {
     const runs = (await import("../ui/runs.js" as string)) as any;
     const main = connected();
     const stop = await runs.renderRunsList(main, { admin: false });
     await vi.advanceTimersByTimeAsync(60_000);
     expect(asked.length).toBeGreaterThanOrEqual(3);
-    expect(new Set(asked)).toEqual(new Set(["/api/runs"]));
+    expect(new Set(asked)).toEqual(new Set(["/api/runs", "/api/queue"]));
     expect(main.textContent).toContain("walk");
-    expect(main.textContent).not.toContain("queued");
+    expect(main.textContent).not.toContain("running ·");
+    expect(main.textContent).not.toContain("Owner");
     stop();
   });
 
-  it("the list of an admin also asks for the queue", async () => {
+  it("a user sees how many runs are ahead of their queued run", async () => {
     const runs = (await import("../ui/runs.js" as string)) as any;
-    const main = connected();
-    const stop = await runs.renderRunsList(main);
-    expect(new Set(asked)).toEqual(new Set(["/api/runs", "/api/queue"]));
-    expect(main.textContent).toContain("0/2 running");
-    stop();
+    expect(runs.aheadText(1)).toBe("1 run ahead of you");
+    expect(runs.aheadText(2)).toBe("2 runs ahead of you");
+    const pending = (ahead: number) => ({ runId: "q1", kind: "run", ahead });
+    try {
+      for (const [n, text] of [[2, "2 runs ahead of you"], [1, "1 run ahead of you"]] as const) {
+        answers["/api/queue"] = { pending: [pending(n)], active: [], concurrency: 2 };
+        const main = connected();
+        (await runs.renderRunsList(main, { admin: false }))();
+        expect(main.textContent).toContain(text);
+      }
+      answers["/api/queue"] = { pending: [pending(0)], active: [], concurrency: 2 };
+      const main = connected();
+      (await runs.renderRunsList(main, { admin: false }))();
+      expect(main.textContent).toContain("q1");
+      expect(main.textContent).not.toContain("ahead of you");
+    } finally {
+      answers["/api/queue"] = QUEUE;
+    }
+  });
+
+  it("the list of an admin also asks for the queue and the owners, and shows the owner column", async () => {
+    const runs = (await import("../ui/runs.js" as string)) as any;
+    answers["/api/run-owners"] = [{ id: "u1", name: "Ann", runs: 3 }, { id: "u2", name: "Bob", runs: 1 }];
+    answers["/api/runs"] = [{ ...RUN, ownerName: "Ann" }, { ...RUN, runId: "r2" }];
+    answers["/api/runs?owner=u2"] = [RUN];
+    try {
+      const main = connected();
+      const stop = await runs.renderRunsList(main);
+      expect(new Set(asked)).toEqual(new Set(["/api/runs", "/api/queue", "/api/run-owners"]));
+      expect(main.textContent).toContain("0/2 running");
+      expect(main.all("th").map((th) => th.textContent)).toContain("Owner");
+      const cells = main.all("tr").map((tr) => tr.all("td").map((td) => td.textContent)).filter((c) => c.length);
+      expect(cells.map((c) => c[3])).toEqual(["Ann", "—"]);
+      const select = main.all("select")[0]!;
+      expect(select.all("option").map((o) => o.textContent)).toEqual(["All owners", "Ann (3)", "Bob (1)"]);
+      asked.length = 0;
+      select.fire("change", { target: { value: "u2" } });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(asked).toContain("/api/runs?owner=u2");
+      stop();
+    } finally {
+      answers["/api/runs"] = [RUN];
+      delete answers["/api/run-owners"];
+      delete answers["/api/runs?owner=u2"];
+    }
+  });
+
+  it("an admin's list with a filter and no runs says so", async () => {
+    const runs = (await import("../ui/runs.js" as string)) as any;
+    answers["/api/run-owners"] = [{ id: "u1", name: "Ann", runs: 0 }];
+    answers["/api/runs?owner=u1"] = [];
+    try {
+      const main = connected();
+      const stop = await runs.renderRunsList(main);
+      main.all("select")[0]!.fire("change", { target: { value: "u1" } });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(main.textContent).toContain("No runs of this account.");
+      stop();
+    } finally {
+      delete answers["/api/run-owners"];
+      delete answers["/api/runs?owner=u1"];
+    }
+  });
+
+  it("runRow has an owner cell only when asked for", async () => {
+    const runs = (await import("../ui/runs.js" as string)) as any;
+    expect(runs.runRow(RUN).all("td")).toHaveLength(6);
+    expect(runs.runRow({ ...RUN, ownerName: "Ann" }, { owner: true }).all("td")).toHaveLength(7);
+  });
+
+  it("the watcher form leaves 'owner' out of the config when the field is empty", async () => {
+    const { ownerSetting } = (await import("../ui/admin.js" as string)) as any;
+    expect({ id: "w", owner: ownerSetting(" ann@example.com ") }).toEqual({ id: "w", owner: "ann@example.com" });
+    expect(JSON.parse(JSON.stringify({ id: "w", owner: ownerSetting("  ") }))).toEqual({ id: "w" });
   });
 
   it("says 'No runs yet.' to a user without runs", async () => {

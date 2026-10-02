@@ -152,6 +152,11 @@ that wait for a limit, the budget or another run are not. Under each task the ta
 (Settings → Runs at the same time); the rest queue. Each queue line shows the same sentence
 and a link to what it waits for.
 
+An admin sees every run, with an **Owner** column, and can pick one account in the **Owner**
+filter next to the title (the list shows "All owners" and each account with its number of runs).
+A user sees only their own runs and their own queued runs; runs of others in front of them show
+as "n runs ahead of you".
+
 The Status column shows the plain status name (see "Words the Foundry uses"). Press the **?**
 next to it to read what it means and what happens next, and press it again to close it. It
 works with a mouse, the keyboard (Tab, then Enter or Space) and touch. Pressing it does not
@@ -576,6 +581,7 @@ watchers:
 | `precheck_flow` | Run this flow once over all new labelled issues before any is started (`epic-questions` asks every owner decision up front) |
 | `pause_while_pr_open` | Start nothing while a PR from a branch with this prefix is open (for the older two-label pipeline) |
 | `comment_on_failure` | On by default: post the failure reason and output on the issue |
+| `owner` | The e-mail of the account that owns this watcher's runs and may read and approve them. Empty: the first admin. Only an admin can set it, and it must be an account |
 
 **Coding agents run the build themselves.** In the issue flows the coding agent may run the
 project's build and test commands (`./gradlew`, `mvn`, `npm`, `pytest`, `go test`, `cargo`,
@@ -901,9 +907,19 @@ not in the table below answers 404, also for an admin.
 
 **Your own runs.** A run has an owner: the account that started it. A user sees and may follow,
 cancel, resume, approve, reject and read only their own runs. Another account's run, an unknown
-run and a run without an owner answer `403 {"error":"not your run"}`. Runs started by watchers,
-by the command line and runs from older versions belong to no one, so only an admin can use them.
-A queued run that has not started yet already counts as its owner's.
+run and a run without an owner all answer `404 {"error":"run not found"}`, so a guessed id tells
+nothing. A run started by a watcher belongs to the watcher's `owner` (an account's e-mail, set by
+an admin; empty: the first admin). Runs from the command line and from evals belong to the first
+admin. A queued run that has not started yet already counts as its owner's. An admin may use
+every run.
+
+**After an upgrade.** Runs from older versions have no owner. The first admin gets them at the
+next server start, when the first admin is created on the setup page, and within a minute of
+`scf user create --admin` while the server runs. A run that is still live is handed over after
+it ends.
+
+**The queue.** A user sees only their own queued runs. Runs of other accounts in front of them
+show as "n runs ahead of you", without ids.
 
 **Answering a run.** On a run that waits, a user can approve or reject it with a note
 (`POST /api/runs/<id>/approve` or `/reject` with `{"note": "…"}`). The note reaches the run.
@@ -980,8 +996,9 @@ e-mail if you need one.
 | `DELETE /api/blocks/:id` | yes | no | delete a block |
 | `POST /api/validate` | yes | no | check a flow |
 | `POST /api/generate` | yes | no | write a flow with AI |
-| `GET /api/queue` | yes | no | the queue of all runs |
+| `GET /api/queue` | yes | yes | the queue (a user sees their own queued runs and how many are ahead) |
 | `GET /api/runs` | yes | yes | list runs (a user sees their own) |
+| `GET /api/run-owners` | yes | no | the accounts that have runs, for the owner filter |
 | `POST /api/runs` | yes | yes | start a run (a user: a published flow and own repositories) |
 | `GET /api/runs/:id` | yes | own runs | read a run |
 | `POST /api/runs/:id/cancel` | yes | own runs | cancel a run |

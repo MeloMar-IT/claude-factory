@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 import { runDiff } from "../engine/diff.js";
 import { readTranscript } from "../engine/transcript.js";
 import { ownsRepo } from "../auth/repos.js";
+import { ownerNames } from "../auth/run-owner.js";
 import { effectiveVars } from "../engine/runner.js";
 import type { RunSummary } from "../engine/state.js";
 import { parseFlow, resolveFlowPath } from "../flow/load.js";
@@ -13,7 +14,7 @@ import { isVarName, type Flow } from "../flow/schema.js";
 import { guardedRepos } from "./api-repos.js";
 import { publishedFlows } from "./permissions.js";
 import { HttpError, NAME_RE, readJson, send, str } from "./http.js";
-import { nextFor, queueWithNext } from "./next.js";
+import { hideForeign, nextFor, ownQueue, ownRecord, queueWithNext } from "./next.js";
 import type { NextStep } from "../next-step.js";
 import type { RunEvent } from "../queue/scheduler.js";
 import type { Route } from "./server.js";
@@ -24,17 +25,44 @@ const NEXT_RECHECK_MS = 2_000;
 export const runRoutes: Route = async (ctx, req, res, seg, method, user) => {
   const { opts, scheduler } = ctx;
   const admin = user.role === "admin";
-  if (seg[0] === "queue" && method === "GET") return send(res, 200, queueWithNext(ctx)), true;
+  // What a user sees of a record: another account's run is not named in it.
+  const mine = (rid: string) => scheduler.ownerOf(rid) === user.id;
+  const view = admin ? (n: NextStep) => n : (n: NextStep) => ownRecord(n, mine);
+  const hide = <T,>(v: T): T => (admin ? v : hideForeign(v, mine));
+  if (seg[0] === "queue" && method === "GET") return send(res, 200, admin ? queueWithNext(ctx) : ownQueue(ctx, user.id)), true;
+  if (seg[0] === "run-owners" && !seg[1] && method === "GET") {
+    const counts = new Map<string, number>();
+    for (const b of scheduler.briefs()) if (b.owner) counts.set(b.owner, (counts.get(b.owner) ?? 0) + 1);
+    const names = ownerNames();
+    const owners = [...counts].map(([oid, runs]) => ({ id: oid, name: names.get(oid) ?? "deleted account", runs }));
+    return send(res, 200, owners.sort((a, b) => a.name.localeCompare(b.name))), true;
+  }
   if (seg[0] !== "runs") return false;
   const id = seg[1];
 
   if (!id && method === "GET") {
-    const runs = admin
-      ? scheduler.list(200)
-      : scheduler.briefs().filter((b) => b.owner === user.id).slice(0, 200).map((b) => scheduler.get(b.runId)).filter((s): s is RunSummary => !!s);
+    let ownerParam: string | undefined;
+    if (admin) {
+      const o = new URL(req.url ?? "/", "http://x").searchParams.get("owner");
+      if (o !== null) {
+        if (!NAME_RE.test(o) || o.length > 64) throw new HttpError(400, "invalid owner");
+        ownerParam = o;
+      }
+    }
+    const want = admin ? ownerParam : user.id;
+    const runs = want
+      // Loaded by folder name; the runId and owner inside the file must agree, else the run is left out.
+      ? scheduler.briefs().filter((b) => b.owner === want).slice(0, 200).map((b) => ({ dir: b.dirName, s: scheduler.get(b.dirName) })).filter((x): x is { dir: string; s: RunSummary } => !!x.s && x.s.runId === x.dir && x.s.owner === want).map((x) => x.s)
+      : scheduler.list(200);
     const replaced = supersededRuns(runs);
     const next = nextFor(ctx, runs);
-    return send(res, 200, runs.map((r) => ({ ...r, ...(replaced.has(r.runId) ? { superseded: true } : {}), next: next(r) }))), true;
+    const names = admin ? ownerNames() : undefined;
+    return send(res, 200, runs.map((r) => hide({
+      ...r,
+      ...(replaced.has(r.runId) ? { superseded: true } : {}),
+      ...(names && r.owner ? { ownerName: names.get(r.owner) ?? "deleted account" } : {}),
+      next: view(next(r)),
+    }))), true;
   }
   if (!id && method === "POST") {
     const body = await readJson(req);
@@ -124,11 +152,11 @@ export const runRoutes: Route = async (ctx, req, res, seg, method, user) => {
     const write = (e: RunEvent) => {
       let out: unknown = e;
       if (e.type === "update") {
-        const next = nextFor(ctx)(e.summary);
+        const next = view(nextFor(ctx)(e.summary));
         last = shown(next);
         out = { ...e, summary: { ...e.summary, next } };
       }
-      const data = redactedJson(out);
+      const data = redactedJson(hide(out));
       if (data === undefined) return void res.write(`event: log\ndata: ${JSON.stringify({ type: "log", line: CANNOT_READ })}\n\n`);
       res.write(`event: ${e.type}\ndata: ${data}\n\n`);
     };
@@ -136,7 +164,7 @@ export const runRoutes: Route = async (ctx, req, res, seg, method, user) => {
     // A wait for a code area shows up in the step log only, without an update event: look again now and then.
     const recheck = setInterval(() => {
       const s = scheduler.get(id);
-      if (s?.status === "running" && shown(nextFor(ctx)(s)) !== last) write({ type: "update", summary: s });
+      if (s?.status === "running" && shown(view(nextFor(ctx)(s))) !== last) write({ type: "update", summary: s });
     }, NEXT_RECHECK_MS);
     const ping = setInterval(() => res.write(": ping\n\n"), 15_000);
     req.on("close", () => {
@@ -149,14 +177,14 @@ export const runRoutes: Route = async (ctx, req, res, seg, method, user) => {
 
   const s = scheduler.get(id);
   if (!s) throw new HttpError(404, "run not found");
-  if (!action && method === "GET") return send(res, 200, { ...s, next: nextFor(ctx)(s) }), true;
+  if (!action && method === "GET") return send(res, 200, hide({ ...s, next: view(nextFor(ctx)(s)) })), true;
   if (action === "diff" && method === "GET") return send(res, 200, runDiff(s)), true;
   if (action === "transcript" && method === "GET") {
     const n = Number(seg[3]);
     const rec = s.history[n];
     if (!Number.isInteger(n) || !rec) throw new HttpError(404, "no such step");
     if (!rec.logFile.startsWith(s.runDir)) throw new HttpError(400, "bad log path");
-    return send(res, 200, { step: rec.id, type: rec.type, events: readTranscript(rec.logFile) }), true;
+    return send(res, 200, hide({ step: rec.id, type: rec.type, events: readTranscript(rec.logFile) })), true;
   }
   return false;
 };
