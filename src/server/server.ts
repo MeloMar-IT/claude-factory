@@ -50,6 +50,10 @@ export async function startServer(opts: ServerOptions): Promise<{ url: string; c
     claudeBin: opts.claudeBin,
     config: () => config,
     queueFile: join(process.env.FACTORY_HOME ?? FACTORY_HOME, "queue.json"),
+    // When a run ends, the watchers of its repository check at once instead of at the next interval.
+    onFinished: (s) => {
+      if (s.vars?.github_repo) watchers.kickRepo(s.vars.github_repo);
+    },
   });
   const watchers = new WatcherManager({ scheduler, runsDir: opts.runsDir, repo: opts.repo, config: () => config, areaWait, log });
   const ctx: ApiContext = { opts, scheduler, watchers, config: () => config, reloadConfig: () => (config = loadConfig()) };

@@ -73,6 +73,8 @@ vars:
   max_code_lines: "800"
   delete_merged_branches: yes
   close_when_merged: yes
+  revise_above_risk: "50"
+  review_twice_above_risk: "50"
 steps:
   - id: pull_ticket
     type: shell
@@ -210,8 +212,9 @@ steps:
       RISK_REASON: <one line>
       For READY, also end the plan with these two lines:
       SIZE: <number of files changed> files, <estimated lines of production code> lines
-      AREAS: <comma-separated directories you will change, most specific possible; list single shared files
-        such as Main.kt or a settings screen by their path; leave out the changelog and user guide>
+      AREAS: <comma-separated directories or files you will change, as specific as possible; list single shared
+        files such as Main.kt or a settings screen by their path; list test FILES, never a whole tests folder;
+        leave out docs, the changelog and the user guide>
 
       End with exactly one line: PLAN_STATUS: READY | NEEDS_INFO | NOT_CODE | TOO_BIG
     routes:
@@ -259,8 +262,20 @@ steps:
     routes:
       - if: "^VERDICT: APPROVE\\s*$"
         goto: size_gate
-    on_success: revise_plan
+    on_success: revise_gate
     on_failure: size_gate
+  - id: revise_gate
+    type: shell
+    jump_only: true
+    description: "Low-risk plan: skip the revision; Codex's notes go to the coder with the plan"
+    run: |-
+      score() { printf '%s\n' "$1" | sed -n 's/^RISK_SCORE: *\([0-9][0-9]*\).*/\1/p' | tail -1; }
+      p=$(score "$FACTORY_OUT_PLAN"); c=$(score "$FACTORY_OUT_PLAN_REVIEW"); r=${p:-100}; [ -n "$c" ] && [ "$c" -gt "$r" ] && r=$c
+      if [ "$r" -gt "${FACTORY_VAR_REVISE_ABOVE_RISK:-50}" ]; then echo "risk $r: revise the plan"; echo "REVISE"; else echo "risk $r (≤ ${FACTORY_VAR_REVISE_ABOVE_RISK:-50}): Codex's notes go straight to the coder"; echo "SKIPPED"; fi
+    routes:
+      - if: ^REVISE\s*$
+        goto: revise_plan
+    on_success: size_gate
   - id: revise_plan
     type: claude
     model: claude-opus-5-5
@@ -458,6 +473,7 @@ steps:
       plan=$(printf '%s\n' "$out" | sed '/^PLAN_STATUS:/d; /^RISK_SCORE:/d; /^RISK_REASON:/d')
       reviewed=""; [ -n "$FACTORY_OUT_PLAN_REVIEW" ] && reviewed=" (checked against the code by Codex)"
       [ -n "$notes" ] && reviewed=" (draft — the revision did not finish; Codex's review notes are below)"
+      printf '%s\n' "$FACTORY_OUT_REVISE_GATE" | grep -q "^SKIPPED" && reviewed=" (checked against the code by Codex — low risk, so the coder works in Codex's notes below)"
       { echo "🤖 **Spaghetti Code Foundry plan**$reviewed"; echo; echo "**Risk: $risk/100**${reason:+ — $reason}"; echo
         printf '%s\n' "$plan"
         if [ -n "$notes" ]; then echo; echo "## Codex review notes (not yet worked in)"; echo; printf '%s\n' "$notes" | sed '/^VERDICT:/d; /^RISK_SCORE:/d'; fi
@@ -485,13 +501,28 @@ steps:
     on_failure: pull_ticket
   - id: claim_areas
     type: shell
-    timeout_sec: 14400
-    description: Lock the code areas the plan changes; waits while another run works in an overlapping area
+    description: Lock the code areas the plan changes; if another run holds one, step aside (free the slot) and continue when it is free
     run: |-
       plan="${FACTORY_OUT_REVISE_PLAN:-$FACTORY_OUT_PLAN}"; printf '%s\n' "$FACTORY_OUT_REVISE_PLAN" | grep -q "^AREAS:" || plan="$FACTORY_OUT_PLAN"
       areas=$(printf '%s\n' "$plan" | sed -n 's/^AREAS: *//p' | tail -1 | tr -d '`')
       [ -n "$areas" ] || areas="*"
-      "$FACTORY_TOOLS/area-lock" acquire "$FACTORY_RUN_ID" "{{run.dir}}" $(printf '%s' "$areas" | tr ',' ' ') --wait-sec 14000
+      out=$("$FACTORY_TOOLS/area-lock" acquire "$FACTORY_RUN_ID" "{{run.dir}}" $(printf '%s' "$areas" | tr ',' ' ') --wait-sec 0); code=$?
+      printf '%s\n' "$out"
+      [ "$code" = 0 ] && exit 0
+      printf '%s\n' "$out" | grep -q "^TIMEOUT:" && { echo "WAIT_AREA"; exit 0; }
+      exit "$code"
+    routes:
+      - if: ^WAIT_AREA\s*$
+        goto: wait_for_area
+    on_success: implement
+  - id: wait_for_area
+    type: shell
+    jump_only: true
+    description: "Another run works in the same code area: stop without holding a slot; resumed as soon as runs finish"
+    resume_from: claim_areas
+    max_visits: 1000
+    run: printf '%s\n' "$FACTORY_OUT_CLAIM_AREAS" | grep "^waiting for run" | tail -1
+    on_success: stop
   - id: implement
     type: claude
     prompt: |-
@@ -589,10 +620,12 @@ steps:
       uncommitted in this repository (run `git status` and `git diff HEAD`). Review them strictly for
       correctness, edge cases, security, error handling, test coverage and fit with the existing code.
       Report only real problems, each with file, line, problem and the fix. No style nitpicks.
+      Start each problem with [high] (wrong behaviour, data loss, security, a crash), [medium] or [low].
 
       {{steps.pull_ticket.output}}
 
-      End with exactly one line: VERDICT: APPROVE   or   VERDICT: CHANGES
+      End with these two lines: SEVERITY: high | medium | low | none   (the most serious problem)
+      VERDICT: APPROVE   or   VERDICT: CHANGES
     routes:
       - if: "^VERDICT: APPROVE\\s*$"
         goto: docs
@@ -632,6 +665,17 @@ steps:
 
       {{steps.run_tests_1.output}}
     on_success: run_tests_1
+  - id: review_gate
+    type: shell
+    description: Second review round only after a [high] finding or for riskier stories
+    run: |-
+      sev=$(printf '%s\n' "$FACTORY_OUT_REVIEW_1" | sed -n 's/^SEVERITY: *\([a-z]*\).*/\1/p' | tail -1)
+      risk=$(printf '%s\n' "$FACTORY_OUT_RISK_GATE" | sed -n 's/^RISK: *\([0-9][0-9]*\).*/\1/p' | tail -1)
+      if [ "${sev:-high}" = high ] || [ "${risk:-100}" -gt "${FACTORY_VAR_REVIEW_TWICE_ABOVE_RISK:-50}" ]; then echo "round 2: severity ${sev:-unknown}, risk ${risk:-unknown}"; echo "REVIEW_AGAIN"
+      else echo "no round 2 needed: severity $sev, risk $risk"; echo "DONE"; fi
+    routes:
+      - if: ^DONE\s*$
+        goto: docs
   - id: review_2
     type: claude
     agent: codex
@@ -645,10 +689,12 @@ steps:
       uncommitted in this repository (run `git status` and `git diff HEAD`). Review them strictly for
       correctness, edge cases, security, error handling, test coverage and fit with the existing code.
       Report only real problems, each with file, line, problem and the fix. No style nitpicks.
+      Start each problem with [high] (wrong behaviour, data loss, security, a crash), [medium] or [low].
 
       {{steps.pull_ticket.output}}
 
-      End with exactly one line: VERDICT: APPROVE   or   VERDICT: CHANGES
+      End with these two lines: SEVERITY: high | medium | low | none   (the most serious problem)
+      VERDICT: APPROVE   or   VERDICT: CHANGES
     routes:
       - if: "^VERDICT: APPROVE\\s*$"
         goto: docs

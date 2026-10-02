@@ -30,6 +30,9 @@ for (const line of prompt.split("\n")) {
 }
 emit({ type: "item.completed", item: { id: `item_${n++}`, type: "command_execution", command: "git status", aggregated_output: "clean\n", exit_code: 0, status: "completed" } });
 if (prompt.includes("VERDICT: APPROVE")) answer = process.env.FAKE_CODEX_VERDICT ?? "Fine.\nVERDICT: APPROVE";
+// Separate answers for checking a plan and for reviewing code, when a test needs them to differ.
+if (prompt.includes("Review this implementation plan") && process.env.FAKE_CODEX_PLAN_VERDICT) answer = process.env.FAKE_CODEX_PLAN_VERDICT;
+if (prompt.includes("Code review, round") && process.env.FAKE_CODEX_CODE_VERDICT) answer = process.env.FAKE_CODEX_CODE_VERDICT;
 if (prompt.includes("VERDICT: APPROVE") && prompt.includes("RISK_SCORE:") && process.env.FAKE_CODEX_RISK) {
   answer = answer.replace(/(\n?VERDICT:)/, `\nRISK_SCORE: ${process.env.FAKE_CODEX_RISK}$1`);
 }

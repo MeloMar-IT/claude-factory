@@ -188,10 +188,12 @@ steps:
       uncommitted in this repository (run `git status` and `git diff HEAD`). Review them strictly for
       correctness, edge cases, security, error handling, test coverage and fit with the existing code.
       Report only real problems, each with file, line, problem and the fix. No style nitpicks.
+      Start each problem with [high] (wrong behaviour, data loss, security, a crash), [medium] or [low].
 
       {{steps.pull_ticket.output}}
 
-      End with exactly one line: VERDICT: APPROVE   or   VERDICT: CHANGES
+      End with these two lines: SEVERITY: high | medium | low | none   (the most serious problem)
+      VERDICT: APPROVE   or   VERDICT: CHANGES
     routes:
       - if: "^VERDICT: APPROVE\\s*$"
         goto: docs
@@ -244,10 +246,12 @@ steps:
       uncommitted in this repository (run `git status` and `git diff HEAD`). Review them strictly for
       correctness, edge cases, security, error handling, test coverage and fit with the existing code.
       Report only real problems, each with file, line, problem and the fix. No style nitpicks.
+      Start each problem with [high] (wrong behaviour, data loss, security, a crash), [medium] or [low].
 
       {{steps.pull_ticket.output}}
 
-      End with exactly one line: VERDICT: APPROVE   or   VERDICT: CHANGES
+      End with these two lines: SEVERITY: high | medium | low | none   (the most serious problem)
+      VERDICT: APPROVE   or   VERDICT: CHANGES
     routes:
       - if: "^VERDICT: APPROVE\\s*$"
         goto: docs

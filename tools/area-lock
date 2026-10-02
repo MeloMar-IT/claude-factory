@@ -97,7 +97,15 @@ if (cmd === "acquire") {
   const args = wi >= 0 ? rest.filter((_, i) => i !== wi && i !== wi + 1) : rest;
   const [runId, runDir, ...raw] = args;
   if (!runId || !runDir) fail("usage: area-lock acquire <run-id> <run-dir> <area>...");
-  const areas = [...new Set((raw.length ? raw : ["*"]).flatMap((a) => a.split(",")).map(norm).filter(Boolean))];
+  // Docs (*.md, docs/) merge without real conflicts (the changelog keeps both sides, the agent resolves
+  // the rest), and new tests go into new files: locking them only makes runs wait for each other.
+  // Whole test folders are ignored; a single test file is still locked.
+  const ignorable = (a) => /\.md$/i.test(a) || /(^|\/)docs$/.test(a) || /(^|\/)(tests?|__tests__|specs?)$/.test(a);
+  const asked = [...new Set((raw.length ? raw : ["*"]).flatMap((a) => a.split(",")).map(norm).filter(Boolean))];
+  const ignored = asked.filter(ignorable);
+  let areas = asked.filter((a) => !ignorable(a));
+  if (ignored.length) console.log(`not locked (merge safely): ${ignored.join(", ")}`);
+  if (!areas.length) areas = [`@run:${runId}`]; // nothing that needs a lock
   const deadline = Date.now() + waitSec * 1000;
   let told = "";
   for (;;) {

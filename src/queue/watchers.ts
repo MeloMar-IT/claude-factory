@@ -64,6 +64,22 @@ export class WatcherManager {
     return list.map((w) => ({ watcher: w.cfg, status: w.status, issues: w.tracked }));
   }
 
+  private kickTimers = new Map<string, NodeJS.Timeout>();
+
+  /**
+   * A run on this repository finished: its watchers check right away (after a moment, so the
+   * finished run's labels are updated first) — the next story, a resume or a retry needs no wait.
+   */
+  kickRepo(githubRepo: string, delayMs = 3000) {
+    clearTimeout(this.kickTimers.get(githubRepo));
+    const t = setTimeout(() => {
+      this.kickTimers.delete(githubRepo);
+      for (const r of this.running.values()) if (r.watcher.cfg.github_repo === githubRepo) r.watcher.kick();
+    }, delayMs);
+    t.unref?.();
+    this.kickTimers.set(githubRepo, t);
+  }
+
   async runNow(id: string) {
     const r = this.running.get(id);
     if (!r) throw new Error(`watcher "${id}" is not running`);

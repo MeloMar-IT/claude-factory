@@ -14,6 +14,12 @@ export interface RestartState { why: "new_version" | "data_folder"; since: strin
 
 /** The run waits for a code area: the last line of the claim_areas log says which run holds it. */
 export function areaWait(run: RunSummary): { runId: string; areas: string } | undefined {
+  // Stepped aside (stopped at wait_for_area): the claim's output names the run it waits for.
+  if (run.status === "stopped" && /stopped at step "wait_for_area"/.test(run.reason ?? "")) {
+    const out = [...run.history].reverse().find((h) => h.id === "claim_areas")?.output ?? "";
+    const m = /^waiting for run (\S+) \((.*)\)$/m.exec(out);
+    return m ? { runId: m[1]!, areas: m[2]! } : undefined;
+  }
   if (run.status !== "running" || run.state?.next !== "claim_areas") return undefined;
   try {
     const log = readFileSync(stepLogFile(join(run.runDir, "logs"), run.history.length, "claim_areas"), "utf8");

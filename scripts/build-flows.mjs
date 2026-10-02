@@ -358,10 +358,26 @@ const SIZE_RULES = [
 const SIZE_LINES = [
   "For READY, also end the plan with these two lines:",
   "SIZE: <number of files changed> files, <estimated lines of production code> lines",
-  "AREAS: <comma-separated directories you will change, most specific possible; list single shared files",
-  "  such as Main.kt or a settings screen by their path; leave out the changelog and user guide>",
+  "AREAS: <comma-separated directories or files you will change, as specific as possible; list single shared",
+  "  files such as Main.kt or a settings screen by their path; list test FILES, never a whole tests folder;",
+  "  leave out docs, the changelog and the user guide>",
 ];
-const planPhase = (post, { risk = false, split = false, sized = false } = {}) => [
+// With `reviseAbove`, Opus revises the plan only when the plan's or Codex's risk score is above it;
+// otherwise Codex's notes go straight to the coder (with the plan) — about 5 minutes saved.
+const reviseGate = (post) => ({
+  id: "revise_gate",
+  type: "shell",
+  jump_only: true,
+  description: "Low-risk plan: skip the revision; Codex's notes go to the coder with the plan",
+  run: [
+    'score() { printf \'%s\\n\' "$1" | sed -n \'s/^RISK_SCORE: *\\([0-9][0-9]*\\).*/\\1/p\' | tail -1; }',
+    'p=$(score "$FACTORY_OUT_PLAN"); c=$(score "$FACTORY_OUT_PLAN_REVIEW"); r=${p:-100}; [ -n "$c" ] && [ "$c" -gt "$r" ] && r=$c',
+    'if [ "$r" -gt "${FACTORY_VAR_REVISE_ABOVE_RISK:-50}" ]; then echo "risk $r: revise the plan"; echo "REVISE"; else echo "risk $r (≤ ${FACTORY_VAR_REVISE_ABOVE_RISK:-50}): Codex\'s notes go straight to the coder"; echo "SKIPPED"; fi',
+  ].join("\n"),
+  routes: [{ if: "^REVISE\\s*$", goto: "revise_plan" }],
+  on_success: post,
+});
+const planPhase = (post, { risk = false, split = false, sized = false, reviseAbove = false } = {}) => [
     {
       id: "plan",
       type: "claude",
@@ -445,9 +461,10 @@ const planPhase = (post, { risk = false, split = false, sized = false } = {}) =>
         "End with exactly one line: VERDICT: APPROVE   or   VERDICT: CHANGES",
       ].join("\n"),
       routes: [{ if: "^VERDICT: APPROVE\\s*$", goto: post }],
-      on_success: "revise_plan",
+      on_success: reviseAbove ? "revise_gate" : "revise_plan",
       on_failure: post,
     },
+    ...(reviseAbove ? [reviseGate(post)] : []),
     {
       id: "revise_plan",
       type: "claude",
@@ -551,6 +568,7 @@ write("issue-plan", {
         PICK_PLAN,
         'reviewed=""; [ -n "$FACTORY_OUT_PLAN_REVIEW" ] && reviewed=" (checked against the code by Codex)"',
         '[ -n "$notes" ] && reviewed=" (draft — the revision did not finish; Codex\'s review notes are below)"',
+      'printf \'%s\\n\' "$FACTORY_OUT_REVISE_GATE" | grep -q "^SKIPPED" && reviewed=" (checked against the code by Codex — low risk, so the coder works in Codex\'s notes below)"',
         '{ echo "🤖 **Spaghetti Code Foundry plan**$reviewed"; echo',
         '  printf \'%s\\n\' "$out" | sed \'/^PLAN_STATUS:/d\'',
         '  if [ -n "$notes" ]; then echo; echo "## Codex review notes (not yet worked in)"; echo',
@@ -610,10 +628,12 @@ write("issue-plan", {
         "uncommitted in this repository (run `git status` and `git diff HEAD`). Review them strictly for",
         "correctness, edge cases, security, error handling, test coverage and fit with the existing code.",
         "Report only real problems, each with file, line, problem and the fix. No style nitpicks.",
+        "Start each problem with [high] (wrong behaviour, data loss, security, a crash), [medium] or [low].",
         "",
         "{{steps.pull_ticket.output}}",
         "",
-        "End with exactly one line: VERDICT: APPROVE   or   VERDICT: CHANGES",
+        "End with these two lines: SEVERITY: high | medium | low | none   (the most serious problem)",
+        "VERDICT: APPROVE   or   VERDICT: CHANGES",
       ].join("\n"),
       routes: [{ if: "^VERDICT: APPROVE\\s*$", goto: skipTo }],
     },
@@ -834,6 +854,7 @@ write("issue-plan", {
       'plan=$(printf \'%s\\n\' "$out" | sed \'/^PLAN_STATUS:/d; /^RISK_SCORE:/d; /^RISK_REASON:/d\')',
       'reviewed=""; [ -n "$FACTORY_OUT_PLAN_REVIEW" ] && reviewed=" (checked against the code by Codex)"',
       '[ -n "$notes" ] && reviewed=" (draft — the revision did not finish; Codex\'s review notes are below)"',
+      'printf \'%s\\n\' "$FACTORY_OUT_REVISE_GATE" | grep -q "^SKIPPED" && reviewed=" (checked against the code by Codex — low risk, so the coder works in Codex\'s notes below)"',
       '{ echo "🤖 **Spaghetti Code Foundry plan**$reviewed"; echo; echo "**Risk: $risk/100**${reason:+ — $reason}"; echo',
       '  printf \'%s\\n\' "$plan"',
       '  if [ -n "$notes" ]; then echo; echo "## Codex review notes (not yet worked in)"; echo; printf \'%s\\n\' "$notes" | sed \'/^VERDICT:/d; /^RISK_SCORE:/d\'; fi',
@@ -1045,14 +1066,29 @@ write("issue-plan", {
   const claimAreas = {
     id: "claim_areas",
     type: "shell",
-    timeout_sec: 14400,
-    description: "Lock the code areas the plan changes; waits while another run works in an overlapping area",
+    description: "Lock the code areas the plan changes; if another run holds one, step aside (free the slot) and continue when it is free",
     run: [
       'plan="${FACTORY_OUT_REVISE_PLAN:-$FACTORY_OUT_PLAN}"; printf \'%s\\n\' "$FACTORY_OUT_REVISE_PLAN" | grep -q "^AREAS:" || plan="$FACTORY_OUT_PLAN"',
       'areas=$(printf \'%s\\n\' "$plan" | sed -n \'s/^AREAS: *//p\' | tail -1 | tr -d \'`\')',
       '[ -n "$areas" ] || areas="*"',
-      '"$FACTORY_TOOLS/area-lock" acquire "$FACTORY_RUN_ID" "{{run.dir}}" $(printf \'%s\' "$areas" | tr \',\' \' \') --wait-sec 14000',
+      'out=$("$FACTORY_TOOLS/area-lock" acquire "$FACTORY_RUN_ID" "{{run.dir}}" $(printf \'%s\' "$areas" | tr \',\' \' \') --wait-sec 0); code=$?',
+      'printf \'%s\\n\' "$out"',
+      '[ "$code" = 0 ] && exit 0',
+      'printf \'%s\\n\' "$out" | grep -q "^TIMEOUT:" && { echo "WAIT_AREA"; exit 0; }',
+      'exit "$code"',
     ].join("\n"),
+    routes: [{ if: "^WAIT_AREA\\s*$", goto: "wait_for_area" }],
+    on_success: "implement",
+  };
+  const waitForArea = {
+    id: "wait_for_area",
+    type: "shell",
+    jump_only: true,
+    description: "Another run works in the same code area: stop without holding a slot; resumed as soon as runs finish",
+    resume_from: "claim_areas",
+    max_visits: 1000,
+    run: 'printf \'%s\\n\' "$FACTORY_OUT_CLAIM_AREAS" | grep "^waiting for run" | tail -1',
+    on_success: "stop",
   };
   const pushFeature = {
     id: "push_feature",
@@ -1178,17 +1214,31 @@ write("issue-plan", {
     '  gh issue close "$FACTORY_VAR_ISSUE" --repo "$FACTORY_VAR_GITHUB_REPO" --reason completed >/dev/null 2>&1 && echo "closed #$FACTORY_VAR_ISSUE"',
     "fi",
   ].join("\n");
+  // A second Codex round only when round 1 found something serious, or the story is riskier.
+  const reviewGate = {
+    id: "review_gate",
+    type: "shell",
+    description: "Second review round only after a [high] finding or for riskier stories",
+    run: [
+      'sev=$(printf \'%s\\n\' "$FACTORY_OUT_REVIEW_1" | sed -n \'s/^SEVERITY: *\\([a-z]*\\).*/\\1/p\' | tail -1)',
+      'risk=$(printf \'%s\\n\' "$FACTORY_OUT_RISK_GATE" | sed -n \'s/^RISK: *\\([0-9][0-9]*\\).*/\\1/p\' | tail -1)',
+      'if [ "${sev:-high}" = high ] || [ "${risk:-100}" -gt "${FACTORY_VAR_REVIEW_TWICE_ABOVE_RISK:-50}" ]; then echo "round 2: severity ${sev:-unknown}, risk ${risk:-unknown}"; echo "REVIEW_AGAIN"',
+      'else echo "no round 2 needed: severity $sev, risk $risk"; echo "DONE"; fi',
+    ].join("\n"),
+    routes: [{ if: "^DONE\\s*$", goto: "docs" }],
+  };
   const gitflowSteps = [
     byId("pull_ticket"),
     featureBranch,
     byId("baseline_tests"),
-    ...planPhase("size_gate", { risk: true, split: true, sized: true }),
+    ...planPhase("size_gate", { risk: true, split: true, sized: true, reviseAbove: true }),
     ...splitSteps,
     sizeGate,
     forceSplit,
     riskGate,
     approvePlan,
     claimAreas,
+    waitForArea,
     implement,
     ...s.slice(s.findIndex((x) => x.id === "guard"), s.findIndex((x) => x.id === "commit")).map((x) => structuredClone(x)),
     byId("commit"),
@@ -1208,6 +1258,7 @@ write("issue-plan", {
   gitflowSteps.find((x) => x.id === "approve_plan").on_success = "claim_areas";
   for (const id of ["plan", "revise_plan"]) gitflowSteps.find((x) => x.id === id).max_budget_usd = 8;
   for (const x of gitflowSteps) if (["merge_develop", "resolve_conflicts", "finish_merge", "test_develop", "fix_develop", "commit_develop_fix"].includes(x.id)) x.jump_only = true;
+  gitflowSteps.splice(gitflowSteps.findIndex((x) => x.id === "review_2"), 0, reviewGate);
   gitflowSteps.find((x) => x.id === "push_feature").on_success = "merge_develop";
   write("issue-gitflow", {
     title: "Plan and code an issue on a feature branch, merged into develop (gitflow)",
@@ -1235,6 +1286,7 @@ write("issue-plan", {
       forbidden_paths: "", docs_required: "", union_merge_files: "", agent_env: "",
       risk_threshold: "75", review_plan_label: "Factory_review_plan", auto_split_max_risk: "50", trigger_label: "",
       max_files: "15", max_code_lines: "800", delete_merged_branches: "yes", close_when_merged: "yes",
+      revise_above_risk: "50", review_twice_above_risk: "50",
     },
     steps: gitflowSteps,
   });
