@@ -188,6 +188,19 @@ steps:
     expect(r.state.visits.b ?? 0).toBe(0);
   });
 
+  it("pauses the run when the agent is signed out, and says how to sign in", async () => {
+    const flow = `
+name: t
+workspace: inplace
+steps:
+  - {id: b, type: claude, prompt: "{{vars.p}}"}
+`;
+    const s = await runFlow(parseFlow(flow), { task: "t", repo, runsDir, claudeBin, config: cfg(), vars: { p: "CLAUDE_SIGNED_OUT" } });
+    expect(s.status).toBe("stopped"); // paused and retried later, not failed
+    expect(s.reason).toMatch(/^usage limit reached: signed out — the Claude Code login has expired; sign in again \(run "claude" in a terminal and type \/login\)/);
+    expect(s.state.next).toBe("b");
+  });
+
   it("does not treat a long answer that mentions quota as a limit", async () => {
     const long = "x".repeat(500);
     const s = await start(`

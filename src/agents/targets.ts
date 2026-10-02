@@ -138,6 +138,13 @@ export function isLimitError(error: string | undefined, output: string): boolean
   return LIMIT_RE.test(`${error ?? ""}\n${output.length < 400 ? output : ""}`);
 }
 
+const AUTH_RE = /OAuth session expired|Failed to authenticate|not (?:logged|signed) in|run \/login|codex login|invalid api key|authentication_error|\b401\b/i;
+
+/** The agent CLI is signed out (expired login, missing key): nothing a retry or another prompt fixes. */
+export function isAuthError(error: string | undefined, output: string): boolean {
+  return AUTH_RE.test(`${error ?? ""}\n${output.length < 400 ? output : ""}`);
+}
+
 /** Environment for Claude Code talking to a non-Anthropic endpoint. */
 export function claudeProviderEnv(t: Target): NodeJS.ProcessEnv {
   const p = t.provider;
