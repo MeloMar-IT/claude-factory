@@ -28,3 +28,14 @@ describe("finding Claude Code", () => {
     expect(resolveClaudeBin()).toBe(nested);
   });
 });
+
+describe("environment for steps", () => {
+  it("drops a Claude host session's variables, keeps the owner's own settings", async () => {
+    const { inheritedEnv } = await import("../src/steps/process.js");
+    const host = { PATH: "/bin", CLAUDECODE: "1", CLAUDE_CODE_HOST_SESSION_ID: "x", CLAUDE_CODE_SDK_HAS_HOST_AUTH_REFRESH: "1",
+      ANTHROPIC_BASE_URL: "http://host", CLAUDE_CODE_OAUTH_TOKEN: "t", CLAUDE_CODE_USE_BEDROCK: "1", ANTHROPIC_API_KEY: "k", JAVA_HOME: "/jdk" };
+    expect(inheritedEnv(host)).toEqual({ PATH: "/bin", CLAUDE_CODE_OAUTH_TOKEN: "t", CLAUDE_CODE_USE_BEDROCK: "1", ANTHROPIC_API_KEY: "k", JAVA_HOME: "/jdk" });
+    // Not inside a host session: a base URL the owner set (e.g. a proxy) stays.
+    expect(inheritedEnv({ PATH: "/bin", ANTHROPIC_BASE_URL: "http://proxy" })).toEqual({ PATH: "/bin", ANTHROPIC_BASE_URL: "http://proxy" });
+  });
+});

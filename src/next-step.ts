@@ -494,7 +494,7 @@ export function runNextStep(run: RunSummary, o: RunNextOptions = {}): NextStep {
     case "cancelled": return make("cancelled");
     case "stopped": {
       if (/daily budget/.test(reason)) return make("daily_budget");
-      if (/usage limit reached/.test(reason)) return make("usage_limit");
+      if (/usage limit reached|signed out —/.test(reason)) return make("usage_limit");
       if (/interrupted/.test(reason)) return make("interrupted");
       const step = stoppedStep(reason);
       if (step === "send_back" || step === "ask_for_info") return make("planner_questions", { questions: o.questions });

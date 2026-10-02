@@ -20,9 +20,22 @@ export interface ProcessOptions {
   onLine?: (line: string) => void;
 }
 
-/** process.env + overrides; an override of `undefined` removes the variable. */
+/**
+ * Variables a Claude host session (the desktop app, an IDE, another Claude Code) puts in its
+ * children's environment. A Claude Code started with them believes that host manages its login
+ * ("host auth refresh") and can lose its own stored login. Steps must never inherit them.
+ */
+const HOST_SESSION_VAR = /^(CLAUDECODE$|CLAUDE_CODE_|CLAUDE_AGENT_SDK_|CLAUDE_PID$|CLAUDE_EFFORT$|CLAUDE_PREVIEW_|ANTHROPIC_BASE_URL$)/;
+const KEEP_VAR = /^(CLAUDE_CODE_OAUTH_TOKEN|CLAUDE_CODE_USE_[A-Z]+)$/; // set on purpose by the owner
+
+export function inheritedEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  if (!base.CLAUDECODE && !base.CLAUDE_CODE_HOST_SESSION_ID && !base.CLAUDE_CODE_ENTRYPOINT) return { ...base };
+  return Object.fromEntries(Object.entries(base).filter(([k]) => !HOST_SESSION_VAR.test(k) || KEEP_VAR.test(k)));
+}
+
+/** process.env (without a Claude host session's variables) + overrides; an override of `undefined` removes the variable. */
 function mergeEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
-  const env = { ...process.env, ...overrides };
+  const env = { ...inheritedEnv(), ...overrides };
   for (const [k, v] of Object.entries(env)) if (v === undefined) delete env[k];
   return env;
 }
