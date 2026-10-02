@@ -10,7 +10,7 @@ import { Scheduler } from "../src/queue/scheduler.js";
 import { Watcher } from "../src/queue/watcher.js";
 import { buildStamp, RESTART_CODE, supervise } from "../src/supervise.js";
 import { commentFirst, commentText, firstLine, nextStepEnv, runNextStep } from "../src/next-step.js";
-import { claudeBin, closing, fakeGithub, first } from "./helpers/fake-github.js";
+import { claudeBin, closing, fakeGithub, first, flowPath } from "./helpers/fake-github.js";
 
 // The simpler pipeline: one label (Factory_go) → questions up front → plan + risk gate + code in one
 // run → one rolling factory PR with a daily report.
@@ -393,7 +393,7 @@ describe("restart on a new build", () => {
 
 describe("generated issue flows", () => {
   const FLOWS = ["pr-feedback", "issue-plan", "issue-code-daily", "issue-deliver", "issue-gitflow", "release-daily", "daily-pr"];
-  const text = (f: string) => readFileSync(`flows/${f}.yaml`, "utf8");
+  const text = (f: string) => readFileSync(flowPath(f), "utf8");
   const step = (f: string, id: string) => JSON.stringify(parseFlow(text(f), f).steps.find((s) => s.id === id));
 
   it("names both plan headings in the implement prompt", () => {

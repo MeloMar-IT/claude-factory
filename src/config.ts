@@ -14,7 +14,8 @@ const WatcherSchema = z
      * ci-failures: CI red on the default branch → ci-fix. schedule: run a chore every `every`.
      */
     source: z.enum(["issues", "pr-feedback", "ci-failures", "schedule"]).default("issues"),
-    flow: z.string().default("github-issue"),
+    /** "default": the flow for the source (issues → issue-gitflow, schedule → release-daily). */
+    flow: z.string().default("default"),
     github_repo: z.string().regex(/^[\w.-]+\/[\w.-]+$/, "owner/repo"),
     label: z.string().default("claude-factory"),
     every: z.string().default("5m"),

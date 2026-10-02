@@ -5,6 +5,7 @@ import { blockDir, listBlocks, parseBlock } from "../flow/blocks.js";
 import { flowDir, flowFiles, listFlows, parseFlow, type FlowScope } from "../flow/load.js";
 import { stampVersion, userFlow, type UserFlow } from "../flow/publish.js";
 import type { Flow } from "../flow/schema.js";
+import { flowUsers } from "../flow/usage.js";
 import { generateFlow } from "./generate.js";
 import { publishedFlows } from "./permissions.js";
 import { HttpError, NAME_RE, readJson, send, str } from "./http.js";
@@ -16,7 +17,7 @@ function scopeOf(body: Record<string, unknown>): FlowScope {
   return scope;
 }
 
-export const flowRoutes: Route = async ({ opts }, req, res, seg, method, user) => {
+export const flowRoutes: Route = async ({ opts, config }, req, res, seg, method, user) => {
   if (seg[0] === "flows") {
     const name = seg[1];
     if (name !== undefined && !NAME_RE.test(name)) throw new HttpError(400, "invalid flow name");
@@ -69,6 +70,8 @@ export const flowRoutes: Route = async ({ opts }, req, res, seg, method, user) =
     if (method === "DELETE") {
       if (!listing) throw new HttpError(404, `flow "${name}" not found`);
       if (listing.scope === "builtin") throw new HttpError(403, "built-in flows cannot be deleted");
+      const users = flowUsers(name, config(), opts.repo);
+      if (users.length) throw new HttpError(409, `flow "${name}" is in use by ${users.join(", ")}; change or remove those first`);
       rmSync(listing.path);
       return send(res, 200, { deleted: listing.path }), true;
     }

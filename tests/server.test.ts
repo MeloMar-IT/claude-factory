@@ -43,6 +43,29 @@ steps:
 `;
 
 describe("ui server", () => {
+  it("won't delete a flow a watcher uses (also a disabled one) or another flow runs; does once nothing uses it", async () => {
+    const used = FLOW.replace("name: mine", "name: used-by-watcher");
+    const parent = `name: parent\nworkspace: inplace\nsteps:\n  - {id: sub, type: flow, flow: used-by-step}\n`;
+    for (const [n, y] of [["used-by-watcher", used], ["used-by-step", FLOW.replace("name: mine", "name: used-by-step")], ["parent", parent]] as const) {
+      expect((await json("PUT", `/api/flows/${n}`, { yaml: y, scope: "repo" })).status).toBe(200);
+    }
+    const cfg = (await (await json("GET", "/api/config")).json()) as { watchers: unknown[] };
+    const watcher = { id: "off", enabled: false, github_repo: "acme/app", label: "x", flow: "used-by-watcher" };
+    expect((await json("PUT", "/api/config", { ...cfg, watchers: [watcher] })).status).toBe(200);
+
+    const refused = await json("DELETE", "/api/flows/used-by-watcher");
+    expect(refused.status).toBe(409);
+    expect(((await refused.json()) as { error: string }).error).toContain('flow "used-by-watcher" is in use by watcher off (disabled)');
+    const step = await json("DELETE", "/api/flows/used-by-step");
+    expect(step.status).toBe(409);
+    expect(((await step.json()) as { error: string }).error).toContain("flow parent (runs it as a step)");
+
+    expect((await json("PUT", "/api/config", { ...cfg, watchers: [] })).status).toBe(200);
+    expect((await json("DELETE", "/api/flows/used-by-watcher")).status).toBe(200);
+    expect((await json("DELETE", "/api/flows/parent")).status).toBe(200);
+    expect((await json("DELETE", "/api/flows/used-by-step")).status).toBe(200);
+  });
+
   it("serves the UI and the yaml browser build", async () => {
     expect((await fetch(base + "/")).headers.get("content-type")).toContain("text/html");
     expect((await fetch(base + "/vendor/yaml/index.js")).status).toBe(200);
@@ -87,8 +110,8 @@ describe("ui server", () => {
     expect((await json("PUT", "/api/flows/mine", { yaml: FLOW, scope: "repo" })).status).toBe(200);
     const flows = (await (await json("GET", "/api/flows")).json()) as Array<{ name: string; scope: string }>;
     expect(flows.find((f) => f.name === "mine")?.scope).toBe("repo");
-    expect(flows.find((f) => f.name === "feature")?.scope).toBe("builtin");
-    expect((await json("DELETE", "/api/flows/feature")).status).toBe(403);
+    expect(flows.find((f) => f.name === "issue-gitflow")?.scope).toBe("builtin");
+    expect((await json("DELETE", "/api/flows/issue-gitflow")).status).toBe(403);
     expect((await json("DELETE", "/api/flows/mine")).status).toBe(200);
   });
 

@@ -495,7 +495,7 @@ describe("published flows", () => {
 
   it("does not start a flow that is not published, or a built-in one", async () => {
     expect((await put(PRIVATE("unpublished"))).status).toBe(200);
-    for (const flow of ["unpublished", "feature"]) {
+    for (const flow of ["unpublished", "issue-plan"]) {
       const r = await start(ann, { flow });
       expect([flow, r.status, r.error()]).toEqual([flow, 404, "flow not found"]);
     }
@@ -504,7 +504,7 @@ describe("published flows", () => {
   });
 
   it("lists and starts a copy of a built-in flow once the admin publishes it", async () => {
-    const flow = parse(readFileSync(resolve("flows/feature.yaml"), "utf8"));
+    const flow = parse(readFileSync(resolve("tests/fixtures/flows/feature.yaml"), "utf8")); // a plain flow (retired from flows/)
     flow.publish = { enabled: true, name: "Build a feature" };
     expect((await put(stringify(flow))).status).toBe(200);
     try {

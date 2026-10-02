@@ -57,11 +57,10 @@ export function failureComment(s: RunSummary, next: NextStep): string {
 }
 
 /** Flow each source runs when the watcher doesn't name one. */
-export const DEFAULT_FLOWS: Record<WatcherConfig["source"], string> = {
-  issues: "github-issue",
-  "pr-feedback": "pr-feedback",
-  "ci-failures": "ci-fix",
-  schedule: "chore",
+export const DEFAULT_FLOWS: Partial<Record<WatcherConfig["source"], string>> = {
+  issues: "issue-gitflow",
+  schedule: "release-daily",
+  // pr-feedback and ci-failures have no shipped flow any more: such a watcher names its own.
 };
 
 /** "5m" | "30s" | "1h" | "7d" | "10" (minutes) → ms. */
@@ -188,8 +187,11 @@ export class Watcher {
   }
 
   private flowName() {
-    // "github-issue" is the schema default; other sources mean their own flow unless one is chosen.
-    return this.cfg.flow === "github-issue" ? DEFAULT_FLOWS[this.cfg.source] : this.cfg.flow;
+    // "default" (the schema default) means the source's own flow.
+    if (this.cfg.flow !== "default") return this.cfg.flow;
+    const f = DEFAULT_FLOWS[this.cfg.source];
+    if (!f) throw new Error(`a ${this.cfg.source} watcher must name its flow (there is no default for it)`);
+    return f;
   }
 
   start() {

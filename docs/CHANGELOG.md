@@ -4,6 +4,7 @@ Changes that are merged but not yet in a release go under **Unreleased**. Newest
 
 ## Unreleased
 
+- Flows cleaned up: only the gitflow pipeline (`epic-questions`, `issue-gitflow`, `release-daily`) and the human-in-the-loop pipeline (`issue-plan`, `issue-code-daily`, `daily-pr`) ship. Retired: `quick`, `feature`, `cross-review`, `github-issue`, `github-pr`, `github-auto`, `issue-deliver`, `pr-feedback`, `ci-fix`, `chore`, `jira-ticket`, `linear-ticket` (kept as test material). Watcher defaults: issues → `issue-gitflow`, schedule → `release-daily`. A flow in use by a watcher (also a disabled one) or by another flow can't be deleted.
 - Account rules and audit log (#60).
   - **`scf user role <e-mail> admin|user`** changes the role. It counts from the next API call; the account stays signed in.
   - **Last admin.** The only admin that is not blocked cannot be demoted, blocked or deleted. The command says "make another admin first", changes nothing and exits 1. **Changed:** blocking the only admin was allowed before, and a blocked admin no longer counts as another admin when deleting.

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -21,6 +21,11 @@ export function fakeGithub() {
   git(seed, "add", ".");
   git(seed, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init");
   git(tmp, "clone", "-q", "--bare", seed, remote);
+
+  // Retired flows (no longer shipped) are test material: make them repo flows of the test repository.
+  const flowsDir = join(tmp, ".claude-factory", "flows");
+  mkdirSync(flowsDir, { recursive: true });
+  for (const f of readdirSync(resolve("tests/fixtures/flows"))) copyFileSync(resolve("tests/fixtures/flows", f), join(flowsDir, f));
 
   const bin = join(tmp, "bin");
   mkdirSync(bin);
@@ -56,3 +61,13 @@ export const closing = (body: string) => body.split("\n").filter((l) => l.trim()
 
 /** The first non-empty line of a comment. */
 export const first = (body: string) => body.split("\n").find((l) => l.trim()) ?? "";
+
+/** A flow's file: shipped in flows/, or (retired, kept as test material) in tests/fixtures/flows/. */
+export function flowPath(name: string): string {
+  const shipped = join("flows", `${name}.yaml`);
+  return existsSync(shipped) ? shipped : join("tests", "fixtures", "flows", `${name}.yaml`);
+}
+
+/** The flow each watcher source ran before the defaults changed (retired flows, kept for the tests). */
+export const OLD_DEFAULT_FLOW: Record<string, string> = { issues: "github-issue", "pr-feedback": "pr-feedback", "ci-failures": "ci-fix", schedule: "chore" };
+export const oldFlowFor = (over: { source?: string; flow?: string } = {}) => over.flow ?? OLD_DEFAULT_FLOW[over.source ?? "issues"]!;
