@@ -1,5 +1,6 @@
-import YAML from "yaml";
+import YAML from "/vendor/yaml/index.js";
 import { api } from "./api.js";
+import { allowedHash, ensureSignedIn, isAdmin, startApp } from "./auth.js";
 import { debounce, h, modal, mount, toast } from "./dom.js";
 import { cleanFlow, renderEditor } from "./editor.js";
 import { renderGraph } from "./graph.js";
@@ -8,10 +9,14 @@ import { renderSettings, renderWatchers } from "./admin.js";
 import { refreshModelLists, renderModels } from "./models.js";
 import { renderDashboard } from "./dashboard.js";
 import { renderRunDetail, renderRunsList } from "./runs.js";
+import { renderBoard } from "./board.js";
+import { loadHealth, startHealth } from "./health.js";
+import { startSince } from "./since.js";
 import { renderYourTurn, startBadge, startHash } from "./turn.js";
 
 const sidebar = document.getElementById("sidebar");
 const main = document.getElementById("main");
+const healthEl = document.getElementById("health");
 const NAME_RE = /^[\w-]+$/;
 
 const BLANK = `name: my-flow
@@ -35,7 +40,7 @@ steps:
  * cur: the flow being edited.
  * { name: saved name | null, scope, saveScope, yaml, obj, mode: "visual"|"yaml", dirty, selected, validation }
  */
-const S = { info: null, flows: [], cur: null, cleanup: null, lastHash: "" };
+const S = { info: null, flows: [], cur: null, cleanup: null, lastHash: "", admin: true };
 
 function tryParse(text) {
   try {
@@ -58,6 +63,7 @@ async function refreshFlows() {
 }
 
 function renderSidebar() {
+  if (!S.admin) return;
   const inFlows = location.hash.startsWith("#/flows/") || location.hash === "#/new";
   const current = inFlows ? S.cur : null;
   mount(sidebar,
@@ -69,7 +75,7 @@ function renderSidebar() {
       current && !current.name ? h("li", {}, h("a", { href: "#/new", class: "active" }, h("span", { class: "n" }, current.obj?.name ?? "new flow", h("span", { class: "pill claude" }, "unsaved")))) : null,
       S.flows.map((f) => h("li", { class: f.error ? "bad" : null },
         h("a", { href: `#/flows/${f.name}`, class: current?.name === f.name ? "active" : null },
-          h("span", { class: "n" }, h("span", {}, f.name, current?.name === f.name && current.dirty ? " •" : ""), h("span", { class: "pill" }, f.scope)),
+          h("span", { class: "n" }, h("span", {}, f.name, current?.name === f.name && current.dirty ? " •" : ""), f.published ? h("span", { class: "pill ok" }, "published") : null, h("span", { class: "pill" }, f.scope)),
           h("span", { class: "d" }, f.error ? "invalid flow" : f.description ?? ""))))));
 }
 
@@ -95,6 +101,7 @@ function openNew(yaml = BLANK) {
   if (!S.cur.obj) S.cur.mode = "yaml";
   history.pushState(null, "", "#/new");
   S.lastHash = "#/new";
+  loadHealth(healthEl); // pushState fires no hashchange
   renderFlowView();
 }
 
@@ -238,14 +245,18 @@ async function save() {
   const exists = S.flows.find((f) => f.name === name);
   if (name !== c.name && exists && exists.scope !== "builtin" && !confirm(`A flow named "${name}" already exists. Overwrite it?`)) return;
   try {
-    await api.saveFlow(name, c.yaml, c.saveScope);
+    const saved = await api.saveFlow(name, c.yaml, c.saveScope);
+    if (saved?.yaml && saved.yaml !== c.yaml) {
+      c.yaml = saved.yaml;
+      c.obj = tryParse(saved.yaml) ?? c.obj;
+    }
     if (c.name && c.name !== name && c.scope !== "builtin") await api.deleteFlow(c.name); // rename
     Object.assign(c, { name, scope: c.saveScope, dirty: false });
     history.replaceState(null, "", `#/flows/${name}`);
     S.lastHash = location.hash;
     await refreshFlows();
     renderFlowView();
-    toast(`Saved ${name}`);
+    toast(saved?.version ? `Saved ${name} — version ${saved.version} for users` : `Saved ${name}`);
   } catch (e) {
     toast(e.message, "error");
   }
@@ -353,7 +364,8 @@ function welcome() {
 }
 
 async function route() {
-  const hash = location.hash || "#/flows";
+  // A page a user may not open is never drawn.
+  const hash = allowedHash(S.admin, location.hash || (S.admin ? "#/flows" : "#/runs"), (to) => history.replaceState(null, "", to));
   const [, section, arg] = hash.split("/").map(decodeURIComponent);
   const leavingDraft = S.cur?.dirty && (section !== "flows" || arg !== S.cur.name) && hash !== "#/new";
   // Only warn when opening a *different* flow; other pages keep the draft in memory.
@@ -367,13 +379,14 @@ async function route() {
   document.querySelectorAll("[data-nav]").forEach((a) => a.classList.toggle("active", a.dataset.nav === (section === "new" ? "flows" : section)));
   try {
     if (section === "your-turn") S.cleanup = await renderYourTurn(main);
+    else if (section === "board") S.cleanup = renderBoard(main, arg);
     else if (section === "library") await renderLibrary(main);
     else if (section === "dashboard") await renderDashboard(main);
     else if (section === "watchers") await renderWatchers(main);
     else if (section === "settings") await renderSettings(main);
     else if (section === "models") await renderModels(main);
-    else if (section === "runs" && arg) S.cleanup = renderRunDetail(main, arg);
-    else if (section === "runs") S.cleanup = await renderRunsList(main);
+    else if (section === "runs" && arg) S.cleanup = renderRunDetail(main, arg, { admin: S.admin });
+    else if (section === "runs") S.cleanup = await renderRunsList(main, { admin: S.admin });
     else if (section === "new") S.cur && !S.cur.name ? renderFlowView() : openNew();
     else if (section === "flows" && arg) await openFlow(arg);
     else welcome();
@@ -383,7 +396,6 @@ async function route() {
   renderSidebar();
 }
 
-window.addEventListener("hashchange", route);
 window.addEventListener("beforeunload", (e) => S.cur?.dirty && e.preventDefault());
 document.addEventListener("keydown", (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key === "s" && S.cur && (location.hash.startsWith("#/flows/") || location.hash === "#/new")) {
@@ -392,11 +404,21 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
-S.info = await api.info();
-document.getElementById("repo").textContent = S.info.repo;
-await refreshFlows();
-void refreshModelLists();
-// When something waits for the owner, the app opens on the Your turn page.
-const to = startHash(location.hash, await startBadge());
-if (to) history.replaceState(null, "", to);
-route();
+const me = await ensureSignedIn();
+S.admin = isAdmin(me);
+// Only now: before the role is known, a hash change must not draw a page.
+window.addEventListener("hashchange", route);
+await startApp(me, { startAdmin, route });
+
+async function startAdmin() {
+  startHealth(healthEl);
+  S.info = await api.info();
+  document.getElementById("repo").textContent = S.info.repo;
+  await refreshFlows();
+  void refreshModelLists();
+  // When something waits for the owner, the app opens on the Your turn page.
+  const to = startHash(location.hash, await startBadge());
+  if (to) history.replaceState(null, "", to);
+  route();
+  startSince(document.getElementById("since"));
+}

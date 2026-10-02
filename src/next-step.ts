@@ -1,11 +1,14 @@
 import type { WatcherConfig } from "./config.js";
+import { explainError } from "./errors.js";
 import type { RunSummary } from "./engine/state.js";
+import { classifyFailure, type FailureCause } from "./failure.js";
+import { statusHelp, statusName } from "./words.js";
 
 /** Why something waits (or what it does now). One kind per waiting reason. */
 export type NextKind =
   | "questions" | "planner_questions" | "approve_plan" | "approve_split" | "approval"
   | "dependency" | "one_at_a_time" | "area_lock" | "usage_limit" | "daily_budget" | "release"
-  | "failed" | "restart" | "watcher_error"
+  | "failed" | "restart" | "watcher_error" | "watcher_stale" | "closed_elsewhere"
   | "running" | "queued" | "checking" | "starting" | "interrupted" | "cancelled" | "stopped" | "done"
   | "superseded";
 
@@ -13,6 +16,10 @@ export type NextWho = "You" | "Foundry" | "Another story" | "A time limit" | "So
 
 export interface NextStep {
   kind: NextKind;
+  /** Short plain status name, e.g. "waiting for you — questions". */
+  status: string;
+  /** Two sentences: what it means, and what happens next or what to do. */
+  help: string;
   who: NextWho;
   /** One plain sentence: why it waits. */
   why: string;
@@ -30,8 +37,33 @@ export interface NextStep {
   runId?: string;
   /** The whole record as one sentence (notifications, comments). */
   text: string;
+  /** The run this record waits for (one run at a time, code area). */
+  afterRun?: string;
+  /** Progress and estimate of a run that is not finished. */
+  timing?: RunTiming;
   /** Dependency: what it waits for. */
   blockers?: BlockerInfo[];
+  /** Why a failed or interrupted run did not finish. */
+  cause?: FailureCause;
+}
+
+/** How far a run is and how long it may take. Estimates come from earlier runs; see estimate.ts. */
+export interface RunTiming {
+  /** The step's number in the flow, and the number of steps. */
+  step: number;
+  of: number;
+  stepId: string;
+  /** "Step 2 of 3". */
+  progress: string;
+  /** Quartiles of the run total (ms) from earlier runs: [usual low, usual high]. */
+  usualTotalMs?: [number, number];
+  /** The current step takes much longer than usual. A hint, not an error. */
+  slow?: boolean;
+  note?: string;
+  /** Estimated time left (ms). */
+  leftMs?: number;
+  /** The estimate as one labelled sentence. */
+  estimate?: string;
 }
 
 export interface BlockerInfo {
@@ -70,6 +102,23 @@ export interface NextData {
   superseded?: boolean;
   /** The run the record is about (when `base` has none). */
   runId?: string;
+  /** `closed_elsewhere`: the run waits for approval (it is not working). */
+  runWaits?: boolean;
+  /** `failed`: false when the run has no step to resume at, so it must start over. */
+  canResume?: boolean;
+  /** `watcher_stale`: ISO time of the last finished check. */
+  lastCheck?: string;
+  /** `restart`: runs the server still waits for (without it the text is the one issue records use). */
+  runsLeft?: number;
+  /** `usage_limit`: the agent whose limit it is, e.g. "codex". */
+  limitAgent?: string;
+  /** `failed`: why the run did not finish; the factory wording is used for "factory". */
+  cause?: FailureCause;
+  /** The record is for a user: no money, no setup, no agent, no command, no raw reason. */
+  forUser?: boolean;
+  /** `failed`: what went wrong, and the suggested fix. */
+  what?: string;
+  fix?: string;
 }
 
 export interface NextBase {
@@ -81,6 +130,8 @@ export interface NextBase {
 
 const RUN_PAGE = (id: string) => `#/runs/${id}`;
 const WATCHERS = { label: "Watchers page", url: "#/watchers" };
+const RUNS = { label: "Runs page", url: "#/runs" };
+const SETTINGS = { label: "Settings page", url: "#/settings" };
 
 /** First sentence only, no amounts, one line. */
 function clean(t: string | undefined): string {
@@ -91,6 +142,8 @@ function clean(t: string | undefined): string {
 }
 
 const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
+const lowerFirst = (t: string) => t.charAt(0).toLowerCase() + t.slice(1);
+const upperFirst = (t: string) => t.charAt(0).toUpperCase() + t.slice(1);
 
 /** Number of questions (`**Q1.` …) in a Foundry comment. */
 export function countQuestions(body: string | undefined): number {
@@ -111,7 +164,17 @@ function limitRetry(d: NextData, retryMs: number): string {
   return new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone: d.timeZone }).format(new Date(at));
 }
 
+/** HH:MM of an ISO time. */
+function hhmm(iso: string | undefined, d: NextData): string {
+  const t = new Date(iso ?? "");
+  if (!iso || isNaN(t.getTime())) return "an unknown time";
+  return new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone: d.timeZone }).format(t);
+}
+
 export const LIMIT_RETRY_MS = 30 * 60_000;
+/** The health line shows a usage limit for an hour after the run stopped (two retry periods), and a Foundry failure for 7 days. */
+export const LIMIT_SHOWN_MS = 2 * LIMIT_RETRY_MS;
+export const FAILURE_SHOWN_MS = 7 * 86_400_000;
 
 /** "#88, which is being coded" — what a blocker is doing, as one clause. */
 function blockerClause(b: BlockerInfo): string {
@@ -127,7 +190,7 @@ function blockerClause(b: BlockerInfo): string {
     case "queued": case "one_at_a_time": case "starting": case "checking": return "which is queued";
     case "area_lock": return "which waits for a code area";
     case "usage_limit": case "daily_budget": return "which is paused by a limit";
-    case "release": return "which waits for a release";
+    case "release": return n.until ? `which waits for the ${n.until}` : "which waits for the release pull request";
     case "failed": return "which failed";
     case "interrupted": case "stopped": case "cancelled": return "which is stopped";
     default: return "which is to be done";
@@ -196,6 +259,7 @@ export function nextStep(kind: NextKind, base: NextBase = {}, d: NextData = {}):
   let action = "Nothing — it continues by itself";
   let say = "";
   let w = where;
+  let limit = false;
   let until: string | undefined;
   const q = d.questions;
 
@@ -266,6 +330,14 @@ export function nextStep(kind: NextKind, base: NextBase = {}, d: NextData = {}):
       break;
     }
     case "usage_limit": {
+      if (/signed out/.test(d.reason ?? "") && d.forUser) {
+        // Only the administrator can sign in again; the run is retried by itself.
+        why = "The Foundry is signed out of its AI account";
+        until = limitRetry(d, LIMIT_RETRY_MS);
+        action = "Ask the administrator to sign in again";
+        say = "ask the administrator to sign in again. It continues by itself after that";
+        break;
+      }
       if (/signed out/.test(d.reason ?? "")) {
         // The agent CLI lost its login: only the owner can fix that; the run is retried by itself.
         const codex = /Codex login/.test(d.reason ?? "");
@@ -276,14 +348,26 @@ export function nextStep(kind: NextKind, base: NextBase = {}, d: NextData = {}):
         break;
       }
       who = "A time limit";
-      why = "The usage limit is reached";
+      if (d.forUser) {
+        why = "The usage limit is reached";
+        until = limitRetry(d, LIMIT_RETRY_MS);
+        say = "nothing to do, it is tried again after the limit resets";
+        break;
+      }
+      why = d.limitAgent ? `The ${upperFirst(d.limitAgent)} usage limit is reached` : "The usage limit is reached";
       until = limitReset(d.reason) ?? limitRetry(d, LIMIT_RETRY_MS);
       say = "nothing to do, it is tried again after the limit resets";
+      if (d.limitAgent) w = RUNS;
       break;
     }
     case "daily_budget":
-      who = "A time limit"; why = "The daily budget is used up"; until = "tomorrow";
+      who = "A time limit"; why = d.forUser ? "The administrator's limit was reached" : "The daily budget is used up"; until = "tomorrow";
       say = "nothing to do, it starts tomorrow";
+      if (!d.forUser && !issueWhere && !runWhere) {
+        action = "Raise the daily budget in Settings, or wait until tomorrow";
+        say = "raise the daily budget in Settings, or wait until tomorrow";
+        w = SETTINGS;
+      }
       break;
     case "release": {
       if (!d.pr && d.releaseAt) {
@@ -296,29 +380,52 @@ export function nextStep(kind: NextKind, base: NextBase = {}, d: NextData = {}):
       }
       who = "You";
       const n = d.pr?.number;
-      why = n ? `Daily pull request #${n} is not merged yet` : "The release is not merged yet";
-      action = n ? `Merge the daily pull request #${n}` : "Merge the release pull request";
+      why = n ? `Release pull request #${n} is not merged yet` : "The release pull request is not merged yet";
+      action = n ? `Merge the release pull request #${n}` : "Merge the release pull request";
       say = `${action.charAt(0).toLowerCase()}${action.slice(1)} to continue`;
-      if (d.pr?.url) w = { label: `Pull request #${n}`, url: d.pr.url };
+      if (d.pr?.url) w = { label: `Release pull request #${n}`, url: d.pr.url };
       break;
     }
     case "failed": {
       who = "Something is wrong";
-      const r = clean(d.reason);
-      why = r ? `It failed: ${r}` : "It failed";
+      const e = explainError(d.reason, "run", d.forUser);
+      const factory = d.cause === "factory";
+      limit = !!e.limit;
+      const startOver = (!factory && e.startOver) || d.canResume === false;
+      if (factory && d.forUser) {
+        why = "The Foundry failed, not the code";
+      } else if (factory) {
+        const what = clean(d.what) || clean(d.reason);
+        why = `The Foundry failed, not the code${what ? `: ${what}` : ""}`;
+      } else {
+        why = `${e.what}: ${e.why}`;
+        // A blocked command is only a hint for a code failure.
+        const hint = d.forUser ? "" : [clean(d.what), clean(d.fix)].filter(Boolean).join(", ");
+        if (hint) why += ` (${hint})`;
+      }
+      let retry: string;
       if (d.watched) {
         const lbl = d.failedLabel ?? "factory:failed";
-        action = `Remove the \`${lbl}\` label to start over, or resume the run on its page to continue at the failed step`;
-        say = `remove the \`${lbl}\` label to start over, or resume the run on its page to continue at the failed step`;
+        retry = startOver
+          ? `then remove the \`${lbl}\` label to start over`
+          : `then remove the \`${lbl}\` label to start over, or resume the run on its page${factory ? "" : " to continue at the failed step"}`;
       } else {
-        action = "Resume the run on its page";
-        say = "resume the run on its page";
+        retry = startOver ? "then start a new run" : "then resume the run on its page";
         w = runWhere ?? where;
       }
+      const todo = factory ? (d.forUser ? "ask the administrator" : clean(d.fix)) : lowerFirst(e.todo);
+      say = todo ? `${todo}, ${retry}` : retry.replace(/^then /, "");
+      action = upperFirst(say);
       break;
     }
     case "restart": {
       who = "Foundry";
+      if (d.runsLeft !== undefined) {
+        why = d.restartWhy === "data_folder" ? "The data folder moved" : "A new version is waiting";
+        say = d.runsLeft > 0 ? `it restarts after ${plural(d.runsLeft, "run")}` : "it restarts in a moment";
+        w = RUNS;
+        break;
+      }
       why = d.restartWhy === "data_folder" ? "The server waits to restart onto a moved data folder" : "The server waits to restart on a new version";
       say = "nothing to do, it restarts when the active runs are done";
       w = WATCHERS;
@@ -326,10 +433,28 @@ export function nextStep(kind: NextKind, base: NextBase = {}, d: NextData = {}):
     }
     case "watcher_error": {
       who = "Something is wrong";
-      why = `The watcher has an error: ${clean(d.reason) || "unknown"}`;
-      action = "Check the watcher on the Watchers page";
-      say = "check the watcher on the Watchers page";
+      const e = explainError(d.reason, "watcher");
+      const what = base.repo ? e.what.replace(/^The watcher /, `The watcher for ${base.repo} `) : e.what;
+      why = `${what}: ${e.why}`;
+      action = e.todo;
+      say = lowerFirst(e.todo);
       w = WATCHERS;
+      break;
+    }
+    case "watcher_stale": {
+      who = "Something is wrong";
+      why = `The watcher for ${base.repo || "this repository"} has not checked since ${hhmm(d.lastCheck, d)}`;
+      action = "Press Check now on the Watchers page";
+      say = "press Check now on the Watchers page";
+      w = WATCHERS;
+      break;
+    }
+    case "closed_elsewhere": {
+      who = "You";
+      why = `${ref} was closed on GitHub but its run ${d.runWaits ? "still waits for approval" : "is still working"}`;
+      action = "Cancel the run if the work is no longer wanted";
+      say = "cancel the run if the work is no longer wanted";
+      w = runWhere ?? WATCHERS;
       break;
     }
     case "running":
@@ -372,27 +497,66 @@ export function nextStep(kind: NextKind, base: NextBase = {}, d: NextData = {}):
       break;
   }
 
+  const facts = { releaseAt: kind === "release" && !d.pr ? d.releaseAt : undefined, blockers: (d.blockers ?? []).map((b) => b.issue), factory: kind === "failed" && d.cause === "factory", user: d.forUser, limit };
   return {
-    kind, who, why, action, where: w, until,
+    kind, status: statusName(kind, facts), help: statusHelp(kind, facts), who, why, action, where: w, until,
     repo: base.repo ?? "", user: "", issue, title: base.title ?? "", runId: base.runId,
     text: sentence(why.replace(/[.!?]+$/, ""), say.replace(/[.!?]+$/, "")),
+    ...(kind === "one_at_a_time" && d.blockingRun ? { afterRun: d.blockingRun } : {}),
+    ...(kind === "area_lock" && d.areaWait ? { afterRun: d.areaWait.runId } : {}),
     ...(kind === "dependency" ? { blockers: d.blockers ?? [] } : {}),
+    ...(d.cause ? { cause: d.cause } : {}),
   };
+}
+
+/**
+ * A Foundry failure for a page that must not show raw reasons (they can hold paths and settings):
+ * the reason and the title are left out, the fix and the link stay. Other records are unchanged.
+ */
+export function briefFailure(n: NextStep): NextStep {
+  if (n.kind !== "failed" || n.cause !== "factory") return n;
+  const why = "The Foundry failed, not the code";
+  return { ...n, why, title: "", text: sentence(why, lowerFirst(n.action).replace(/[.!?]+$/, "")) };
 }
 
 /** The reasons a flow asks for in a comment on the issue. */
 export type CommentKind = Extract<NextKind, "questions" | "planner_questions" | "approve_plan" | "approve_split" | "approval">;
 export const COMMENT_KINDS: readonly CommentKind[] = ["questions", "planner_questions", "approve_plan", "approve_split", "approval"];
 
-/** The sentence a Foundry comment on an issue ends with: the record's text for an issue that is answered on GitHub, without per-run details (number of questions, approval message). */
-export function commentText(kind: CommentKind): string {
+/** The fixed record of a comment kind, without per-run details. */
+function commentRecord(kind: CommentKind): NextStep {
   // issueUrl is set only so "approval" does not fall back to "on the run page"; it never appears in text.
-  return nextStep(kind, {}, { watched: true, issueUrl: "issue" }).text;
+  return nextStep(kind, {}, { watched: true, issueUrl: "issue" });
 }
 
-/** Step environment: FACTORY_NEXT_<KIND> for every comment kind, e.g. FACTORY_NEXT_APPROVE_PLAN. */
+/** The sentence a Foundry comment on an issue ends with: the record's text for an issue that is answered on GitHub, without per-run details (number of questions, approval message). */
+export function commentText(kind: CommentKind): string { return commentRecord(kind).text; }
+
+/** One line, no end punctuation. */
+const tidy = (t: string) => t.replace(/\s+/g, " ").trim().replace(/[.!?]+$/, "");
+
+/**
+ * The bold first line of a Foundry comment: what to do when the next move is yours or something
+ * is wrong, else that nothing is needed and why. Markdown; print it, never put it in a command.
+ */
+export function firstLine(n: Pick<NextStep, "who" | "action" | "why">): string {
+  if (n.who === "You" || n.who === "Something is wrong") return `**What you need to do:** ${tidy(n.action)}.`;
+  const why = lowerFirst(tidy(n.why));
+  return why ? `**Nothing needed from you** — ${why}.` : "**Nothing needed from you**";
+}
+
+/** firstLine() of the fixed record of a comment kind. */
+export function commentFirst(kind: CommentKind): string { return firstLine(commentRecord(kind)); }
+
+/** Step environment: FACTORY_NEXT_<KIND> and FACTORY_FIRST_<KIND> for every comment kind, plus FACTORY_FIRST_NOTHING. */
 export function nextStepEnv(): Record<string, string> {
-  return Object.fromEntries(COMMENT_KINDS.map((k) => [`FACTORY_NEXT_${k.toUpperCase()}`, commentText(k)]));
+  return {
+    ...Object.fromEntries(COMMENT_KINDS.flatMap((k) => [
+      [`FACTORY_NEXT_${k.toUpperCase()}`, commentText(k)],
+      [`FACTORY_FIRST_${k.toUpperCase()}`, commentFirst(k)],
+    ])),
+    FACTORY_FIRST_NOTHING: firstLine(nextStep("running")),
+  };
 }
 
 /** Last "stopped at step" id of a reason, without sub-flow prefix. */
@@ -441,9 +605,11 @@ export function runNextStep(run: RunSummary, o: RunNextOptions = {}): NextStep {
       if (step?.startsWith("wait_")) return make("release");
       return make("stopped");
     }
-    default:
-      if (/interrupted/.test(reason)) return make("interrupted");
-      return make("failed");
+    default: {
+      const f = classifyFailure(run);
+      if (/interrupted/.test(reason)) return make("interrupted", { cause: f.cause });
+      return make("failed", { ...f, canResume: o.canResume ?? (run.state ? run.state.next != null : undefined) });
+    }
   }
 }
 
@@ -489,4 +655,23 @@ export function releaseWatchersFor<W extends WatcherConfig>(watchers: W[], run: 
   if (!repo) return [];
   return RELEASE_PAIRS.filter((p) => p.needs.every((id) => ids.has(id)))
     .flatMap((p) => watchers.filter((w) => w.enabled && w.source === "schedule" && !!w.at && w.flow === p.flow && w.github_repo === repo));
+}
+
+/** Does a step id (with optional sub-flow prefix) end in one of `ids`? */
+const stepIs = (id: string | null | undefined, ids: string[]) => !!id && ids.includes(id.split("/").at(-1)!);
+
+/**
+ * The run closed its issue itself (gitflow report, split, merge): a finished `report`, `merge` or
+ * `create_split` step, or one of them as the step that runs next.
+ */
+export function runClosedIssue(run: RunSummary | undefined): boolean {
+  if (!run) return false;
+  if ((run.history ?? []).some((x) => x.ok && (stepIs(x.id, ["merge", "create_split"]) || (stepIs(x.id, ["report"]) && /closed #\d+/.test(x.output ?? ""))))) return true;
+  const next = run.state?.next;
+  if (stepIs(next, ["merge", "create_split"])) return true;
+  if (stepIs(next, ["report"])) {
+    const step = (run.flowDef?.steps ?? []).find((x) => x.id === next) as { run?: string } | undefined;
+    return /gh issue close/.test(step?.run ?? "");
+  }
+  return false;
 }

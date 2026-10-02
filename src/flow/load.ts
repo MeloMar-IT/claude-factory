@@ -35,6 +35,18 @@ export function resolveFlowPath(nameOrPath: string, repo: string): string {
   throw new Error(`Flow "${nameOrPath}" not found. Searched: ${flowDirs(repo).join(", ")}`);
 }
 
+/** Every existing `<name>.yaml` / `<name>.yml` in the three scope folders, most specific first. */
+export function flowFiles(name: string, repo: string): string[] {
+  const out: string[] = [];
+  for (const dir of flowDirs(repo)) {
+    for (const ext of [".yaml", ".yml"]) {
+      const p = join(dir, name + ext);
+      if (existsSync(p)) out.push(p);
+    }
+  }
+  return out;
+}
+
 export function parseFlow(text: string, source = "<flow>"): Flow {
   let raw: unknown;
   try {
@@ -60,6 +72,8 @@ export interface FlowListing {
   path: string;
   scope: FlowScope;
   description?: string;
+  /** True when the flow is published to users. */
+  published?: boolean;
   error?: string;
 }
 
@@ -76,7 +90,7 @@ export function listFlows(repo: string): FlowListing[] {
       const path = join(dir, file);
       try {
         const flow = parseFlow(readFileSync(path, "utf8"), path);
-        seen.set(name, { name, path, scope, description: flow.description });
+        seen.set(name, { name, path, scope, description: flow.description, ...(flow.publish?.enabled ? { published: true } : {}) });
       } catch (e) {
         seen.set(name, { name, path, scope, error: (e as Error).message });
       }

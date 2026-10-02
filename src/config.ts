@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { isIP } from "node:net";
 import { dirname, join } from "node:path";
 import { parse, stringify } from "yaml";
 import { z } from "zod";
@@ -13,7 +14,8 @@ const WatcherSchema = z
      * ci-failures: CI red on the default branch → ci-fix. schedule: run a chore every `every`.
      */
     source: z.enum(["issues", "pr-feedback", "ci-failures", "schedule"]).default("issues"),
-    flow: z.string().default("github-issue"),
+    /** "default": the flow for the source (issues → issue-gitflow, schedule → release-daily). */
+    flow: z.string().default("default"),
     github_repo: z.string().regex(/^[\w.-]+\/[\w.-]+$/, "owner/repo"),
     label: z.string().default("claude-factory"),
     every: z.string().default("5m"),
@@ -52,10 +54,14 @@ const WatcherSchema = z
     at: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "HH:MM").optional(),
     /** schedule: IANA time zone for `at`, e.g. Europe/Berlin (default: this Mac's). */
     timezone: z.string().optional(),
+    /** The e-mail of the account that owns this watcher's runs (default: the first admin). Only an admin can set it. */
+    owner: z.string().max(254).optional(),
   })
   .strict()
   .refine((w) => w.source !== "schedule" || !!w.task?.trim(), { message: "a schedule watcher needs a task", path: ["task"] })
   .refine((w) => !w.timezone || validTimeZone(w.timezone), { message: "unknown time zone (use e.g. Europe/Berlin)", path: ["timezone"] });
+
+const clock = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "HH:MM");
 
 function validTimeZone(tz: string): boolean {
   try {
@@ -106,8 +112,51 @@ const RouterSchema = z
   .strict()
   .prefault({});
 
+/** One allowed host entry: a DNS name, IPv4 address or bracketed IPv6 address, with an optional port. */
+export function hostEntryOk(entry: string): boolean {
+  let host = entry;
+  let port: string | undefined;
+  if (entry.startsWith("[")) {
+    const end = entry.indexOf("]");
+    if (end < 0) return false;
+    const rest = entry.slice(end + 1);
+    if (rest !== "" && !rest.startsWith(":")) return false;
+    if (rest) port = rest.slice(1);
+    host = entry.slice(1, end);
+    if (isIP(host) !== 6) return false;
+  } else {
+    const i = entry.lastIndexOf(":");
+    if (i >= 0) {
+      port = entry.slice(i + 1);
+      host = entry.slice(0, i);
+    }
+    if (host.length === 0 || host.length > 253) return false;
+    if (!host.split(".").every((l) => /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/i.test(l))) return false;
+  }
+  if (port !== undefined) {
+    if (!/^\d{1,5}$/.test(port)) return false;
+    const n = Number(port);
+    if (n < 1 || n > 65535) return false;
+  }
+  return true;
+}
+
+const ServerSchema = z
+  .object({
+    /** Address to listen on. Only these four: the Mac itself or all networks. Needs a restart. */
+    listen: z.enum(["127.0.0.1", "::1", "0.0.0.0", "::"]).default("127.0.0.1"),
+    /** Host names (optionally with port) accepted besides localhost, e.g. "mymac.local". */
+    allowed_hosts: z.array(z.string().transform((s) => s.toLowerCase()).refine(hostEntryOk, "not a host name")).default([]),
+    /** Accept requests from other computers over plain HTTP. Passwords and cookies are then unencrypted. */
+    allow_insecure_http: z.boolean().default(false),
+  })
+  .strict()
+  .prefault({});
+
 export const ConfigSchema = z
   .object({
+    /** Where and for whom the web UI is reachable. */
+    server: ServerSchema,
     /** Model spec for agent steps with no model anywhere (flow, step or router). */
     default_model: z.string().optional(),
     /** Extra or overridden providers; anthropic, openai, ollama and lmstudio are built in. */
@@ -138,8 +187,16 @@ export const ConfigSchema = z
         slack_webhook: z.string().url().optional(),
         /** Shell command run with FACTORY_EVENT, FACTORY_RUN_ID, FACTORY_STATUS, FACTORY_MESSAGE in env. */
         command: z.string().optional(),
-        /** Which run outcomes notify. */
+        /** Which run outcomes run the command (macOS and Slack tell only what waits for you). */
         on: z.array(z.enum(["succeeded", "failed", "stopped", "waiting", "cancelled"])).default(["succeeded", "failed", "stopped", "waiting"]),
+        /** Also tell when a run succeeds. */
+        successes: z.boolean().default(false),
+        /** At most one notification in this many minutes. */
+        throttle_minutes: z.number().int().min(1).default(5),
+        /** No notifications between these times ("HH:MM", this machine's clock; may cross midnight). */
+        quiet_hours: z.object({ from: clock, to: clock }).strict().optional(),
+        /** "HH:MM": send a short summary once a day. */
+        daily_summary_at: clock.optional(),
       })
       .strict()
       .prefault({}),
@@ -169,6 +226,7 @@ export const ConfigSchema = z
   .strict();
 
 export type Config = z.infer<typeof ConfigSchema>;
+export type ServerConfig = z.infer<typeof ServerSchema>;
 export type WatcherConfig = z.infer<typeof WatcherSchema>;
 export type ProviderConfig = z.infer<typeof ProviderSchema>;
 export type RouterConfig = z.infer<typeof RouterSchema>;

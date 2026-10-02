@@ -2,10 +2,12 @@ import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
+import { defaultOwner } from "../auth/run-owner.js";
 import { nextStepEnv } from "../next-step.js";
 import { loadConfig, loadRepoVars, type Config } from "../config.js";
 import { FACTORY_HOME } from "../flow/load.js";
 import { claimRunStart } from "../home.js";
+import { redactText, requireRedaction } from "../credentials/redact.js";
 import type { Flow, Step } from "../flow/schema.js";
 import { notifyRun } from "../notify.js";
 import {
@@ -45,10 +47,14 @@ export interface RunOptions extends CommonOptions {
   task: string;
   repo: string;
   vars?: Record<string, string>;
+  /** `vars` is the final set: the folder's own settings are not read (they were applied when the run was queued). */
+  frozenVars?: boolean;
   /** Pre-allocated run id (e.g. so a UI can subscribe before the run starts). */
   runId?: string;
   /** Who started the run; saved in run.json. */
   source?: string;
+  /** The id of the account that started the run; saved in run.json. */
+  owner?: string;
 }
 
 export interface ResumeOptions extends CommonOptions {
@@ -69,24 +75,32 @@ export function learningsFile(vars: Record<string, string>, repo: string): strin
   return join(process.env.FACTORY_HOME ?? FACTORY_HOME, "learnings", `${key.replace(/[^\w.-]+/g, "__")}.md`);
 }
 
+/** The variables of a run: the flow's defaults, then the folder's own settings (not for an empty workspace), then the given ones. */
+export function effectiveVars(flow: Flow, repo: string, given: Record<string, string> = {}, log?: (msg: string) => void): Record<string, string> {
+  let repoVars: Record<string, string> = {};
+  try {
+    if (flow.workspace !== "empty") repoVars = loadRepoVars(repo);
+  } catch (e) {
+    log?.(redactText(`! ignoring repo config: ${(e as Error).message}`));
+  }
+  return { ...flow.vars, ...repoVars, ...given };
+}
+
 /** Start a new run of a flow. */
 export async function runFlow(flow: Flow, opts: RunOptions): Promise<RunSummary> {
   const config = opts.config ?? loadConfig();
   const runId = opts.runId ?? newRunId();
   const runDir = join(opts.runsDir, runId);
 
-  let repoVars: Record<string, string> = {};
-  try {
-    if (flow.workspace !== "empty") repoVars = loadRepoVars(opts.repo);
-  } catch (e) {
-    opts.log?.(`! ignoring repo config: ${(e as Error).message}`);
-  }
+  const vars = opts.frozenVars ? { ...opts.vars } : effectiveVars(flow, opts.repo, opts.vars, opts.log);
+  // A run nobody asked for by name (CLI, evals) belongs to the first admin.
+  const owner = opts.owner ?? defaultOwner();
   const summary: RunSummary = {
     runId,
     flow: flow.name,
     flowDef: flow,
     task: opts.task,
-    vars: { ...flow.vars, ...repoVars, ...opts.vars },
+    vars,
     repo: opts.repo,
     status: "running",
     runDir,
@@ -96,12 +110,19 @@ export async function runFlow(flow: Flow, opts: RunOptions): Promise<RunSummary>
     state: { next: null, steps: {}, visits: {} },
     pid: process.pid,
     ...(opts.source ? { source: opts.source } : {}),
+    ...(owner ? { owner } : {}),
   };
   claimRunStart(opts.runsDir, () => {
     mkdirSync(join(runDir, "logs"), { recursive: true });
     saveRun(summary);
   });
   opts.onUpdate?.(summary);
+
+  try {
+    requireRedaction(); // before the workspace is made: output cannot be hidden when the stored secrets are unreadable
+  } catch (e) {
+    return finish(summary, opts, config, { outcome: "failed", reason: (e as Error).message, next: null, lastOutput: "" });
+  }
 
   try {
     const ws = prepareWorkspace(flow.workspace, opts.repo, runDir, runId);
@@ -135,6 +156,7 @@ export async function resumeRun(opts: ResumeOptions): Promise<RunSummary> {
   const decision = opts.decision && summary.waiting ? { ...opts.decision, stepId: summary.waiting.stepId } : undefined;
   Object.assign(summary, { status: "running" as RunStatus, reason: undefined, finishedAt: undefined, resumes: (summary.resumes ?? 0) + 1 });
   summary.pid = process.pid;
+  summary.stepStartedAt = undefined; // an old step time must not show on the resumed run
   claimRunStart(opts.runsDir, () => saveRun(summary));
   summary.state.visits = {}; // fresh loop budget
   return drive(summary, opts, config, { startAt: from, decision });
@@ -146,10 +168,16 @@ async function drive(
   config: Config,
   resume: { startAt: string; decision?: Engine["decision"] } | null,
 ): Promise<RunSummary> {
-  const log = (line: string) => {
+  const log = (raw: string) => {
+    const line = redactText(raw);
     appendLiveLog(summary.runDir, line);
     opts.log?.(line);
   };
+  try {
+    requireRedaction();
+  } catch (e) {
+    return finish(summary, opts, config, { outcome: "failed", reason: (e as Error).message, next: summary.state.next, lastOutput: "" });
+  }
   const save = () => {
     saveRun(summary);
     opts.onUpdate?.(summary);
@@ -226,11 +254,26 @@ async function drive(
   return finish(summary, opts, config, result);
 }
 
+/** Cancel a run that waits for approval (no process runs for it). Returns the saved run; undefined when it is not waiting. */
+export function cancelWaitingRun(runsDir: string, runId: string, config: Config = loadConfig()): RunSummary | undefined {
+  const s = loadRun(runsDir, runId);
+  if (!s || s.status !== "waiting") return undefined;
+  s.status = "cancelled";
+  s.reason = "cancelled by user";
+  s.waiting = undefined;
+  s.finishedAt = new Date().toISOString();
+  saveRun(s);
+  appendLiveLog(s.runDir, "■ cancelled while waiting for approval");
+  void notifyRun(config, s).catch(() => {});
+  return s;
+}
+
 async function finish(summary: RunSummary, opts: CommonOptions, config: Config, r: LoopResult): Promise<RunSummary> {
   summary.status = r.outcome;
-  summary.reason = r.reason;
+  summary.reason = r.reason === undefined ? undefined : redactText(r.reason);
   summary.state.next = r.next;
   if (r.outcome !== "waiting") summary.waiting = undefined;
+  summary.stepStartedAt = undefined;
   summary.finishedAt = new Date().toISOString();
   saveRun(summary);
   opts.onUpdate?.(summary);
@@ -296,6 +339,10 @@ async function loop(engine: Engine, scope: Scope, startAt: string | null, runsDi
     const startedAt = new Date();
     const logFile = newLogFile(engine, scope.prefix + step.id);
     let res: StepResult;
+    if (top && step.type !== "approval") {
+      summary.stepStartedAt = startedAt.toISOString();
+      engine.save();
+    }
 
     if (step.type === "approval") {
       const d = engine.decision;
@@ -319,6 +366,8 @@ async function loop(engine: Engine, scope: Scope, startAt: string | null, runsDi
       }
       res = applyChecks(step, res);
     }
+    if (top) summary.stepStartedAt = undefined; // recordStep saves it
+    res = { ...res, output: redactText(res.output), ...(res.error === undefined ? {} : { error: redactText(res.error) }) };
     recordStep(step, scope, engine, res, startedAt, logFile, visit);
     lastOutput = res.output;
     if (res.limited) {

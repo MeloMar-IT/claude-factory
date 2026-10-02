@@ -9,8 +9,11 @@ import { FACTORY_HOME, parseFlow } from "../src/flow/load.js";
 import {
   claimRunStart, homeMoved, homePaths, homeRestartReason, migrateDataHome, NOTE_NAME, prepareDataHome, setFactoryHome, watchDataHome,
 } from "../src/home.js";
-import { acquireLock, lockPath, releaseLock } from "../src/home-migrate.js";
+import { acquireLock, lockHolder, lockPath, releaseLock } from "../src/home-migrate.js";
+import { StoreError, withAuthLock, writeJsonFile } from "../src/auth/store.js";
+import { createUser, setStatus } from "../src/auth/users.js";
 import { RESTART_CODE } from "../src/supervise.js";
+import { signInAs } from "./helpers/session.js";
 
 let tmp: string;
 let oldHome: string;
@@ -223,21 +226,103 @@ describe("watchDataHome", () => {
   });
 });
 
+describe("account store and the move", () => {
+  const ann = { name: "Ann", email: "ann@example.com", password: "test-password-12345" };
+  const moveOpts = { from: "", to: "", env: {} as NodeJS.ProcessEnv, freeBytes: () => 1e15, sizeBytes: () => 1000, log: quiet };
+
+  it("writes on the old folder and releases both locks", async () => {
+    setFactoryHome(oldHome);
+    await createUser(ann);
+    expect(existsSync(join(oldHome, "users.json"))).toBe(true);
+    expect(existsSync(lockPath(newHome))).toBe(false);
+    expect(existsSync(join(oldHome, "auth.lock"))).toBe(false);
+  });
+
+  it("holds the move lock between the check and the write", async () => {
+    setFactoryHome(oldHome);
+    await createUser(ann);
+    withAuthLock(() => {
+      expect(lockHolder(lockPath(newHome))).toBe(process.pid);
+      const r = migrateDataHome({ ...moveOpts, from: oldHome, to: newHome, lockWaitMs: 100 });
+      expect(r.status).toBe("postponed");
+      expect(r.reason).toBe("busy");
+      expect(existsSync(newHome)).toBe(false);
+      writeJsonFile(join(oldHome, "users.json"), { version: 1, users: [] });
+    });
+    const r = migrateDataHome({ ...moveOpts, from: oldHome, to: newHome });
+    expect(r.status).toBe("migrated");
+    expect(JSON.parse(readFileSync(join(newHome, "users.json"), "utf8"))).toEqual({ version: 1, users: [] });
+  });
+
+  it("refuses after the move and changes nothing", async () => {
+    setFactoryHome(oldHome);
+    const u = await createUser(ann);
+    const before = readFileSync(join(oldHome, "users.json"));
+    mkdirSync(newHome);
+    await expect(createUser({ ...ann, email: "b@example.com" })).rejects.toMatchObject({ kind: "cannot-write", message: expect.stringContaining("moved to") });
+    await expect(setStatus(u.id, "blocked")).rejects.toBeInstanceOf(StoreError);
+    expect(readFileSync(join(oldHome, "users.json"))).toEqual(before);
+    expect(existsSync(join(oldHome, "auth.lock"))).toBe(false);
+    expect(existsSync(lockPath(newHome))).toBe(false);
+  });
+
+  it("reports a busy move lock", () => {
+    setFactoryHome(oldHome);
+    acquireLock(lockPath(newHome));
+    try {
+      expect(() => withAuthLock(() => 1, 150)).toThrow(expect.objectContaining({ kind: "locked", message: expect.stringContaining(lockPath(newHome)) }));
+      expect(existsSync(join(oldHome, "auth.lock"))).toBe(false);
+    } finally {
+      releaseLock(lockPath(newHome));
+    }
+  });
+
+  it("takes no move lock with an explicit home", () => {
+    process.env.FACTORY_HOME = join(tmp, "explicit");
+    withAuthLock(() => expect(existsSync(lockPath(newHome))).toBe(false));
+  });
+});
+
 describe("server on a moved folder", () => {
   it("refuses changes with 503 but still answers reads", async () => {
     fakeRun("running", { pid: process.pid });
     expect(prepareDataHome({ log: quiet }).home).toBe(oldHome);
     const port = 20000 + Math.floor(Math.random() * 20000);
     const { startServer } = await import("../src/server/server.js");
+    const base = `http://127.0.0.1:${port}`;
     const { close } = await startServer({ repo: tmp, runsDir: join(oldHome, "runs"), port, claudeBin: resolve("tests/fixtures/fake-claude.mjs") });
     try {
+      const pw = "test-password-12345";
+      const s = await signInAs(base, { email: "ann@example.com", password: pw });
       fakeRun("succeeded");
       expect(migrateDataHome({ from: oldHome, to: newHome, env: {}, freeBytes: () => 1e15, sizeBytes: () => 1 }).status).toBe("migrated");
       const before = readFileSync(join(oldHome, "config.yaml"), "utf8");
-      const put = await fetch(`http://127.0.0.1:${port}/api/config`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ concurrency: 5 }) });
-      expect(put.status).toBe(503);
+      const putOpts = (headers: Record<string, string>) => ({ method: "PUT", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify({ concurrency: 5 }) });
+      // without a session nothing is answered, and no folder path
+      expect((await fetch(`${base}/api/config`, putOpts({}))).status).toBe(401);
+      const noSession = await fetch(`${base}/api/config`);
+      expect(noSession.status).toBe(401);
+      const bodies: string[] = [await noSession.text()];
+      const put = await fetch(`${base}/api/config`, putOpts(s.headers("PUT")));
+      expect(put.status).toBe(503); // a signed-in user is told where the folder went
       expect(readFileSync(join(oldHome, "config.yaml"), "utf8")).toBe(before);
-      expect((await fetch(`http://127.0.0.1:${port}/api/config`)).status).toBe(200);
+      expect((await fetch(`${base}/api/config`, { headers: s.headers() })).status).toBe(200);
+      // the public changes answer 503 too, without the path
+      const post = (path: string, body: unknown) =>
+        fetch(base + path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      const signIn = await post("/api/session", { email: "ann@example.com", password: pw });
+      const setup = await post("/api/setup", { name: "B", email: "b@example.com", password: pw });
+      expect([signIn.status, setup.status]).toEqual([503, 503]);
+      bodies.push(await signIn.text(), await setup.text());
+      // sign-out is refused as well: no cookie change, and the session still works
+      for (const headers of [s.headers("DELETE"), {}]) {
+        const out = await fetch(`${base}/api/session`, { method: "DELETE", headers });
+        expect(out.status).toBe(503);
+        expect(out.headers.get("set-cookie")).toBeNull();
+        bodies.push(await out.text());
+      }
+      expect((await fetch(`${base}/api/config`, { headers: s.headers() })).status).toBe(200);
+      for (const b of bodies) expect(b).not.toContain(newHome);
     } finally {
       close();
     }

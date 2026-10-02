@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { loadConfig } from "../src/config.js";
 import { defaultHome, MARKER_NAME, migrateDataHome, NOTE_NAME, type MigrateOptions } from "../src/home.js";
-import { acquireLock, explicitHome, lockHolder, lockPath, releaseLock, replacePath, runningRuns, snapshot } from "../src/home-migrate.js";
+import { acquireLock, breakStaleLock, explicitHome, lockHolder, lockPath, releaseLock, replacePath, runningRuns, snapshot } from "../src/home-migrate.js";
 
 let tmp: string;
 let from: string;
@@ -86,6 +86,40 @@ describe("home helpers", () => {
     expect(acquireLock(lock, 300)).toBe(true);
     expect(lockHolder(lock)).toBe(process.pid);
     expect(acquireLock(lock, 300)).toBe(false);
+    releaseLock(lock);
+    expect(existsSync(lock)).toBe(false);
+  });
+
+  it("a late break does not remove a live lock", () => {
+    const lock = lockPath(to);
+    expect(acquireLock(lock)).toBe(true);
+    breakStaleLock(lock);
+    expect(lockHolder(lock)).toBe(process.pid);
+    expect(readFileSync(join(lock, "pid"), "utf8")).toBe(String(process.pid));
+    expect(readdirSync(tmp).filter((n) => n.includes(".stale-"))).toEqual([]);
+    releaseLock(lock);
+  });
+
+  it("a dead lock is broken without leftovers", () => {
+    const lock = lockPath(to);
+    mkdirSync(lock);
+    writeFileSync(join(lock, "pid"), String(deadPid()));
+    breakStaleLock(lock);
+    expect(existsSync(lock)).toBe(false);
+    expect(readdirSync(tmp).filter((n) => n.includes(".stale-"))).toEqual([]);
+  });
+
+  it("releaseLock leaves another live process's lock", () => {
+    const lock = lockPath(to);
+    mkdirSync(lock);
+    writeFileSync(join(lock, "pid"), String(process.ppid));
+    releaseLock(lock);
+    expect(existsSync(lock)).toBe(true);
+    writeFileSync(join(lock, "pid"), String(process.pid));
+    releaseLock(lock);
+    expect(existsSync(lock)).toBe(false);
+    mkdirSync(lock);
+    writeFileSync(join(lock, "pid"), String(deadPid()));
     releaseLock(lock);
     expect(existsSync(lock)).toBe(false);
   });

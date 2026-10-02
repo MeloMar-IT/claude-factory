@@ -40,6 +40,8 @@ node scripts/build-flows.mjs   # regenerate flows/*.yaml (see below)
   `tests/setup.ts` gives every test run a temporary data folder — never read or write the real
   `~/.claude-factory`.
 - Every change comes with tests, and `npm run build && npm test` passes.
+- **Every API route needs a rule** in `src/server/permissions.ts` and an example in
+  `tests/permissions.test.ts`.
 - **Add a line to `docs/CHANGELOG.md`** (under "Unreleased") for every change, and update
   `docs/USER_GUIDE.md` when behaviour users see changes. If the flow format changes, update
   `docs/FLOW_AUTHORING.md` too — `tests/guide.test.ts` checks its examples.

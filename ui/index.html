@@ -5,13 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Spaghetti Code Foundry</title>
   <link rel="stylesheet" href="/style.css">
-  <script type="importmap">{ "imports": { "yaml": "/vendor/yaml/index.js" } }</script>
 </head>
 <body>
   <header class="top">
     <a class="brand" href="#/flows"><span class="logo">◆</span> <span class="brand-full">Spaghetti Code Foundry</span><span class="brand-short">Foundry</span></a>
     <nav>
       <a href="#/your-turn" data-nav="your-turn">Your turn<span id="turn-badge" class="badge" hidden></span></a>
+      <a href="#/board" data-nav="board">Board</a>
       <a href="#/flows" data-nav="flows">Flows</a>
       <a href="#/library" data-nav="library">Library</a>
       <a href="#/runs" data-nav="runs">Runs</a>
@@ -21,7 +21,10 @@
       <a href="#/settings" data-nav="settings">Settings</a>
     </nav>
     <span class="repo" id="repo" title="Repository this UI works against"></span>
+    <span id="user" class="user" hidden></span>
   </header>
+  <div id="health" class="health" hidden></div>
+  <div id="since" class="since" hidden></div>
   <div class="layout">
     <aside id="sidebar"></aside>
     <main id="main"></main>

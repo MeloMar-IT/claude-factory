@@ -1,5 +1,7 @@
 import { spawn } from "node:child_process";
 import { createWriteStream } from "node:fs";
+import { StringDecoder } from "node:string_decoder";
+import { liveRedactor, redactStream, requireRedaction, type Redactor } from "../credentials/redact.js";
 
 export interface ProcessResult {
   exitCode: number | null;
@@ -18,6 +20,8 @@ export interface ProcessOptions {
   logFile: string;
   /** Called with each complete stdout line. */
   onLine?: (line: string) => void;
+  /** Secrets to hide from the output. Without it the stored credentials are used (and must be readable). */
+  redactor?: Redactor;
 }
 
 /**
@@ -43,6 +47,19 @@ function mergeEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
 /** Spawn a process, tee stdout/stderr into a log file, and collect output. */
 export function runProcess(cmd: string, args: string[], opts: ProcessOptions): Promise<ProcessResult> {
   return new Promise((resolve, reject) => {
+    // fail before anything starts when the stored credentials cannot be read
+    let current: () => Redactor;
+    try {
+      if (opts.redactor) {
+        const fixed = opts.redactor;
+        current = () => fixed;
+      } else {
+        requireRedaction();
+        current = liveRedactor;
+      }
+    } catch (e) {
+      return reject(e);
+    }
     const log = createWriteStream(opts.logFile, { flags: "a" });
     const child = spawn(cmd, args, {
       cwd: opts.cwd,
@@ -74,22 +91,31 @@ export function runProcess(cmd: string, args: string[], opts: ProcessOptions): P
         }, opts.timeoutMs)
       : undefined;
 
-    child.stdout.on("data", (buf: Buffer) => {
-      const s = buf.toString();
+    // One filter for the combined log: halves of a secret that arrive on stdout and stderr must not join unseen.
+    const logFilter = redactStream((s) => void log.write(s), current);
+    const outSink = (s: string) => {
       stdout += s;
-      log.write(s);
       if (opts.onLine) {
         pending += s;
         const lines = pending.split("\n");
         pending = lines.pop() ?? "";
         for (const l of lines) if (l.trim()) opts.onLine(l);
       }
-    });
-    child.stderr.on("data", (buf: Buffer) => {
-      const s = buf.toString();
+    };
+    const errSink = (s: string) => {
       stderr += s;
-      log.write(s);
-    });
+    };
+    const outFilter = redactStream(outSink, current);
+    const errFilter = redactStream(errSink, current);
+    const outDecoder = new StringDecoder("utf8");
+    const errDecoder = new StringDecoder("utf8");
+    const feed = (filter: ReturnType<typeof redactStream>, text: string) => {
+      if (!text) return;
+      logFilter.write(text);
+      filter.write(text);
+    };
+    child.stdout.on("data", (buf: Buffer) => feed(outFilter, outDecoder.write(buf)));
+    child.stderr.on("data", (buf: Buffer) => feed(errFilter, errDecoder.write(buf)));
 
     const cleanup = () => {
       clearTimeout(timer);
@@ -102,6 +128,11 @@ export function runProcess(cmd: string, args: string[], opts: ProcessOptions): P
     });
     child.on("close", (code) => {
       cleanup();
+      feed(outFilter, outDecoder.end());
+      feed(errFilter, errDecoder.end());
+      outFilter.end();
+      errFilter.end();
+      logFilter.end();
       if (opts.onLine && pending.trim()) opts.onLine(pending);
       log.end(() => resolve({ exitCode: code, stdout, stderr, timedOut, aborted }));
     });

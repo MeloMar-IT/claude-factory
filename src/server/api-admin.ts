@@ -1,10 +1,14 @@
 import { agentStatuses, providerStatuses, testSpec } from "../agents/health.js";
-import { CONFIG_PATH, saveConfig } from "../config.js";
+import { watcherOwnerProblem } from "../auth/run-owner.js";
+import { hasAdmin } from "../auth/users.js";
+import { CONFIG_PATH, ConfigSchema, saveConfig } from "../config.js";
 import { spentToday } from "../engine/state.js";
 import { cleanRuns } from "../clean.js";
 import { listEvalReports } from "../evals.js";
+import { clickThrough } from "../notify.js";
 import { computeStats } from "../stats.js";
 import { HttpError, readJson, send } from "./http.js";
+import { hostAllowed, listenCovers, listenProblem } from "./net.js";
 import { watchersWithNext } from "./next.js";
 import type { Route } from "./server.js";
 
@@ -20,6 +24,8 @@ export const adminRoutes: Route = async (ctx, req, res, seg, method) => {
       spentToday: spentToday(opts.runsDir),
       dailyBudget: config.cost_limits ? config.daily_budget_usd : undefined,
       costLimits: config.cost_limits,
+      listening: ctx.listen,
+      clickThrough: process.platform === "darwin" ? clickThrough() : undefined,
     }), true;
   }
 
@@ -29,6 +35,19 @@ export const adminRoutes: Route = async (ctx, req, res, seg, method) => {
       const body = await readJson(req);
       let saved;
       try {
+        // Do not let a change shut out the browser that sends it (or the proxy it comes through).
+        const parsed = ConfigSchema.parse(body);
+        const next = parsed.server;
+        if (!hostAllowed(req.headers.host, next.allowed_hosts, opts.port)) {
+          throw new Error(`allowed_hosts must keep "${req.headers.host}", the name you are using now`);
+        }
+        if (!listenCovers(next.listen, req.socket.localAddress)) {
+          throw new Error(`listen "${next.listen}" would not answer on ${req.socket.localAddress}, where you are connected`);
+        }
+        const problem = listenProblem(next.listen, hasAdmin);
+        if (problem) throw new Error(problem);
+        const bad = watcherOwnerProblem(parsed.watchers, ctx.config().watchers);
+        if (bad) throw new Error(bad);
         saved = saveConfig(body);
       } catch (e) {
         throw new HttpError(400, `invalid config: ${(e as Error).message}`);

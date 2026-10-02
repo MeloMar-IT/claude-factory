@@ -52,8 +52,8 @@ function rateBar(ok, total) {
 
 export async function renderDashboard(main) {
   mount(main, h("div", { class: "row" }, h("span", { class: "spinner" }), " Loading…"));
-  const [s, info, evals, watchers, runs, next] = await Promise.all([api.stats(), api.info(), api.evals().catch(() => []), api.watchers().catch(() => []),
-    api.runs().catch(() => []), api.next().catch(() => ({ server: [] }))]);
+  const [s, info, evals, watchers, runs] = await Promise.all([api.stats(), api.info(), api.evals().catch(() => []), api.watchers().catch(() => []),
+    api.runs().catch(() => [])]);
   const { yours, rest } = waitingGroups(watchers);
   const group = ({ w, records }) => h("div", { class: "hold-group" },
     h("div", { class: "muted", style: { fontSize: "12.5px" } }, h("b", { class: "mono" }, w.id), ` · ${w.github_repo}${w.source === "issues" ? ` · label ${w.label}` : ""}`),
@@ -62,7 +62,6 @@ export async function renderDashboard(main) {
   const budget = info.dailyBudget;
   mount(main,
     h("div", { class: "toolbar" }, h("h1", {}, "Dashboard"), h("span", { class: "muted" }, "last 30 days")),
-    next.server?.length ? h("div", { class: "card", style: { marginBottom: "12px" } }, h("h3", {}, "Server"), nextList(next.server)) : null,
     h("div", { class: "tiles" },
       tile("Spent today", usd(info.spentToday), info.costLimits === false ? "estimate at API prices · no limits enforced" : budget ? `of ${usd(budget)} daily budget` : "no daily budget set"),
       tile("Spent (30 days)", usd(t.costUsd), `${t.runs} runs`),

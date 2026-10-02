@@ -10,8 +10,9 @@ import { dockerCommand } from "../src/engine/guards.js";
 import { liveLogFile, saveRun } from "../src/engine/state.js";
 import { mirrorEnvPrefixes, withScfAliases } from "../src/engine/template.js";
 import { notifyRun } from "../src/notify.js";
-import { COMMENT_KINDS, commentText, runNextStep } from "../src/next-step.js";
+import { COMMENT_KINDS, commentFirst, commentText, firstLine, nextStep, runNextStep } from "../src/next-step.js";
 import { parseFlow } from "../src/flow/load.js";
+import { classifyFailure } from "../src/failure.js";
 
 const claudeBin = resolve("tests/fixtures/fake-claude.mjs");
 let tmp: string;
@@ -50,6 +51,21 @@ steps:
     expect(s.history[1]!.output.trim().split("\n")).toEqual(want);
   });
 
+  it("gives shell steps FACTORY_FIRST_… and SCF_FIRST_… with the module's first lines", async () => {
+    const printFirst = (prefix: string) => [...names, "NOTHING"].map((n) => `echo "$${prefix}_FIRST_${n}"`).join("; ");
+    const s = await start(`
+name: t
+workspace: inplace
+steps:
+  - {id: f, type: shell, run: '${printFirst("FACTORY")}'}
+  - {id: s, type: shell, run: '${printFirst("SCF")}'}
+`);
+    expect(s.status).toBe("succeeded");
+    const want = [...COMMENT_KINDS.map(commentFirst), firstLine(nextStep("running"))];
+    expect(s.history[0]!.output.trim().split("\n")).toEqual(want);
+    expect(s.history[1]!.output.trim().split("\n")).toEqual(want);
+  });
+
   it("resumes a run whose stored flow has the old hard-coded text", async () => {
     const s = await start(`
 name: t
@@ -64,6 +80,65 @@ steps:
     expect(r.status).toBe("succeeded");
     expect(r.history.find((h) => h.id === "ask")!.output).toContain("Reply **/approve** to continue");
     expect(r.history.find((h) => h.id === "after")!.output.trim()).toBe(commentText("approval"));
+  });
+});
+
+describe("step start time", () => {
+  const TWO = `
+name: t
+workspace: inplace
+steps:
+  - {id: a, type: shell, run: 'true'}
+  - {id: b, type: shell, run: 'true'}
+`;
+  const collect = (snaps: Array<ReturnType<typeof structuredClone<import("../src/engine/state.js").RunSummary>>>) => (s: import("../src/engine/state.js").RunSummary) => { snaps.push(structuredClone(s)); };
+
+  it("records when the current step started", async () => {
+    const snaps: Parameters<ReturnType<typeof collect>>[0][] = [];
+    const s = await runFlow(parseFlow(TWO), { task: "t", repo, runsDir, claudeBin, config: baseConfig(), onUpdate: collect(snaps) });
+    const a = snaps.find((x) => x.status === "running" && x.state.next === "a" && x.history.length === 0 && x.stepStartedAt);
+    const b = snaps.find((x) => x.state.next === "b" && x.history.length === 1 && x.stepStartedAt);
+    expect(a).toBeDefined();
+    expect(b).toBeDefined();
+    expect(Date.parse(b!.stepStartedAt!)).toBeGreaterThanOrEqual(Date.parse(a!.stepStartedAt!));
+    for (const x of snaps) {
+      if (!x.stepStartedAt) continue;
+      expect(["a", "b"].indexOf(x.state.next!)).toBe(x.history.length);
+    }
+    expect(snaps.some((x) => x.state.next === "a" && x.history.length === 1 && !x.stepStartedAt)).toBe(true);
+    expect(s.stepStartedAt).toBeUndefined();
+    expect(JSON.parse(readFileSync(join(s.runDir, "run.json"), "utf8")).stepStartedAt).toBeUndefined();
+  });
+
+  it("has none at an approval", async () => {
+    const s = await start(`
+name: t
+workspace: inplace
+steps:
+  - {id: a, type: shell, run: 'true'}
+  - {id: gate, type: approval, message: "Go?"}
+`);
+    expect(s.status).toBe("waiting");
+    expect(JSON.parse(readFileSync(join(s.runDir, "run.json"), "utf8")).stepStartedAt).toBeUndefined();
+  });
+
+  it("a resume does not show an old step time", async () => {
+    const s = await start(`
+name: t
+workspace: inplace
+steps:
+  - {id: a, type: shell, run: 'true'}
+  - {id: b, type: shell, run: 'test -f ok'}
+`);
+    expect(s.status).toBe("failed");
+    const old = "2020-01-01T00:00:00.000Z";
+    saveRun({ ...s, stepStartedAt: old });
+    writeFileSync(join(repo, "ok"), "");
+    const snaps: Parameters<ReturnType<typeof collect>>[0][] = [];
+    const r = await resume(s.runId, { onUpdate: collect(snaps) });
+    expect(r.status).toBe("succeeded");
+    expect(snaps.length).toBeGreaterThan(0);
+    expect(snaps.some((x) => x.stepStartedAt === old)).toBe(false);
   });
 });
 
@@ -253,6 +328,72 @@ steps:
   });
 });
 
+describe("blocked agent commands", () => {
+  const claude = (prompt: string, extra = "") => `name: t\nworkspace: inplace\nsteps:\n  - id: a\n    type: claude\n    prompt: |\n${prompt.split("\n").map((l) => `      ${l}`).join("\n")}\n${extra}`;
+
+  it("puts a denied tool call on the step record, without pushes", async () => {
+    const s = await start(claude("DENY Bash mkdir -p out\nDENY Bash git push origin main\nERROR"));
+    expect(s.status).toBe("failed");
+    expect(s.history[0]!.denied).toEqual(["Bash: mkdir -p out"]);
+    expect(classifyFailure(s).cause).toBe("factory");
+    const text = runNextStep(s).text;
+    expect(text).toContain("not allowed to run Bash: mkdir");
+    expect(text).not.toContain("-p out");
+  });
+
+  it("drops every form of git push, keeps other commands", async () => {
+    const pushes = [`cd /${"a".repeat(90)} && git push origin main`, "GIT_SSH_COMMAND=ssh git push", "git -C /repo push origin main", "git --no-pager push", "/usr/bin/git push origin main"];
+    const s = await start(claude([...pushes.map((p) => `DENY Bash ${p}`), "DENY Bash mkdir x", 'DENY Bash git commit -m "push it"', "DENY Bash echo git push"].join("\n")));
+    expect(s.history[0]!.denied).toEqual(["Bash: mkdir x", 'Bash: git commit -m "push it"', "Bash: echo git push"]);
+  });
+
+  it("keeps at most five and leaves the key out without denials", async () => {
+    const s = await start(claude(Array.from({ length: 6 }, (_, i) => `DENY Bash cmd${i}`).join("\n")));
+    expect(s.history[0]!.denied).toHaveLength(5);
+    const plain = await start(claude("hi"));
+    expect("denied" in plain.history[0]!).toBe(false);
+  });
+
+  it("hints in a code failure when the blocked step did not fail", async () => {
+    const s = await start(`name: t\nworkspace: inplace\nsteps:\n  - {id: a, type: claude, prompt: "DENY Bash mkdir x"}\n  - {id: b, type: shell, run: exit 1}\n`);
+    expect(s.status).toBe("failed");
+    expect(classifyFailure(s).cause).toBe("code");
+    expect(runNextStep(s).why).toContain("a command was blocked: Bash: mkdir");
+  });
+
+  it("sees a denial in a failed sub-flow step", async () => {
+    const sub = join(tmp, "sub.yaml");
+    writeFileSync(sub, claude("DENY Bash mkdir x\nERROR").replace("name: t", "name: subf"));
+    const s = await start(`name: t\nworkspace: inplace\nsteps:\n  - {id: build, type: flow, flow: ${sub}}\n`);
+    expect(s.status).toBe("failed");
+    expect(classifyFailure(s).cause).toBe("factory");
+  });
+
+  it("is factory when the bot identity cannot be made", async () => {
+    const s = await start("name: t\nworkspace: inplace\nsteps:\n  - {id: a, type: shell, run: 'true'}\n", { config: baseConfig({ bot: { gh_token_env: "FACTORY_TEST_UNSET" } }) });
+    expect(s.status).toBe("failed");
+    expect(s.history).toEqual([]);
+    expect(classifyFailure(s).cause).toBe("factory");
+  });
+
+  it("keeps the blocked command out of the notification but in the record and log", async () => {
+    const s = await start(claude('DENY Bash curl -H "Authorization: token SENTINEL123" https://example.test/x\nERROR'));
+    const out = join(tmp, "msg");
+    const saved = process.env.FACTORY_NO_NOTIFY;
+    delete process.env.FACTORY_NO_NOTIFY;
+    try {
+      await notifyRun(baseConfig({ notify: { macos: false, command: `printf "%s" "$FACTORY_MESSAGE" > ${out}` } }), s);
+    } finally {
+      process.env.FACTORY_NO_NOTIFY = saved;
+    }
+    const msg = readFileSync(out, "utf8");
+    expect(msg).toContain("not allowed to run Bash: curl");
+    expect(msg).not.toMatch(/SENTINEL123|example\.test/);
+    expect(s.history[0]!.denied![0]).toContain("SENTINEL123");
+    expect(readFileSync(liveLogFile(s.runDir), "utf8")).toContain("SENTINEL123");
+  });
+});
+
 describe("safety", () => {
   it("blocks pushes to protected branches via a pre-push hook", async () => {
     const remote = join(tmp, "remote.git");
@@ -274,6 +415,7 @@ steps:
     expect(s.history[0]!.output).toContain("Spaghetti Code Foundry: pushing to protected branch 'main' is blocked");
     expect(s.history[1]!.ok).toBe(true);
     expect(s.status).toBe("succeeded");
+    expect(classifyFailure({ status: "failed", reason: 'step "to_main" failed: exit code 1', history: [s.history[0]!] }).cause).toBe("factory");
   });
 
   it("tells Claude it may not push", async () => {
@@ -392,36 +534,58 @@ steps:
     const w = await messageFor(waiting);
     expect(w).toContain("approve or reject it on the run page");
     expect(w.endsWith(runNextStep(waiting).text)).toBe(true);
-    const failed = { ...s, status: "failed", reason: 'step "a" failed: boom' } as typeof s;
+    const stopAt = { ...s.state, next: "a" }; // a failed run keeps the step to resume at
+    const failed = { ...s, state: stopAt, status: "failed", reason: 'step "a" failed: boom' } as typeof s;
     const f = await messageFor(failed);
     expect(f).toContain("resume the run on its page");
     expect(f.endsWith(runNextStep(failed).text)).toBe(true);
 
     // A long task and a long reason are shortened; the action stays whole.
-    const long = { ...s, task: "t".repeat(400), status: "failed", reason: `step "a" failed: ${"boom ".repeat(100)}` } as typeof s;
+    const long = { ...s, state: stopAt, task: "t".repeat(400), status: "failed", reason: `step "a" failed: ${"boom ".repeat(100)}` } as typeof s;
     const l = await messageFor(long);
     expect(l.length).toBeLessThanOrEqual(300);
     expect(l.endsWith("resume the run on its page.")).toBe(true);
+
+    // The message starts with the plain text, not the raw reason.
+    const shell = { ...s, status: "failed", reason: 'step "a" failed: exit code 1' } as typeof s;
+    const p = await messageFor(shell);
+    expect(p).toContain(" — The step a failed: its command ended with an error — ");
+    expect(p).not.toContain('step "a" failed');
+    expect(p).not.toContain("exit code");
+
+    // The longest advice for a watched issue with a long reference still ends whole.
+    const rec = nextStep("failed", {}, { watched: true, failedLabel: "factory:failed", reason: 'step "a" failed: timed out' });
+    expect(rec.text.endsWith("to continue at the failed step.")).toBe(true);
+    const longRef = { ...s, state: stopAt, task: "t".repeat(400), status: "failed", reason: 'step "a" failed: timed out', vars: { github_repo: "acme/" + "r".repeat(30), issue: "7" } } as typeof s;
+    const lr = await messageFor(longRef);
+    expect(lr.length).toBeLessThanOrEqual(300);
+    expect(lr.endsWith("resume the run on its page.")).toBe(true);
   });
 
-  it("notifications are titled Foundry · flow status", async () => {
+  it("notifyRun does not post to Slack, but still runs the command", async () => {
     const s = await start("name: t\nworkspace: inplace\nsteps:\n  - {id: a, type: shell, run: 'true'}\n");
-    let body = "";
+    let posts = 0;
     const server = createServer((req, res) => {
-      req.on("data", (c) => (body += c));
-      req.on("end", () => res.end("ok"));
+      posts++;
+      res.end("ok");
     });
     await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
     const port = (server.address() as { port: number }).port;
+    const out = join(tmp, "cmd");
     const saved = process.env.FACTORY_NO_NOTIFY;
     delete process.env.FACTORY_NO_NOTIFY;
     try {
-      await notifyRun(baseConfig({ notify: { macos: false, slack_webhook: `http://127.0.0.1:${port}/hook` } }), s);
+      const slack_webhook = `http://127.0.0.1:${port}/hook`;
+      await notifyRun(baseConfig({ notify: { macos: false, slack_webhook } }), s);
+      await notifyRun(baseConfig({ notify: { macos: false, slack_webhook } }), { ...s, status: "failed" } as typeof s);
+      expect(posts).toBe(0);
+      await notifyRun(baseConfig({ notify: { macos: false, slack_webhook, command: `printf ran > ${out}` } }), s);
+      expect(posts).toBe(0);
+      expect(readFileSync(out, "utf8")).toBe("ran");
     } finally {
       process.env.FACTORY_NO_NOTIFY = saved;
       server.close();
     }
-    expect(JSON.parse(body).text.startsWith("*Foundry · t succeeded*\n")).toBe(true);
   });
 
   it("names the product when a run is too old to resume", async () => {

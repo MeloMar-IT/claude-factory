@@ -104,6 +104,8 @@ export interface ClaudeRunResult {
   inputTokens?: number;
   outputTokens?: number;
   error?: string;
+  /** Tool calls Claude Code refused (at most 5), without intentional `git push`. */
+  denied?: string[];
 }
 
 interface StreamEvent {
@@ -115,6 +117,7 @@ interface StreamEvent {
   total_cost_usd?: number;
   num_turns?: number;
   usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number };
+  permission_denials?: Array<{ tool_name?: string; tool_input?: Record<string, unknown> }>;
   message?: { content?: Array<{ type?: string; name?: string; input?: Record<string, unknown> }> };
 }
 
@@ -140,6 +143,14 @@ function describeToolUse(name: string, input: Record<string, unknown> = {}): str
   const hint = input.file_path ?? input.command ?? input.pattern ?? input.description;
   const s = typeof hint === "string" ? hint.replace(/\s+/g, " ").slice(0, 80) : "";
   return s ? `${name}: ${s}` : name;
+}
+
+// An executed `git` (optionally path-qualified, after env assignments) at a command position, not in an argument.
+const GIT_PUSH = /(?:^|[;&|(\n])\s*(?:\w+=\S*\s+)*(?:\S*\/)?git(?:\s+-\S+(?:\s+[^-\s]\S*)?)*\s+push\b/;
+
+/** `git push` is always refused on purpose (see buildClaudeArgs); it is not a finding. */
+function isPush(tool: string, input: Record<string, unknown> = {}): boolean {
+  return tool === "Bash" && typeof input.command === "string" && GIT_PUSH.test(input.command);
 }
 
 /** Run the local Claude Code CLI headlessly. The prompt goes via stdin. */
@@ -180,7 +191,13 @@ export async function runClaude(o: ClaudeRunOptions): Promise<ClaudeRunResult> {
     };
   }
   const ok = !final.is_error && final.subtype === "success" && res.exitCode === 0;
+  const denied = [...new Set(
+    (Array.isArray(final.permission_denials) ? final.permission_denials : [])
+      .filter((d) => d && typeof d.tool_name === "string" && d.tool_name && !isPush(d.tool_name, d.tool_input))
+      .map((d) => describeToolUse(d.tool_name!, d.tool_input)),
+  )].slice(0, 5);
   return {
+    denied: denied.length ? denied : undefined,
     ok,
     output: final.result ?? "",
     sessionId: final.session_id,

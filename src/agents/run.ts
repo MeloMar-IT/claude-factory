@@ -71,11 +71,13 @@ async function runOn(t: Target, step: ClaudeStep, scope: Scope, engine: Engine, 
     isolated: engine.config.isolate_agents,
     effort,
   });
+  for (const d of r.denied ?? []) engine.log(`    ⚠ blocked: ${d}`);
   return {
     ok: r.ok,
     output: r.output,
     error: r.error,
     sessionId: r.sessionId,
+    ...(r.denied ? { denied: r.denied } : {}),
     // Claude Code prices unknown local models as if they were Claude — they cost nothing.
     costUsd: local ? 0 : r.costUsd,
     agent: t.label,

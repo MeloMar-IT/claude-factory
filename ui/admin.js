@@ -1,6 +1,6 @@
 import { api } from "./api.js";
 import { h, modal, mount, timeAgo, toast } from "./dom.js";
-import { nextList, watcherNext } from "./next.js";
+import { nextList, statusMark, watcherNext } from "./next.js";
 
 const f = (label, el, hint) => h("label", { class: "field" }, h("span", {}, label), el, hint ? h("small", {}, hint) : null);
 const input = (value, attrs = {}) => h("input", { value: value ?? "", ...attrs });
@@ -9,6 +9,30 @@ const check = (checked, label) => {
   return { el, row: h("label", { class: "row", style: { gap: "6px" } }, el, h("span", {}, label)) };
 };
 const num = (el) => (el.value.trim() === "" ? undefined : Number(el.value));
+
+/** The `notify` setting from the raw values of the Settings controls (strings for text, booleans for checkboxes). */
+export function notifyFrom(v) {
+  const t = (x) => String(x ?? "").trim();
+  return {
+    macos: !!v.macos,
+    slack_webhook: t(v.slack) || undefined,
+    command: t(v.command) || undefined,
+    on: v.on,
+    successes: !!v.successes,
+    throttle_minutes: t(v.throttle) === "" ? 5 : Number(v.throttle),
+    quiet_hours: t(v.quietFrom) && t(v.quietTo) ? { from: t(v.quietFrom), to: t(v.quietTo) } : undefined,
+    daily_summary_at: t(v.summaryAt) || undefined,
+  };
+}
+
+/** The `server` setting from the raw values of the Network controls. */
+export function serverFrom(v) {
+  return {
+    listen: String(v.listen ?? "").trim() || "127.0.0.1",
+    allowed_hosts: String(v.hosts ?? "").split(/[\s,]+/).filter(Boolean),
+    allow_insecure_http: !!v.insecure,
+  };
+}
 
 async function saveConfig(mutate, okMsg) {
   const config = await api.config();
@@ -19,13 +43,23 @@ async function saveConfig(mutate, okMsg) {
 
 // ── watchers ──
 
+/** The watcher as config.yaml has it: without what GET /api/watchers adds (the config rejects unknown keys). */
+/** The watcher's `owner` from the form field: left out of the saved config when empty. */
+export const ownerSetting = (text) => String(text ?? "").trim() || undefined;
+export const watcherConfig =({ status: _status, state: _state, ...cfg } = {}) => cfg;
+/** The watcher's own state with its "?". */
+export const watcherStateMark = (w) => (w.state ? statusMark(w.state, `state-${w.state.name}`) : null);
+
 const SOURCES = {
-  issues: "Issues with a label → run a flow",
-  "pr-feedback": "Review comments on Foundry PRs → pr-feedback",
-  "ci-failures": "CI red on the default branch → ci-fix PR",
-  schedule: "On a schedule → run a chore (PR if anything changed)",
+  issues: "Issues with a label → run a flow (default issue-gitflow)",
+  schedule: "On a schedule → run a flow (default release-daily)",
 };
-const DEFAULT_FLOWS = { issues: "github-issue", "pr-feedback": "pr-feedback", "ci-failures": "ci-fix", schedule: "chore" };
+// No shipped flow for these any more; still shown for a watcher that already uses them.
+const OLD_SOURCES = {
+  "pr-feedback": "Review comments on Foundry PRs → your flow",
+  "ci-failures": "CI red on the default branch → your flow",
+};
+const DEFAULT_FLOWS = { issues: "issue-gitflow", schedule: "release-daily" };
 const CHORES = [
   ["Dependencies", "Update dependencies that have known security vulnerabilities (npm audit / pip-audit / cargo audit etc.) to the smallest fixed version. Do not do major upgrades."],
   ["Flaky tests", "Run the test suite 3 times. If any test fails only sometimes, find why it is flaky and make it deterministic. Do not delete or skip tests."],
@@ -34,7 +68,7 @@ const CHORES = [
   ["Lint / TODOs", "Run the linter and fix the warnings that are safe to fix. Resolve TODO/FIXME comments that are quick and clearly specified."],
 ];
 const describeWatcher = (w) => {
-  const flow = w.flow === "github-issue" ? DEFAULT_FLOWS[w.source] : w.flow;
+  const flow = w.flow === "default" ? DEFAULT_FLOWS[w.source] ?? "(no flow)" : w.flow;
   return {
     issues: `issues labelled “${w.label}” → ${flow}`,
     "pr-feedback": `PR review comments → ${flow}`,
@@ -44,7 +78,7 @@ const describeWatcher = (w) => {
 };
 
 async function editWatcher(existing, flows) {
-  const w = existing ?? { id: "", source: "issues", flow: "github-issue", github_repo: "", label: "claude-factory", every: "5m", max_per_tick: 1, enabled: true, vars: {} };
+  const w = existing ?? { id: "", source: "issues", flow: "issue-gitflow", github_repo: "", label: "claude-factory", every: "5m", max_per_tick: 1, enabled: true, vars: {} };
   return modal(existing ? `Edit watcher ${w.id}` : "Add a watcher", (close) => {
     const id = input(w.id, { class: "mono", placeholder: "my-repo", disabled: !!existing });
     const repo = input(w.github_repo, { class: "mono", placeholder: "owner/repo" });
@@ -53,7 +87,7 @@ async function editWatcher(existing, flows) {
       if (Object.values(DEFAULT_FLOWS).includes(flow.value)) flow.value = DEFAULT_FLOWS[source.value];
       if (source.value === "schedule" && /^\d+(s|m)$/.test(every.value)) every.value = "7d";
       showFor();
-    } }, Object.entries(SOURCES).map(([v, label]) => h("option", { value: v, selected: w.source === v }, label)));
+    } }, Object.entries({ ...SOURCES, ...(OLD_SOURCES[w.source] ? { [w.source]: OLD_SOURCES[w.source] } : {}) }).map(([v, label]) => h("option", { value: v, selected: w.source === v }, label)));
     const task = h("textarea", { rows: 3, placeholder: "What the chore should do each time", value: w.task ?? "" });
     const branch = input(w.branch ?? "", { class: "mono", placeholder: "default branch" });
     const exclude = input((w.exclude_labels ?? []).join(", "), { class: "mono", placeholder: "e.g. geni, wontfix" });
@@ -63,6 +97,7 @@ async function editWatcher(existing, flows) {
     const every = input(w.every, { class: "mono", placeholder: "5m" });
     const max = input(String(w.max_per_tick), { type: "number", min: 1 });
     const vars = h("textarea", { rows: 3, class: "mono", placeholder: "test_cmd=npm test\nrequire_approval=yes", value: Object.entries(w.vars ?? {}).map(([k, v]) => `${k}=${v}`).join("\n") });
+    const owner = input(w.owner ?? "", { placeholder: "name@example.com" });
     const enabled = check(w.enabled, "Enabled");
     const err = h("p", { class: "status bad", style: { margin: 0 } });
     const save = h("button", { class: "primary", onClick: async () => {
@@ -74,12 +109,13 @@ async function editWatcher(existing, flows) {
       }
       const list = (el) => el.value.split(",").map((x) => x.trim()).filter(Boolean);
       // Keep settings this form doesn't show (status label names, pauses, …).
-      const { status: _runtime, ...kept } = existing ?? {};
+      const kept = watcherConfig(existing ?? {});
       const next = { ...kept, id: id.value.trim(), source: source.value, flow: flow.value.trim(), github_repo: repo.value.trim(), label: label.value.trim(),
         every: every.value.trim(), max_per_tick: Number(max.value) || 1, enabled: enabled.el.checked, vars: parsedVars,
         task: source.value === "schedule" ? task.value.trim() : undefined,
         branch: source.value === "ci-failures" ? branch.value.trim() || undefined : undefined,
         exclude_labels: list(exclude),
+        owner: ownerSetting(owner.value),
         at: source.value === "schedule" ? at.value.trim() || undefined : undefined,
         timezone: source.value === "schedule" ? tz.value.trim() || undefined : undefined };
       try {
@@ -113,9 +149,13 @@ async function editWatcher(existing, flows) {
       atField,
       h("div", { class: "grid" }, f("Check every", every, "e.g. 5m, 1h — for chores: how often it runs, e.g. 1d, 7d"), f("Max new runs per check", max)),
       f("Variables for each run", vars, "One name=value per line. github_repo and issue/pr are set automatically."),
+      f("Owner of the runs", owner, "E-mail of an account. Empty: the first admin."),
       enabled.row, err, h("div", { class: "row" }, h("span", { class: "spacer" }), save));
   });
 }
+
+/** " · last successful check 5m ago", or a short text when there is none yet. */
+export const lastOkText = (st) => (!st ? "" : st.lastOk ? ` · last successful check ${timeAgo(st.lastOk)}` : " · no successful check yet");
 
 export async function renderWatchers(main) {
   const [watchers, flows] = await Promise.all([api.watchers(), api.flows()]);
@@ -131,7 +171,7 @@ export async function renderWatchers(main) {
       return h("div", { class: "card" },
         h("div", { class: "row" },
           h("b", { class: "mono" }, w.id),
-          h("span", { class: `pill ${!w.enabled ? "cancelled" : st?.lastError ? "failed" : "succeeded"}` }, !w.enabled ? "disabled" : st?.lastError ? "error" : "active"),
+          watcherStateMark(w),
           h("span", { class: "mono" }, w.github_repo),
           h("span", { class: "muted" }, describeWatcher(w)),
           h("span", { class: "spacer" }),
@@ -146,7 +186,7 @@ export async function renderWatchers(main) {
           w.source === "schedule" ? (w.at ? `checks every ${w.every}` : `max 1 run per ${w.every}`) : `every ${w.every} · max ${w.max_per_tick} per check`,
           w.exclude_labels?.length ? ` · skips ${w.exclude_labels.join(", ")}` : "",
           w.pause_while_pr_open ? ` · pauses while a ${w.pause_while_pr_open}* PR is open` : "",
-          st?.lastTick ? ` · last check ${timeAgo(st.lastTick)}` : "",
+          w.enabled ? lastOkText(st) : "",
           st?.nextTick ? ` · next ${new Date(st.nextTick).toLocaleTimeString()}` : ""),
         w.enabled && watcherNext(w).length ? h("div", {}, h("div", { class: "muted", style: { fontSize: "12.5px", marginTop: "6px" } }, "What happens next:"), nextList(watcherNext(w))) : null,
         st?.lastError ? h("details", {}, h("summary", {}, "Error details"), h("pre", { class: "mono" }, st.lastError)) : null,
@@ -195,6 +235,11 @@ export async function renderSettings(main) {
   const macos = check(c.notify.macos, "macOS notifications");
   const slack = input(c.notify.slack_webhook ?? "", { class: "mono", placeholder: "https://hooks.slack.com/services/…" });
   const cmd = input(c.notify.command ?? "", { class: "mono", placeholder: 'e.g. say "$FACTORY_STATUS"' });
+  const successes = check(c.notify.successes, "Also notify when a run succeeds");
+  const throttle = input(c.notify.throttle_minutes ?? 5, { type: "number", min: 1 });
+  const quietFrom = input(c.notify.quiet_hours?.from ?? "", { type: "time" });
+  const quietTo = input(c.notify.quiet_hours?.to ?? "", { type: "time" });
+  const summaryAt = input(c.notify.daily_summary_at ?? "", { type: "time" });
   const on = ["succeeded", "failed", "stopped", "waiting", "cancelled"].map((s) => [s, check(c.notify.on.includes(s), s)]);
   const botName = input(c.bot.name ?? "", { placeholder: "claude-factory[bot]" });
   const botEmail = input(c.bot.email ?? "", { class: "mono" });
@@ -205,17 +250,26 @@ export async function renderSettings(main) {
   const sbxClaude = check(c.sandbox.claude, "Sandbox agents' shell commands by default");
   const secrets = check(c.secret_scan !== false, "Block pushes that add secrets (API keys, tokens, private keys, .env files)");
   const sbxImage = input(c.sandbox.docker_image ?? "", { class: "mono", placeholder: "e.g. node:22" });
+  const net = c.server ?? { listen: "127.0.0.1", allowed_hosts: [], allow_insecure_http: false };
+  const listenSel = h("select", {}, ["127.0.0.1", "::1", "0.0.0.0", "::"].map((a) => h("option", { value: a }, a)));
+  listenSel.value = net.listen;
+  const hostsIn = input(net.allowed_hosts.join(", "), { class: "mono", placeholder: "mymac.local" });
+  const insecure = check(net.allow_insecure_http, "Allow plain HTTP from other computers");
   const err = h("div");
 
   const save = async () => {
     const next = {
       ...c,
+      server: serverFrom({ listen: listenSel.value, hosts: hostsIn.value, insecure: insecure.el.checked }),
       daily_budget_usd: num(budget),
       cost_limits: limits.el.checked,
       concurrency: Number(conc.value) || 1,
       protected_branches: protectedB.value.split(",").map((s) => s.trim()).filter(Boolean),
       secret_scan: secrets.el.checked,
-      notify: { macos: macos.el.checked, slack_webhook: slack.value.trim() || undefined, command: cmd.value.trim() || undefined, on: on.filter(([, x]) => x.el.checked).map(([s]) => s) },
+      notify: notifyFrom({
+        macos: macos.el.checked, slack: slack.value, command: cmd.value, on: on.filter(([, x]) => x.el.checked).map(([s]) => s),
+        successes: successes.el.checked, throttle: throttle.value, quietFrom: quietFrom.value, quietTo: quietTo.value, summaryAt: summaryAt.value,
+      }),
       bot: { name: botName.value.trim() || undefined, email: botEmail.value.trim() || undefined, gh_token_env: botToken.value.trim() || undefined },
       github_app: appId.value.trim() ? { app_id: appId.value.trim(), installation_id: instId.value.trim(), private_key_path: keyPath.value.trim() } : undefined,
       sandbox: { claude: sbxClaude.el.checked || undefined, docker_image: sbxImage.value.trim() || undefined },
@@ -239,6 +293,14 @@ export async function renderSettings(main) {
       h("div", { class: "grid" },
         f("Daily budget ($)", budget, `Spent today: $${info.spentToday.toFixed(2)}. When reached, runs pause (stopped) and resume the next day.`),
         f("Runs at the same time", conc))),
+    section("Network",
+      h("p", { class: "muted", style: { margin: 0 } }, "Who can reach this page. For other computers, use HTTPS through a proxy on this Mac (see the user guide)."),
+      info.listening && info.listening !== net.listen ? h("p", { class: "status bad", style: { margin: 0 } }, `Now listening on ${info.listening} — restart the server to use ${net.listen}`) : null,
+      h("div", { class: "grid" },
+        f("Listen on", listenSel, "127.0.0.1: this Mac only. 0.0.0.0 and :: reach all networks (needs an admin account). Needs a restart."),
+        f("Allowed host names", hostsIn, "Names people type, comma-separated, e.g. mymac.local.")),
+      insecure.row,
+      h("p", { class: "muted", style: { margin: "4px 0 0", fontSize: "12.5px" } }, "Warning: with plain HTTP, passwords and session cookies cross the network unencrypted. Use it only on a network you trust.")),
     section("Safety",
       f("Protected branches", protectedB, "Pushes to these are refused during runs (glob patterns, comma-separated). Also enable branch protection on GitHub."),
       secrets.row,
@@ -246,8 +308,17 @@ export async function renderSettings(main) {
       f("Docker image for sandboxed shell steps", sbxImage, "Steps marked “Run in Docker” (like tests) run in this image with only the workspace mounted.")),
     section("Notifications",
       macos.row,
+      h("p", { class: "muted", style: { margin: "4px 0 10px", fontSize: "12.5px" } },
+        "Tells you only when something waits for you. ",
+        info.clickThrough === true ? "A click opens the item." : info.clickThrough === false ? "Install terminal-notifier (brew install terminal-notifier) and restart to open the item with a click." : ""),
+      successes.row,
+      h("div", { class: "grid" },
+        f("At most one notification every … minutes", throttle),
+        f("Quiet hours from", quietFrom, "Leave both empty for no quiet hours."),
+        f("Quiet hours to", quietTo),
+        f("Daily summary at", summaryAt, "Empty: no summary.")),
       h("div", { class: "grid" }, f("Slack webhook", slack), f("Command", cmd, "Runs with $FACTORY_STATUS, $FACTORY_RUN_ID, $FACTORY_MESSAGE.")),
-      h("div", { class: "row" }, h("span", { class: "muted" }, "Notify when a run is:"), on.map(([, x]) => x.row))),
+      h("div", { class: "row" }, h("span", { class: "muted" }, "Run the command when a run is:"), on.map(([, x]) => x.row))),
     section("Bot identity",
       h("p", { class: "muted", style: { margin: 0 } }, "By default commits and comments are made as you (your git config and gh login)."),
       h("div", { class: "grid" }, f("Commit author name", botName), f("Commit author email", botEmail), f("Env var with the bot's GitHub token", botToken, "Used as GH_TOKEN for gh and git pushes."))),

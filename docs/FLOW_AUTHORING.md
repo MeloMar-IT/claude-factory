@@ -55,6 +55,7 @@ sandbox:                      # optional
   docker_image: node:22       # image for shell steps with `sandbox: true`
 vars:                         # optional: variables with defaults; the user can override them per run
   test_cmd: npm test
+publish: {...}                # optional: publish the flow to users — leave it out unless asked; see below
 steps: [...]                  # required, at least one
 ```
 
@@ -186,6 +187,49 @@ Succeeds when all of them succeed.
 
 Runs in the same workspace. May not contain approval steps.
 
+## Publishing a flow to users
+
+Only when the person asks for it. A `publish:` section lets people with the role `user` start the
+flow and fill in some of its variables:
+
+```yaml
+name: ask-a-question
+description: Answers a question about the code
+workspace: worktree
+vars:
+  topic: ""
+  test_cmd: npm test
+publish:
+  enabled: true
+  name: Ask about the code        # optional: what users see; falls back to name
+  description: Answers a question about this repository
+  vars:                           # each key must be a variable above; leave out the ones to hide
+    topic:
+      mode: input                 # the user fills it in
+      label: Topic
+      help: What should the answer be about?
+      required: true
+      default: ""
+    test_cmd:
+      mode: fixed                 # shown to the user, cannot be changed
+steps:
+  - id: answer
+    type: shell
+    run: echo "Topic is $FACTORY_VAR_TOPIC"
+```
+
+- Modes: `hidden` (same as leaving the variable out), `fixed` (`label`, `help`) and `input`
+  (`label`, `help`, `default`, `required`).
+- Never write `version`; the server sets it when the flow is saved.
+- A published flow (`enabled: true`) cannot have `type: flow` steps.
+- Names of inputs use letters, digits, `_` and `-`, and must not give the same environment name as
+  another variable (`foo-bar` and `foo_bar` do).
+- In a shell step read an input as `$FACTORY_VAR_NAME`, never as `{{vars.name}}`.
+- The `message` of an approval step is shown to users. In a published flow it may only use
+  `{{task}}`, `{{vars.<name>}}` of a `fixed` or `input` variable (or `github_repo` or `issue`) and
+  `{{steps.<id>.output}}`. `{{vars}}`, `{{workdir}}`, `{{run.*}}`, `{{learnings}}` and other step
+  fields are refused.
+
 ## Templates and environment variables
 
 In `prompt`, `message` and `vars` values, `{{…}}` placeholders are replaced:
@@ -217,6 +261,7 @@ these environment variables instead (always quote them: `"$FACTORY_TASK"`):
 | `$FACTORY_BASE_SHA` | The commit the run started from (`git diff $FACTORY_BASE_SHA` = everything the run changed) |
 | `$FACTORY_TOOLS` | Folder with helper scripts (below) |
 | `$FACTORY_NEXT_<REASON>` | The closing "what to do next" sentence for a comment on the issue. `<REASON>` is `QUESTIONS`, `PLANNER_QUESTIONS`, `APPROVE_PLAN`, `APPROVE_SPLIT` or `APPROVAL`; e.g. `$FACTORY_NEXT_APPROVAL` is "It waits for your approval — reply /approve or /reject." The sentence is fixed per reason. Write `"_${FACTORY_NEXT_APPROVAL}_"` with braces when `_` follows |
+| `$FACTORY_FIRST_<REASON>`, `$FACTORY_FIRST_NOTHING` | The bold first line of a comment on the issue. `<REASON>` is the same five as above; e.g. `$FACTORY_FIRST_APPROVE_PLAN` is `**What you need to do:** Reply /approve or /reject.` `$FACTORY_FIRST_NOTHING` is for a comment that needs no answer: `**Nothing needed from you** — it is being worked on.` Print it first, then an empty line (`echo "$FACTORY_FIRST_APPROVAL"; echo`), and always quote it because it contains `*` |
 | `$FACTORY_LEARNINGS_FILE` | File where lessons for this repository are kept |
 
 Every `FACTORY_…` variable is also set as `SCF_…` (e.g. `$SCF_TASK`); the built-in flows use `FACTORY_…`.

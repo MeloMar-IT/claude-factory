@@ -1,18 +1,21 @@
+import { watcherOwner } from "../auth/run-owner.js";
 import type { WatcherConfig } from "../config.js";
 import { spentToday, type RunSummary } from "../engine/state.js";
+import { errorLine, explainError } from "../errors.js";
 import { loadFlow } from "../flow/load.js";
 import { canWrite, commentsAfter, ensureLabel, gh, ghJson, isBot, issueComments, setLabels, type Comment, type Issue } from "../github.js";
-import { countQuestions, LIMIT_RETRY_MS, nextStep, runNextStep, type NextData, type BlockerInfo, type NextKind, type NextStep } from "../next-step.js";
+import { countQuestions, firstLine, runClosedIssue, LIMIT_RETRY_MS, nextStep, runNextStep, type NextData, type BlockerInfo, type NextKind, type NextStep } from "../next-step.js";
+import { LABEL_WORDS } from "../words.js";
 import { dependencies, openDependencies } from "./deps.js";
 import type { Scheduler } from "./scheduler.js";
 
 /** Status labels the watcher puts on issues. Remove one to have the issue picked up again. */
 export const STATUS_LABELS = {
-  working: { name: "factory:working", color: "1d4ed8", description: "Spaghetti Code Foundry is working on this" },
-  done: { name: "factory:done", color: "15803d", description: "Spaghetti Code Foundry finished this" },
-  needsInfo: { name: "factory:needs-info", color: "d97706", description: "Spaghetti Code Foundry needs more information — reply to continue" },
-  waiting: { name: "factory:waiting-approval", color: "7c3aed", description: "Spaghetti Code Foundry waits for /approve or /reject" },
-  failed: { name: "factory:failed", color: "b91c1c", description: "Spaghetti Code Foundry run failed — remove this label to retry" },
+  working: { name: "factory:working", color: "1d4ed8", description: LABEL_WORDS.working },
+  done: { name: "factory:done", color: "15803d", description: LABEL_WORDS.done },
+  needsInfo: { name: "factory:needs-info", color: "d97706", description: LABEL_WORDS.needsInfo },
+  waiting: { name: "factory:waiting-approval", color: "7c3aed", description: LABEL_WORDS.waiting },
+  failed: { name: "factory:failed", color: "b91c1c", description: LABEL_WORDS.failed },
 } as const;
 type LabelKey = keyof typeof STATUS_LABELS;
 type LabelNames = Record<LabelKey, string>;
@@ -29,12 +32,35 @@ export function labelNames(cfg: WatcherConfig): LabelNames {
   };
 }
 
+/**
+ * The failure comment on an issue: what to do first, then what happened and why, then the raw text under Details.
+ * `factoryWhat` (the record's "The Foundry failed, not the code: …") is set when the Foundry itself failed:
+ * the first line says so and it replaces the What and Why lines.
+ */
+export function failureComment(s: RunSummary, next: NextStep): string {
+  const factoryWhat = next.cause === "factory" ? next.why : undefined;
+  const e = explainError(s.reason);
+  const failed = [...s.history].reverse().find((h) => !h.ok);
+  const tail = (failed?.output || failed?.error || "").trim().slice(-3000);
+  const raw = [e.detail, tail].filter(Boolean).join("\n\n");
+  return [
+    firstLine(next),
+    "",
+    factoryWhat ? "🤖 **Spaghetti Code Foundry** itself failed on this issue, not the code." : "🤖 **Spaghetti Code Foundry** could not finish this issue.",
+    "",
+    `- **What happened:** ${factoryWhat ?? e.what}.`,
+    ...(factoryWhat ? [] : [`- **Why:** ${e.why.charAt(0).toUpperCase()}${e.why.slice(1)}.`]),
+    failed ? `\nLast failing step: \`${failed.id}\`${failed.visit > 1 ? ` (attempt ${failed.visit})` : ""}` : "",
+    raw ? `\n<details><summary>Details</summary>\n\n\`\`\`\n${raw.replace(/`{3,}/g, (m) => "ˋ".repeat(m.length))}\n\`\`\`\n</details>` : "",
+    `\n<!-- claude-factory run=${s.runId} -->`,
+  ].join("\n");
+}
+
 /** Flow each source runs when the watcher doesn't name one. */
-export const DEFAULT_FLOWS: Record<WatcherConfig["source"], string> = {
-  issues: "github-issue",
-  "pr-feedback": "pr-feedback",
-  "ci-failures": "ci-fix",
-  schedule: "chore",
+export const DEFAULT_FLOWS: Partial<Record<WatcherConfig["source"], string>> = {
+  issues: "issue-gitflow",
+  schedule: "release-daily",
+  // pr-feedback and ci-failures have no shipped flow any more: such a watcher names its own.
 };
 
 /** "5m" | "30s" | "1h" | "7d" | "10" (minutes) → ms. */
@@ -61,6 +87,10 @@ export interface WatcherDeps {
 export interface WatcherStatus {
   id: string;
   lastTick?: string;
+  /** End of the last check that finished without an error. */
+  lastOk?: string;
+  /** When the watcher was started (for the stale check, before its first check). */
+  startedAt?: string;
   nextTick?: string;
   lastError?: string;
   lastActions: string[];
@@ -77,7 +107,7 @@ export interface Hold {
   title?: string;
   /** The record's one sentence. */
   reason: string;
-  /** Link to what it waits for (e.g. the daily pull request). */
+  /** Link to what it waits for (e.g. the release pull request). */
   url?: string;
   next: NextStep;
   /** A time from GitHub (comment, pull request); the same after a restart. */
@@ -134,9 +164,14 @@ export class Watcher {
   tracked: TrackedIssue[] = [];
   private timer?: NodeJS.Timeout;
   private ticking = false;
+  private tickToken = 0;
+  /** A check that takes longer is given up, so "Check now" and the next check work again (gh has no timeout). */
+  checkTimeoutMs = 10 * 60_000;
   private kickAgain = false;
   private setupDone = false;
   private stopped = false;
+  /** Runs whose end will set the label (so a run is waited for once). */
+  private waitingFor = new Set<string>();
 
   private L: LabelNames;
   private allStatus: string[];
@@ -152,16 +187,25 @@ export class Watcher {
   }
 
   private flowName() {
-    // "github-issue" is the schema default; other sources mean their own flow unless one is chosen.
-    return this.cfg.flow === "github-issue" ? DEFAULT_FLOWS[this.cfg.source] : this.cfg.flow;
+    // "default" (the schema default) means the source's own flow.
+    if (this.cfg.flow !== "default") return this.cfg.flow;
+    const f = DEFAULT_FLOWS[this.cfg.source];
+    if (!f) throw new Error(`a ${this.cfg.source} watcher must name its flow (there is no default for it)`);
+    return f;
   }
 
   start() {
     this.stopped = false;
+    this.status.startedAt = new Date().toISOString();
     const loop = async () => {
       await this.tick();
       if (this.stopped) return;
-      const every = parseInterval(this.cfg.every);
+      let every: number;
+      try {
+        every = parseInterval(this.cfg.every);
+      } catch {
+        return; // tick() reported the invalid interval as the watcher's error
+      }
       this.status.nextTick = new Date(Date.now() + every).toISOString();
       this.timer = setTimeout(loop, every);
     };
@@ -183,11 +227,18 @@ export class Watcher {
   private async setup() {
     if (this.setupDone) return;
     await gh(["repo", "view", this.repo, "--json", "nameWithOwner"]).catch((e: Error) => {
-      throw new Error(`cannot access ${this.repo} with gh: ${e.message.split("\n")[0]}`);
+      throw new Error(`cannot access ${this.repo} with gh: ${errorLine(e.message)}`);
     });
     if (this.cfg.source === "issues") {
-      await ensureLabel(this.repo, this.cfg.label, "c2410c", "Let Spaghetti Code Foundry work on this issue");
+      const review = this.cfg.vars.review_plan_label ?? "";
+      const same = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase(); // GitHub label names ignore case
+      const both = same(review, this.cfg.label); // one label starts the work and asks for a plan check
+      await ensureLabel(this.repo, this.cfg.label, "c2410c", both ? LABEL_WORDS.triggerReview : LABEL_WORDS.trigger);
       for (const [k, l] of Object.entries(STATUS_LABELS)) await ensureLabel(this.repo, this.L[k as LabelKey], l.color, l.description);
+      if (review.trim() && !both) {
+        if (this.allStatus.some((s) => same(s, review))) this.act(`label ${review} is the review label and a status label — it keeps the status description`);
+        else await ensureLabel(this.repo, review, "0e7490", LABEL_WORDS.review);
+      }
     }
     loadFlow(this.flowName(), this.d.repo); // fail early on a missing flow
     this.setupDone = true;
@@ -203,19 +254,26 @@ export class Watcher {
   async tick(): Promise<void> {
     if (this.ticking) return;
     this.ticking = true;
+    const token = ++this.tickToken;
+    let timer: NodeJS.Timeout | undefined;
     try {
-      await this.setup();
-      if (this.cfg.source === "issues") await this.tickIssues();
-      else if (this.cfg.source === "pr-feedback") await this.tickPrs();
-      else if (this.cfg.source === "ci-failures") await this.tickCi();
-      else await this.tickSchedule();
-      this.status.lastError = undefined;
-      this.status.errorSince = undefined;
+      await Promise.race([
+        this.check(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`the check took longer than ${Math.round(this.checkTimeoutMs / 1000)}s and was given up`)), this.checkTimeoutMs);
+        }),
+      ]);
+      if (token === this.tickToken) {
+        this.status.lastError = undefined;
+        this.status.errorSince = undefined;
+        this.status.lastOk = new Date().toISOString();
+      }
     } catch (e) {
-      this.status.lastError = (e as Error).message.split("\n")[0];
+      this.status.lastError = errorLine((e as Error).message);
       this.status.errorSince ??= new Date().toISOString();
       this.d.log(`[${this.cfg.id}] ! ${this.status.lastError}`);
     } finally {
+      clearTimeout(timer);
       this.status.lastTick = new Date().toISOString();
       this.ticking = false;
       if (this.kickAgain && !this.stopped) {
@@ -223,6 +281,16 @@ export class Watcher {
         setTimeout(() => void this.tick(), 0);
       }
     }
+  }
+
+  /** One check; throws when it fails. */
+  private async check() {
+    parseInterval(this.cfg.every);
+    await this.setup();
+    if (this.cfg.source === "issues") await this.tickIssues();
+    else if (this.cfg.source === "pr-feedback") await this.tickPrs();
+    else if (this.cfg.source === "ci-failures") await this.tickCi();
+    else await this.tickSchedule();
   }
 
   /** Latest run per issue/PR number for this repo (newest first in the list). */
@@ -264,7 +332,7 @@ export class Watcher {
       const lockKey = `${this.repo}#ci:${r.workflowName}`;
       if (this.d.scheduler.isLocked(lockKey) || started >= this.cfg.max_per_tick || !this.budgetLeft()) continue;
       const { flow } = loadFlow(this.flowName(), this.d.repo);
-      const runId = this.d.scheduler.submit({
+      const runId = this.queue({
         kind: "run", flow, repo: this.d.repo,
         task: `Fix failing CI: ${r.workflowName} on ${branch} (${r.headSha.slice(0, 7)})`,
         vars: { ...this.cfg.vars, github_repo: this.repo, ci_run: String(r.databaseId), ci_workflow: r.workflowName, ci_sha: r.headSha, ci_url: r.url },
@@ -291,42 +359,59 @@ export class Watcher {
     const lockKey = `${this.repo}#chore:${this.cfg.id}`;
     if (this.d.scheduler.isLocked(lockKey) || !this.budgetLeft()) return;
     const { flow } = loadFlow(this.flowName(), this.d.repo);
-    const runId = this.d.scheduler.submit({
+    const runId = this.queue({
       kind: "run", flow, repo: this.d.repo, task: this.cfg.task ?? "",
       vars: { ...this.cfg.vars, github_repo: this.repo, chore_watcher: this.cfg.id },
     }, { lockKey, source: `watcher ${this.cfg.id} schedule` });
     this.act(`scheduled chore → run ${runId}`);
   }
 
+  /** Every run a watcher starts goes through here: a new run belongs to the watcher's owner; a resume keeps the run's own. */
+  private queue(job: Parameters<Scheduler["submit"]>[0], meta: { lockKey?: string; source?: string }): string {
+    return this.d.scheduler.submit(job, { ...meta, ...(job.kind === "run" ? { owner: watcherOwner(this.cfg.owner) } : {}) });
+  }
+
   private submit(n: number, kind: "issue" | "pr", job: Parameters<Scheduler["submit"]>[0]): string {
-    return this.d.scheduler.submit(job, { lockKey: kind === "issue" ? this.lockFor(n) : `${this.repo}#${n}`, source: `watcher ${this.cfg.id} ${kind} #${n}` });
+    return this.queue(job, { lockKey: kind === "issue" ? this.lockFor(n) : `${this.repo}#${n}`, source: `watcher ${this.cfg.id} ${kind} #${n}` });
   }
 
   /** Update labels when a run we started finishes (the next tick would also reconcile). */
   private labelWhenDone(issue: number, runId: string) {
+    if (this.waitingFor.has(runId)) return;
+    this.waitingFor.add(runId);
     void this.d.scheduler.wait(runId).then(async (s) => {
+      this.waitingFor.delete(runId);
       if (!s || this.stopped) return;
+      // Cancelled while the issue is closed: clear the labels, no failure comment.
+      if (s.status === "cancelled" && (await this.issueClosed(issue))) {
+        await setLabels(this.repo, issue, undefined, this.allStatus).catch(() => {});
+        this.act(`#${issue} (closed) → cancelled · label → none`);
+        return;
+      }
       // A split original was closed in favour of its parts: clear its labels, don't mark it done.
       const split = s.status === "succeeded" && s.history.at(-1)?.id === "create_split";
       const label = split ? undefined : labelFor(s, this.L);
       const remove = s.status === "succeeded" ? [...this.allStatus, ...this.cfg.remove_on_done] : this.allStatus;
       await setLabels(this.repo, issue, label, remove).catch(() => {});
       if (label === this.L.failed && this.cfg.comment_on_failure) await this.commentFailure(issue, s).catch(() => {});
-      this.act(`#${issue} → ${s.status}${s.reason ? ` (${s.reason})` : ""} · $${s.totalCostUsd.toFixed(3)}`);
+      const why = s.reason ? explainError(s.reason) : undefined;
+      this.act(`#${issue} → ${s.status}${why ? ` (${why.what}: ${why.why})` : ""} · $${s.totalCostUsd.toFixed(3)} · label → ${label ?? "none"}`);
     });
+  }
+
+  private async issueClosed(issue: number): Promise<boolean> {
+    try {
+      const out = await gh(["issue", "view", String(issue), "--repo", this.repo, "--json", "state", "--jq", ".state"]);
+      return out.trim().toUpperCase() === "CLOSED";
+    } catch {
+      return false; // unknown: count it as open
+    }
   }
 
   /** Tell the issue why the run failed, with the tail of the failing step's output. */
   private async commentFailure(issue: number, s: RunSummary) {
-    const failed = [...s.history].reverse().find((h) => !h.ok);
-    const tail = (failed?.output || failed?.error || "").trim().slice(-3000);
-    const body = [
-      "🤖 **Spaghetti Code Foundry** could not finish this issue.",
-      failed ? `\nLast failing step: \`${failed.id}\`${failed.visit > 1 ? ` (attempt ${failed.visit})` : ""}` : "",
-      tail ? `\n<details><summary>Output (tail)</summary>\n\n\`\`\`\n${tail.replace(/```/g, "ˋˋˋ")}\n\`\`\`\n</details>` : "",
-      `\n_${this.held("failed", { number: issue, title: "" }, { failedLabel: this.L.failed, reason: s.reason ?? s.status, runId: s.runId }).next.text}_`,
-      `\n<!-- claude-factory run=${s.runId} -->`,
-    ].join("\n");
+    const next = this.failedHold({ number: issue, title: "" }, s, s.reason).next;
+    const body = failureComment(s, next);
     await gh(["issue", "comment", String(issue), "--repo", this.repo, "--body", body]);
   }
 
@@ -350,13 +435,13 @@ export class Watcher {
       kind: "run", flow, task: "", repo: this.d.repo,
       vars: { trigger_label: this.cfg.label, ...this.cfg.vars, github_repo: this.repo, issue: String(issue.number) },
     });
-    this.act(`#${issue.number} “${issue.title}” → run ${runId}`);
+    this.act(`#${issue.number} “${issue.title}” → run ${runId} · label → ${this.L.working}`);
     return runId;
   }
 
-  private resume(issue: number, runId: string, why: string, decision?: { approved: boolean; by: string; note?: string }) {
+  private resume(issue: number, runId: string, why: string, decision?: { approved: boolean; by: string; note?: string }, labelled = false) {
     this.submit(issue, "issue", { kind: "resume", runId, decision });
-    this.act(`#${issue} ${why} → resuming run ${runId}`);
+    this.act(`#${issue} ${why} → resuming run ${runId}${labelled ? ` · label → ${this.L.working}` : ""}`);
   }
 
   /** A hold for a reason; the text comes from the next-step module. */
@@ -365,12 +450,24 @@ export class Watcher {
     return toHold(nextStep(kind, { repo: this.repo, issue: issue?.number, title: issue?.title }, { watched: true, issueUrl, ...data }));
   }
 
+  /** A hold for an issue with the failed label: the run's own record when it failed, else a plain one (a cancelled run also gets the label). */
+  private failedHold(issue: { number: number; title: string }, run?: RunSummary, reason?: string): Hold {
+    if (run?.status === "failed") {
+      const next = runNextStep(run, { watched: true, failedLabel: this.L.failed, title: issue.title });
+      if (next.kind === "failed") return toHold(next);
+    }
+    return this.held("failed", issue, { failedLabel: this.L.failed, runId: run?.runId, reason });
+  }
+
   /** A hold for an issue whose run exists. */
   private heldRun(issue: Issue, run: RunSummary, extra: Parameters<typeof runNextStep>[1] = {}): Hold {
     return toHold(runNextStep(run, { watched: true, failedLabel: this.L.failed, title: issue.title, ...extra }));
   }
 
   private async tickIssues() {
+    // A check that was given up (timeout) must not start runs or store holds next to a newer check.
+    const mine = this.tickToken;
+    const alive = () => { if (mine !== this.tickToken) throw new Error("this check was given up"); };
     const issues = await ghJson<Issue[]>(["issue", "list", "--repo", this.repo, "--label", this.cfg.label, "--state", "open", "--limit", "100", "--json", "number,title,labels,body"]);
     let everyIssue: Issue[] | undefined; // all issues, fetched once per tick when a dependency must be checked
     const openDepsOf = async (issue: Issue) => {
@@ -410,13 +507,15 @@ export class Watcher {
     const questionCount = (comments: Comment[]) => countQuestions([...comments].reverse().find(isBot)?.body);
 
     for (const issue of issues.sort((a, b) => a.number - b.number)) {
+      alive();
       const n = issue.number;
       if (issue.labels.some((l) => excluded.has(l.name))) continue;
       const status = issue.labels.map((l) => l.name).find((l) => this.allStatus.includes(l));
       const run = runs.get(String(n));
       // A job that is still queued has no run file yet: take its id from the queue.
-      const queuedId = run ? undefined : this.d.scheduler.queue().pending.find((p) => p.githubRepo === this.repo && p.issue === String(n))?.runId;
-      const track: TrackedIssue = { issue: n, title: issue.title, runId: run?.runId ?? queuedId, done: status === this.L.done };
+      // A queued job may be a fresh run next to an older run file: the queued one is the current work.
+      const queuedId = this.d.scheduler.queue().pending.find((p) => p.githubRepo === this.repo && p.issue === String(n))?.runId;
+      const track: TrackedIssue = { issue: n, title: issue.title, runId: queuedId ?? run?.runId, done: status === this.L.done };
       tracked.push(track);
 
       // Questions asked up front (no run yet): wait for an answer, then start like a new issue.
@@ -430,13 +529,21 @@ export class Watcher {
         }
         answeredEarly = true;
       }
+      // A run that is working (running or queued, e.g. approved or resumed in the UI): the label says so.
+      if (run && (this.d.scheduler.isActive(run.runId) || this.d.scheduler.isQueued(run.runId))) {
+        if (status && status !== this.L.working) {
+          await setLabels(this.repo, n, this.L.working, this.allStatus);
+          this.act(`#${n} label → ${this.L.working} (its run is working)`);
+          this.labelWhenDone(n, run.runId);
+        }
+        const areaWait = run.status === "running" ? this.d.areaWait?.(run) : undefined;
+        if (areaWait) holds.push(this.heldRun(issue, run, { areaWait }));
+        continue;
+      }
       if (this.d.scheduler.isLocked(this.lockFor(n))) {
-        if (this.cfg.one_at_a_time && (!status || answeredEarly) && run?.status !== "running") {
+        if (this.cfg.one_at_a_time && (!status || answeredEarly)) {
           const blockingRun = this.d.scheduler.queue().active.find((a) => a.lockKey === this.lockFor(n))?.runId;
           holds.push(this.held("one_at_a_time", issue, { blockingRun }));
-        } else if (run?.status === "running") {
-          const areaWait = this.d.areaWait?.(run);
-          if (areaWait) holds.push(this.heldRun(issue, run, { areaWait }));
         }
         continue;
       }
@@ -458,6 +565,7 @@ export class Watcher {
         if (paused) { holds.push(this.held("release", issue, { pr: paused })); continue; }
         if (!budgetLeft) { holds.push(this.held("daily_budget", issue)); continue; }
         if (started >= this.cfg.max_per_tick) { holds.push(this.held("starting", issue, { maxPerTick: this.cfg.max_per_tick })); continue; }
+        alive();
         // It ran before: GitHub's issue list can lag behind (a just-failed or just-finished issue still
         // listed without its new label, or as open). Ask for this issue directly before starting again.
         if (run && run.status !== "running" && !(await this.reallyStartable(n))) continue;
@@ -487,10 +595,9 @@ export class Watcher {
           // Resumable, but max_per_tick is used up: only the per-check limit is in the way.
           holds.push(this.held("starting", issue, { maxPerTick: this.cfg.max_per_tick, runId: run.runId }));
         }
-      } else if (run && (((status === this.L.waiting || status === this.L.needsInfo) && !["waiting", "stopped", "running"].includes(run.status)) ||
-        (status === this.L.failed && run.status === "succeeded"))) {
-        // Reconcile: the run went on (e.g. approved in the UI, or the server restarted meanwhile)
-        // but the label still says it waits for someone.
+      } else if (run && status !== this.L.done && labelFor(run, this.L) !== status) {
+        // Reconcile: the label does not match the newest run (e.g. approved in the UI, or the
+        // server restarted meanwhile). A done label is left alone.
         const label = labelFor(run, this.L);
         await setLabels(this.repo, n, label, run.status === "succeeded" ? [...this.allStatus, ...this.cfg.remove_on_done] : this.allStatus);
         this.act(`#${n} label → ${label}`);
@@ -499,7 +606,7 @@ export class Watcher {
         const answers = commentsAfter(comments, isBot);
         if (answers.length && started < this.cfg.max_per_tick) {
           await setLabels(this.repo, n, this.L.working, this.allStatus);
-          this.resume(n, run.runId, `answered by @${answers[0]!.author.login}`);
+          this.resume(n, run.runId, `answered by @${answers[0]!.author.login}`, undefined, true);
           this.labelWhenDone(n, run.runId);
           started++;
         } else if (!answers.length) {
@@ -511,18 +618,20 @@ export class Watcher {
         const decision = await this.findDecision(run.runId, await issueComments(this.repo, n));
         if (decision) {
           await setLabels(this.repo, n, this.L.working, this.allStatus);
-          this.resume(n, run.runId, `${decision.approved ? "approved" : "rejected"} by @${decision.by}`, decision);
+          this.resume(n, run.runId, `${decision.approved ? "approved" : "rejected"} by @${decision.by}`, decision, true);
           this.labelWhenDone(n, run.runId);
         } else {
           holds.push(this.heldRun(issue, run));
         }
       } else if (status === this.L.failed) {
-        holds.push(this.held("failed", issue, { failedLabel: this.L.failed, runId: run?.runId, reason: run?.status === "failed" ? run.reason : undefined }));
+        holds.push(this.failedHold(issue, run, run?.status === "failed" ? run.reason : undefined));
       }
     }
     if (toCheck.length) await this.precheck(toCheck, holds, budgetLeft);
-    await this.tidyClosed(runs).catch((e) => this.d.log(`[${this.cfg.id}] tidying closed issues: ${(e as Error).message}`));
+    let tidyError: Error | undefined;
+    await this.tidyClosed(runs, holds).catch((e: Error) => { tidyError = e; });
     if (paused && !holds.some((x) => x.next.kind === "release")) holds.unshift(this.held("release", undefined, { pr: paused }));
+    alive();
     const before = new Map((this.status.holds ?? []).map((h) => [holdKey(h), h.seen]));
     const now = new Date().toISOString();
     for (const h of holds) {
@@ -532,22 +641,31 @@ export class Watcher {
     this.status.holds = holds;
     this.status.pausedBy = paused ? { number: paused.number, url: paused.url, title: paused.title, createdAt: paused.createdAt } : undefined;
     this.tracked = tracked;
+    // The closed-issue scan is part of the check: its failure is the check's error.
+    if (tidyError) throw new Error(`tidying closed issues: ${errorLine(tidyError.message)}`);
   }
 
   /**
    * Closed issues (e.g. by a merged pull request) that still carry a waiting/working/error label:
    * done if their last run succeeded, otherwise just without the stale status labels.
    */
-  private async tidyClosed(runs: Map<string, RunSummary>) {
+  private async tidyClosed(runs: Map<string, RunSummary>, holds: Hold[]) {
+    const pending = this.d.scheduler.queue().pending;
     const stale = [this.L.working, this.L.waiting, this.L.needsInfo, this.L.failed];
     const closed = await ghJson<Issue[]>(["issue", "list", "--repo", this.repo, "--state", "closed", "--limit", "30",
-      "--search", `label:${stale.map((l) => `"${l}"`).join(",")} sort:updated-desc`, "--json", "number,labels,state"]);
+      "--search", `label:${stale.map((l) => `"${l}"`).join(",")} sort:updated-desc`, "--json", "number,title,labels,state"]);
     for (const issue of closed) {
       if (issue.state && issue.state.toUpperCase() !== "CLOSED") continue;
       const names = issue.labels.map((l) => l.name);
       if (!names.some((l) => stale.includes(l))) continue;
       const run = runs.get(String(issue.number));
-      if (run && ["running", "waiting"].includes(run.status)) continue; // still busy; leave it
+      const queuedId = pending.find((p) => p.githubRepo === this.repo && p.issue === String(issue.number))?.runId;
+      const working = !!queuedId || (!!run && (this.d.scheduler.isActive(run.runId) || this.d.scheduler.isQueued(run.runId)));
+      if (working || run?.status === "waiting") {
+        // Still busy: change nothing. Say so, unless the run closed the issue itself.
+        if (!(run?.runId === (queuedId ?? run?.runId) && runClosedIssue(run))) holds.push(this.held("closed_elsewhere", { number: issue.number, title: issue.title ?? "" }, { runId: queuedId ?? run?.runId, runWaits: !working }));
+        continue;
+      }
       const done = run?.status === "succeeded" && run.history.at(-1)?.id !== "create_split";
       await setLabels(this.repo, issue.number, done ? this.L.done : undefined, [...this.allStatus, ...this.cfg.remove_on_done].filter((l) => names.includes(l)));
       this.act(`#${issue.number} (closed) label → ${done ? this.L.done : "none"}`);
@@ -574,7 +692,7 @@ export class Watcher {
     if (!budgetLeft) return hold("daily_budget");
     const { flow } = loadFlow(this.cfg.precheck_flow!, this.d.repo);
     const nums = list.map((i) => i.number);
-    const runId = this.d.scheduler.submit({
+    const runId = this.queue({
       kind: "run", flow, task: "", repo: this.d.repo,
       vars: { ...this.cfg.vars, github_repo: this.repo, issues: nums.join(" "), needs_info_label: this.L.needsInfo },
     }, { lockKey, source: `watcher ${this.cfg.id} precheck ${nums.map((x) => `#${x}`).join(" ")}` });

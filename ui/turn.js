@@ -54,13 +54,19 @@ export async function startBadge() {
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const pad = (n) => String(n).padStart(2, "0");
 
-/** "since 14:05" today, "since 28 Sep, 14:05" on another day, "" for no valid time. */
-export function sinceText(iso, now = new Date()) {
+/** "14:05" today, "28 Sep, 14:05" on another day, "" for no valid time. */
+export function timeText(iso, now = new Date()) {
   const d = new Date(iso);
   if (!iso || Number.isNaN(d.getTime())) return "";
   const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  if (d.toDateString() === now.toDateString()) return `since ${hm}`;
-  return `since ${d.getDate()} ${MONTHS[d.getMonth()]}, ${hm}`;
+  if (d.toDateString() === now.toDateString()) return hm;
+  return `${d.getDate()} ${MONTHS[d.getMonth()]}, ${hm}`;
+}
+
+/** "since 14:05" today, "since 28 Sep, 14:05" on another day, "" for no valid time. */
+export function sinceText(iso, now = new Date()) {
+  const t = timeText(iso, now);
+  return t ? `since ${t}` : "";
 }
 
 const stories = (n) => `${n} ${n === 1 ? "story" : "stories"}`;
@@ -83,7 +89,7 @@ function itemView(item, { onDismiss, onLeave }) {
         h("b", {}, item.what)),
       h("div", {}, h("span", { class: "hold-action" }, n.action)),
       h("div", { class: "muted" }, n.why),
-      item.unblocks > 0 ? h("div", { class: "muted" }, `Holds back ${stories(item.unblocks)}`) : null,
+      item.unblocks > 0 ? h("div", { class: "muted" }, `${stories(item.unblocks)} ${item.unblocks === 1 ? "waits" : "wait"} for this`) : null,
       since ? h("div", { class: "muted", title: new Date(item.since).toLocaleString() }, since) : null),
     h("div", { class: "turn-side" },
       action,

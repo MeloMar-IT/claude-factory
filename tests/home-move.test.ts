@@ -1,8 +1,10 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { findSession } from "../src/auth/sessions.js";
+import { createUser, startSession } from "../src/auth/users.js";
 import { ConfigSchema, WatcherSchema } from "../src/config.js";
 import { resumeRun, runFlow } from "../src/engine/runner.js";
 import { loadRun } from "../src/engine/state.js";
@@ -11,6 +13,9 @@ import { MARKER_NAME, migrateDataHome, NOTE_NAME, repairWorktrees, type MigrateO
 import { Scheduler } from "../src/queue/scheduler.js";
 import { Watcher } from "../src/queue/watcher.js";
 import { claudeBin, fakeGithub } from "./helpers/fake-github.js";
+import { randomUUID } from "node:crypto";
+import { addCredential, readSecret } from "../src/credentials/store.js";
+import { fakeKeychain, fakeToken } from "./helpers/keychain.js";
 
 const git = (cwd: string, ...a: string[]) =>
   execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", ...a], { cwd, encoding: "utf8", stdio: "pipe" });
@@ -68,6 +73,66 @@ const migrate = (o: Partial<MigrateOptions> = {}) =>
 const worktrees = (repo: string) => git(repo, "worktree", "list", "--porcelain");
 const real = (p: string) => realpathSync(p);
 const leftovers = () => readdirSync(tmp).filter((n) => n.includes(".migrating-"));
+
+describe("account files in the move", () => {
+  it("copies users.json and sessions.json byte for byte and keeps their mode", () => {
+    const body = JSON.stringify({ version: 1, users: [{ name: `${from}/x` }] });
+    for (const f of ["users.json", "sessions.json", "credentials.json"]) writeFileSync(join(from, f), body, { mode: 0o600 });
+    writeFileSync(join(from, "queue.json"), body);
+    writeFileSync(join(from, "audit.jsonl"), `{"note":"${from}/x"}\n`, { mode: 0o600 });
+    mkdirSync(join(from, "runs", "r9"), { recursive: true });
+    writeFileSync(join(from, "runs", "r9", "users.json"), body);
+    writeFileSync(join(from, "runs", "r9", "run.json"), JSON.stringify({ runId: "r9", status: "succeeded" }));
+    expect(migrate().status).toBe("migrated");
+    for (const f of ["users.json", "sessions.json", "credentials.json"]) {
+      expect(readFileSync(join(to, f))).toEqual(Buffer.from(body));
+      expect(statSync(join(to, f)).mode & 0o777).toBe(0o600);
+    }
+    expect(readFileSync(join(to, "audit.jsonl"), "utf8")).toBe(`{"note":"${from}/x"}\n`);
+    expect(statSync(join(to, "audit.jsonl")).mode & 0o777).toBe(0o600);
+    expect(readFileSync(join(to, "queue.json"), "utf8")).toContain(to);
+    expect(readFileSync(join(to, "runs", "r9", "users.json"), "utf8")).toContain(to);
+  });
+
+  it("a moved sessions.json still finds its session", async () => {
+    const saved = process.env.FACTORY_HOME;
+    try {
+      process.env.FACTORY_HOME = from;
+      const user = await createUser({ name: "Ann", email: "ann@example.com", password: "test-password-12345", role: "admin" });
+      const started = startSession(user.id, user.passwordHash)!;
+      const bytes = readFileSync(join(from, "sessions.json"));
+      expect(findSession(started.token)).toBeDefined();
+      expect(migrate().status).toBe("migrated");
+      process.env.FACTORY_HOME = to;
+      expect(findSession(started.token)?.userId).toBe(user.id);
+      expect(readFileSync(join(to, "sessions.json"))).toEqual(bytes);
+      expect(statSync(join(to, "sessions.json")).mode & 0o777).toBe(0o600);
+    } finally {
+      if (saved === undefined) delete process.env.FACTORY_HOME;
+      else process.env.FACTORY_HOME = saved;
+    }
+  });
+});
+
+describe("credentials in the move", () => {
+  it("a credential added in the old folder is read after the move", () => {
+    const saved = process.env.FACTORY_HOME;
+    const kc = fakeKeychain();
+    try {
+      process.env.FACTORY_HOME = from;
+      const token = fakeToken();
+      const owner = randomUUID();
+      const c = addCredential({ userId: owner, type: "token", name: "gh", secret: token }, { ownerOk: () => true });
+      expect(migrate().status).toBe("migrated");
+      process.env.FACTORY_HOME = to;
+      expect(readSecret(owner, c.id)).toBe(token);
+    } finally {
+      kc.remove();
+      if (saved === undefined) delete process.env.FACTORY_HOME;
+      else process.env.FACTORY_HOME = saved;
+    }
+  });
+});
 
 describe("moving waiting runs with git worktrees", () => {
   it("repairs the worktree, so a waiting run is approved and resumed in the new folder", async () => {
@@ -200,7 +265,7 @@ describe("watchers across the move", () => {
     mkdirSync(join(old, "runs"), { recursive: true });
     const make = (runsDir: string) => {
       const scheduler = new Scheduler({ runsDir, config: () => config, claudeBin });
-      const watcher = new Watcher(WatcherSchema.parse({ id: "w", github_repo: "acme/app", vars: { test_cmd: "test -f feature.txt" } }), {
+      const watcher = new Watcher(WatcherSchema.parse({ id: "w", github_repo: "acme/app", flow: "github-issue", vars: { test_cmd: "test -f feature.txt" } }), {
         scheduler, runsDir, repo: gh.tmp, log: () => {},
       });
       return { scheduler, watcher };

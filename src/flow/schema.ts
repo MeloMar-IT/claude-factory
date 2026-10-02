@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { varEnvName } from "../engine/template.js";
 
 /** Reserved transition targets. Anything else must be a step id. */
 /** next: following step · end: succeed · fail: fail · stop: halt as "stopped" (needs a human). */
@@ -23,7 +24,34 @@ const stepId = z
   .string()
   .regex(/^[a-zA-Z][\w-]*$/, "step id must start with a letter and contain only letters, digits, _ or -");
 
-const varsRecord = z.record(z.string(), z.union([z.string(), z.number(), z.boolean()]).transform(String));
+const varValue = z.union([z.string(), z.number(), z.boolean()]).transform(String);
+const varsRecord = z.record(z.string(), varValue);
+
+/** Names a user may fill in: the same pattern the API accepts for run variables. */
+export const VAR_NAME_RE = /^[\w-]+$/;
+export const isVarName = (k: string): boolean => VAR_NAME_RE.test(k) && k !== "__proto__";
+
+const shown = { label: z.string().trim().min(1).max(80).optional(), help: z.string().max(300).optional() };
+
+/** How one variable shows to users: hidden (admin default), fixed (shown, read-only) or input (user fills in). */
+export const PublishVarSchema = z.discriminatedUnion("mode", [
+  z.object({ mode: z.literal("hidden") }).strict(),
+  z.object({ mode: z.literal("fixed"), ...shown }).strict(),
+  z.object({ mode: z.literal("input"), ...shown, default: varValue.optional(), required: z.boolean().optional() }).strict(),
+]);
+
+/** What users may run and fill in. `version` is raised by the server on save. */
+export const PublishSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    version: z.number().int().positive().default(1),
+    name: z.string().trim().min(1).max(80).optional(),
+    description: z.string().max(500).optional(),
+    vars: z.record(z.string(), PublishVarSchema).default({}),
+  })
+  .strict();
+export type Publish = z.infer<typeof PublishSchema>;
+export type PublishVar = z.infer<typeof PublishVarSchema>;
 
 const baseStep = {
   id: stepId,
@@ -206,6 +234,7 @@ export const FlowSchema = z
     limits: z.object({ max_cost_usd: z.number().positive().optional() }).strict().default({}),
     sandbox: SandboxSchema.default({}),
     vars: varsRecord.default({}),
+    publish: PublishSchema.optional(),
     steps: z.array(StepSchema).min(1),
   })
   .strict()
@@ -219,6 +248,55 @@ export const FlowSchema = z
       ids.add(s.id);
     });
     checkStepRefs(flow.steps, ids, (path, message) => ctx.addIssue({ code: "custom", path, message }));
+    for (const [key, spec] of Object.entries(flow.publish?.vars ?? {})) {
+      const path = ["publish", "vars", key];
+      if (!Object.hasOwn(flow.vars, key)) ctx.addIssue({ code: "custom", path, message: `unknown variable "${key}"` });
+      if (spec.mode === "input" && !isVarName(key)) {
+        ctx.addIssue({ code: "custom", path, message: "a variable users fill in needs a name of letters, digits, _ or -" });
+      }
+    }
+    const inputs = Object.entries(flow.publish?.vars ?? {}).filter(([, spec]) => spec.mode === "input").map(([key]) => key);
+    for (const key of inputs) {
+      // A shell step sees variables as FACTORY_VAR_<NAME>; two names with the same result would overwrite each other.
+      const clash = Object.keys(flow.vars).find((other) => other !== key && varEnvName(other) === varEnvName(key));
+      if (clash !== undefined) {
+        ctx.addIssue({ code: "custom", path: ["publish", "vars", key], message: `"${key}" and "${clash}" give the same environment variable ${varEnvName(key)}` });
+      }
+    }
+    if (inputs.length) {
+      // A value a user fills in must not be pasted into a shell command.
+      flow.steps.forEach((s, i) => {
+        if (s.type !== "shell") return;
+        for (const m of s.run.matchAll(/\{\{\s*vars\.([\w-]+)\s*\}\}/g)) {
+          if (inputs.includes(m[1]!)) {
+            ctx.addIssue({ code: "custom", path: ["steps", i, "run"], message: `"${m[1]}" is filled in by users; in a shell step use $${varEnvName(m[1]!)} instead of {{vars.${m[1]}}}` });
+          }
+        }
+      });
+    }
+    if (flow.publish?.enabled) {
+      // The message of an approval is shown to users: it may only name variables they see.
+      const seen = (key: string) => key === "github_repo" || key === "issue" || ["fixed", "input"].includes(flow.publish?.vars[key]?.mode ?? "");
+      flow.steps.forEach((s, i) => {
+        if (s.type !== "approval") return;
+        for (const m of s.message.matchAll(/\{\{\s*([\w.-]+)\s*\}\}/g)) {
+          const path = m[1]!;
+          const root = path.split(".")[0]!;
+          if (!["task", "vars", "steps"].includes(root) || (root === "steps" && !/^steps\.[\w-]+\.output$/.test(path))) {
+            ctx.addIssue({ code: "custom", path: ["steps", i, "message"], message: `the approval message is shown to users; {{${path}}} can hold paths or setup, so use only {{task}}, {{vars.<name>}} or {{steps.<id>.output}}` });
+          } else if (path === "vars") {
+            ctx.addIssue({ code: "custom", path: ["steps", i, "message"], message: "the approval message is shown to users; {{vars}} holds every variable, so name only the variables users see" });
+          } else if (path.startsWith("vars.") && !seen(path.slice(5))) {
+            ctx.addIssue({ code: "custom", path: ["steps", i, "message"], message: `the approval message is shown to users; "${path.slice(5)}" is hidden from them or not listed in publish.vars, so use only variables users see` });
+          }
+        }
+      });
+      flow.steps.forEach((s, i) => {
+        if (s.type === "flow") {
+          ctx.addIssue({ code: "custom", path: ["steps", i, "type"], message: "a flow published to users cannot have sub-flow steps; copy the steps in" });
+        }
+      });
+    }
   });
 
 export type Flow = z.infer<typeof FlowSchema>;

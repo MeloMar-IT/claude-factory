@@ -185,12 +185,17 @@ function minutesUntil(t: ReleaseTime, now: Date): number | undefined {
   return (Number(m[1]) * 60 + Number(m[2]) - here + 1440) % 1440;
 }
 
-/** The "HH:MM" of the release that comes first after `now`, judged in each watcher's time zone; undefined for none. */
-export function soonestAt(times: ReleaseTime[], now = new Date()): string | undefined {
-  let best: { at: string; wait: number } | undefined;
+/** The release that comes first after `now`, judged in each watcher's time zone, with the minutes to wait (wraps at 24 h); undefined for none. */
+export function soonest(times: ReleaseTime[], now = new Date()): { at: string; inMinutes: number } | undefined {
+  let best: { at: string; inMinutes: number } | undefined;
   for (const t of times) {
     const wait = minutesUntil(t, now);
-    if (wait !== undefined && (!best || wait < best.wait)) best = { at: t.at, wait };
+    if (wait !== undefined && (!best || wait < best.inMinutes)) best = { at: t.at, inMinutes: wait };
   }
-  return best?.at;
+  return best;
+}
+
+/** The "HH:MM" of the release that comes first after `now`; undefined for none. */
+export function soonestAt(times: ReleaseTime[], now = new Date()): string | undefined {
+  return soonest(times, now)?.at;
 }

@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Stand-in for the `claude` CLI: reads the prompt from stdin, emits stream-json.
 // Prompt directives: "WRITE <file> <text>" writes a file; "SAY <text>" sets the result;
-// "ERROR" returns an error result. Args are echoed into the result for assertions.
+// "ERROR" returns an error result; "DENY <Tool> <text>" adds a refused tool call to the result's
+// permission_denials (command for Bash, file_path otherwise). Args are echoed into the result for assertions.
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 
@@ -11,7 +12,10 @@ const args = process.argv.slice(2);
 const emit = (o) => process.stdout.write(JSON.stringify(o) + "\n");
 
 let result = `ok args=${args.join(" ")}`;
+const denials = [];
 for (const line of prompt.split("\n")) {
+  const dn = line.match(/^DENY (\S+) (.*)$/);
+  if (dn) denials.push({ tool_name: dn[1], tool_use_id: `toolu_${denials.length}`, tool_input: dn[1] === "Bash" ? { command: dn[2] } : { file_path: dn[2] } });
   const w = line.match(/^WRITE (\S+) (.*)$/);
   if (w) {
     emit({ type: "assistant", message: { content: [{ type: "tool_use", name: "Write", input: { file_path: w[1] } }] } });
@@ -109,5 +113,6 @@ emit({
   session_id: args.includes("--resume") ? resumed : `sess-${Math.random().toString(36).slice(2, 8)}`,
   total_cost_usd: cost,
   num_turns: 1,
+  ...(denials.length ? { permission_denials: denials } : {}),
 });
 process.exit(isError ? 1 : 0);

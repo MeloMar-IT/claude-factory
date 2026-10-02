@@ -261,3 +261,128 @@ describe("run source and briefs", () => {
     expect(listRunBriefs(runsDir).map((x) => x.runId)).toEqual([b.runId]);
   });
 });
+
+describe("effectiveVars and frozen variables", () => {
+  const flowOf = (workspace: string, vars = "") => parseFlow(`name: t\nworkspace: ${workspace}\n${vars}steps:\n  - id: a\n    type: shell\n    run: "true"\n`);
+  const folderConfig = (vars: string) => {
+    execFileSync("mkdir", ["-p", join(repo, ".claude-factory")]);
+    writeFileSync(join(repo, ".claude-factory", "config.yaml"), `vars:\n${vars}`);
+  };
+
+  it("given beats the folder, and the folder beats the flow default", async () => {
+    const { effectiveVars } = await import("../src/engine/runner.js");
+    folderConfig("  a: folder\n  b: folder\n");
+    const flow = flowOf("inplace", "vars:\n  a: flow\n  b: flow\n  c: flow\n");
+    expect(effectiveVars(flow, repo, { a: "given" })).toEqual({ a: "given", b: "folder", c: "flow" });
+  });
+
+  it("ignores the folder config for an empty workspace", async () => {
+    const { effectiveVars } = await import("../src/engine/runner.js");
+    folderConfig("  a: folder\n");
+    expect(effectiveVars(flowOf("empty", "vars:\n  a: flow\n"), repo)).toEqual({ a: "flow" });
+  });
+
+  it("counts a broken folder config as empty and logs it", async () => {
+    const { effectiveVars } = await import("../src/engine/runner.js");
+    execFileSync("mkdir", ["-p", join(repo, ".claude-factory")]);
+    writeFileSync(join(repo, ".claude-factory", "config.yaml"), "vars: [1, 2]\n");
+    const lines: string[] = [];
+    expect(effectiveVars(flowOf("inplace", "vars:\n  a: flow\n"), repo, {}, (m) => lines.push(m))).toEqual({ a: "flow" });
+    expect(lines.join("\n")).toContain("ignoring repo config");
+  });
+
+  it("runFlow with frozenVars does not read the folder config", async () => {
+    folderConfig("  a: folder\n");
+    const s = await runFlow(flowOf("inplace"), { task: "t", repo, runsDir: join(tmp, "runs"), claudeBin, vars: { b: "given" }, frozenVars: true });
+    expect(s.vars).toEqual({ b: "given" });
+    const s2 = await runFlow(flowOf("inplace"), { task: "t", repo, runsDir: join(tmp, "runs"), claudeBin, vars: { b: "given" } });
+    expect(s2.vars).toEqual({ a: "folder", b: "given" });
+  });
+});
+
+describe("Scheduler owner, frozen variables and run ids", () => {
+  const shell = () => parseFlow(`name: t\nworkspace: empty\nsteps:\n  - id: a\n    type: shell\n    run: "true"\n`);
+  const idle = async () => ({ ...(await import("../src/config.js")).ConfigSchema.parse({}), concurrency: 0 });
+
+  it("knows the owner of a pending job, also after a restart, and saves it in run.json", async () => {
+    const { Scheduler } = await import("../src/queue/scheduler.js");
+    const { ConfigSchema } = await import("../src/config.js");
+    const runsDir = join(tmp, "runs");
+    const queueFile = join(tmp, "queue.json");
+    const stopped = await idle();
+    const a = new Scheduler({ runsDir, queueFile, config: () => stopped });
+    const id = a.submit({ kind: "run", flow: shell(), task: "t", repo, vars: {} }, { source: "ui", owner: "user-1" });
+    const bare = a.submit({ kind: "run", flow: shell(), task: "t", repo, vars: {} }, { source: "ui" });
+    expect(a.isQueued(id)).toBe(true);
+    expect(a.ownerOf(id)).toBe("user-1");
+    expect(a.ownerOf(bare)).toBeUndefined();
+    expect(JSON.parse(readFileSync(queueFile, "utf8"))[0].owner).toBe("user-1");
+    const b = new Scheduler({ runsDir, queueFile, config: () => ConfigSchema.parse({}) });
+    expect(b.ownerOf(id)).toBe("user-1");
+    await b.wait(id);
+    await b.idle();
+    expect(JSON.parse(readFileSync(join(runsDir, id, "run.json"), "utf8")).owner).toBe("user-1");
+    expect(b.ownerOf(id)).toBe("user-1");
+    expect(JSON.parse(readFileSync(join(runsDir, bare, "run.json"), "utf8")).owner).toBeUndefined();
+    expect(b.ownerOf(bare)).toBeUndefined();
+    expect(b.briefs().find((x) => x.runId === id)?.owner).toBe("user-1");
+  });
+
+  it("answers undefined and does not throw for a run.json that is broken or has no string owner", async () => {
+    const { Scheduler } = await import("../src/queue/scheduler.js");
+    const { ConfigSchema } = await import("../src/config.js");
+    const runsDir = join(tmp, "runs");
+    const sched = new Scheduler({ runsDir, config: () => ConfigSchema.parse({}) });
+    const s = await runFlow(shell(), { task: "t", repo, runsDir, claudeBin, runId: "20260101-000000-dddd", owner: "u" });
+    const file = join(s.runDir, "run.json");
+    expect(sched.ownerOf(s.runId)).toBe("u");
+    writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, "utf8")), owner: 5 }));
+    expect(sched.ownerOf(s.runId)).toBeUndefined();
+    writeFileSync(file, "{ broken");
+    expect(sched.ownerOf(s.runId)).toBeUndefined();
+    expect(sched.ownerOf("nope")).toBeUndefined();
+  });
+
+  it("a queued run keeps the variables it was queued with when the folder config changes", async () => {
+    const { Scheduler } = await import("../src/queue/scheduler.js");
+    const { ConfigSchema } = await import("../src/config.js");
+    const { effectiveVars } = await import("../src/engine/runner.js");
+    const runsDir = join(tmp, "runs");
+    const queueFile = join(tmp, "queue.json");
+    const flow = parseFlow(`name: t\nworkspace: inplace\nsteps:\n  - id: a\n    type: shell\n    run: "true"\n`);
+    const stopped = await idle();
+    const a = new Scheduler({ runsDir, queueFile, config: () => stopped });
+    const id = a.submit({ kind: "run", flow, task: "t", repo, vars: effectiveVars(flow, repo, { x: "1" }), frozenVars: true }, { owner: "u" });
+    execFileSync("mkdir", ["-p", join(repo, ".claude-factory")]);
+    writeFileSync(join(repo, ".claude-factory", "config.yaml"), "vars:\n  github_repo: other/repo\n");
+    const b = new Scheduler({ runsDir, queueFile, config: () => ConfigSchema.parse({}) });
+    await b.wait(id);
+    await b.idle();
+    expect(JSON.parse(readFileSync(join(runsDir, id, "run.json"), "utf8")).vars).toEqual({ x: "1" });
+  });
+
+  it("never gives the same run id twice", async () => {
+    const { Scheduler } = await import("../src/queue/scheduler.js");
+    const runsDir = join(tmp, "runs");
+    const stopped = await idle();
+    const ids = ["x1", "x1", "x2"];
+    const sched = new Scheduler({ runsDir, config: () => stopped, newId: () => ids.shift()! });
+    const one = sched.submit({ kind: "run", flow: shell(), task: "t", repo, vars: {} }, { owner: "a" });
+    const two = sched.submit({ kind: "run", flow: shell(), task: "t", repo, vars: {} }, { owner: "b" });
+    expect([one, two]).toEqual(["x1", "x2"]);
+    expect([sched.ownerOf(one), sched.ownerOf(two)]).toEqual(["a", "b"]);
+  });
+
+  it("skips an id whose folder exists, and gives up when every id is taken", async () => {
+    const { Scheduler } = await import("../src/queue/scheduler.js");
+    const runsDir = join(tmp, "runs");
+    execFileSync("mkdir", ["-p", join(runsDir, "old")]);
+    const stopped = await idle();
+    const ids = ["old", "new"];
+    const sched = new Scheduler({ runsDir, config: () => stopped, newId: () => ids.shift()! });
+    expect(sched.submit({ kind: "run", flow: shell(), task: "t", repo, vars: {} })).toBe("new");
+    const same = new Scheduler({ runsDir: join(tmp, "runs2"), config: () => stopped, newId: () => "same" });
+    same.submit({ kind: "run", flow: shell(), task: "t", repo, vars: {} });
+    expect(() => same.submit({ kind: "run", flow: shell(), task: "t", repo, vars: {} })).toThrow(/free run id/);
+  });
+});
