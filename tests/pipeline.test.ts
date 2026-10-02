@@ -6,10 +6,10 @@ import { ConfigSchema, WatcherSchema } from "../src/config.js";
 import { runFlow } from "../src/engine/runner.js";
 import { loadFlow } from "../src/flow/load.js";
 import { explainError } from "../src/errors.js";
-import { commentText, nextStep } from "../src/next-step.js";
+import { commentFirst, commentText, firstLine, nextStep } from "../src/next-step.js";
 import { Scheduler } from "../src/queue/scheduler.js";
 import { minutesNow, Watcher } from "../src/queue/watcher.js";
-import { claudeBin, closing, fakeGithub } from "./helpers/fake-github.js";
+import { claudeBin, closing, fakeGithub, first } from "./helpers/fake-github.js";
 
 // The label-driven pipeline: issue-plan → issue-code-daily → daily-pr, as configured for a real repo.
 const REPO = "acme/app";
@@ -129,14 +129,19 @@ describe("label-driven issue pipeline", () => {
     expect(runOf("issue-plan", "5")?.status).toBe("succeeded");
   });
 
-  it("sends non-code issues back with the reason and stops", async () => {
-    process.env.FAKE_ISSUE_PLAN = "This is a legal approval task.\nPLAN_STATUS: NOT_CODE";
+  it.each([
+    ["NEEDS_INFO", "needs more information before it can plan this issue"],
+    ["NOT_CODE", "thinks this issue is not a coding task"],
+    ["TOO_BIG", "thinks this issue is too big for one change and proposes splitting it"],
+  ])("sends %s issues back with the reason and stops", async (status, heading) => {
+    process.env.FAKE_ISSUE_PLAN = `This is the reason.\nPLAN_STATUS: ${status}`;
     issues([1, ["Factory_ready"]]);
     await planWatcher().tick();
     await settle();
     expect(runOf("issue-plan", "1")?.status).toBe("stopped");
-    expect(gh.ghLog()).toContain("thinks this issue is not a coding task");
-    const sent = gh.comments().find((c) => c.body.includes("thinks this issue is not a coding task"))!;
+    expect(gh.ghLog()).toContain(heading);
+    const sent = gh.comments().find((c) => c.body.includes(heading))!;
+    expect(first(sent.body)).toBe(commentFirst("planner_questions"));
     expect(closing(sent.body)).toEqual([`_${commentText("planner_questions")}_`, expect.stringMatching(/^<!-- claude-factory run=\S+ [\w-]+ -->$|^<!-- claude-factory run=\S+ -->$/)]);
     expect(gh.ghLog()).toMatch(/issue edit 1 .*--add-label Factory_needs_info/);
   });
@@ -188,7 +193,11 @@ describe("label-driven issue pipeline", () => {
     const rec = nextStep("failed", {}, { watched: true, failedLabel: "Factory_ERROR", reason: run.reason });
     expect(log).toContain(`- **What happened:** ${e.what}.`);
     expect(log).toContain("- **Why:** ");
-    expect(log).toContain(`- **What you can do:** ${rec.action}.`);
+    const body = gh.comments().find((c) => c.body.includes("could not finish this issue"))!.body;
+    expect(first(body)).toBe(firstLine(rec));
+    expect(body).not.toContain("**What you can do:**");
+    expect(body.indexOf(firstLine(rec))).toBeLessThan(body.indexOf("could not finish this issue"));
+    expect(body.indexOf("**What happened:**")).toBeLessThan(body.indexOf("Last failing step:"));
     expect(log.indexOf("**What happened:**")).toBeLessThan(log.indexOf("Last failing step:"));
     const at = log.indexOf("<summary>Details</summary>");
     expect(at).toBeGreaterThan(0);

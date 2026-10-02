@@ -79,7 +79,8 @@ steps:
       # Questions come from the plan step, or from triage when it ran without planning.
       out="${FACTORY_OUT_PLAN:-$FACTORY_OUT_TRIAGE}"
       printf '%s\n' "$out" | grep -Eq '^(PLAN_STATUS|ROUTE): NEEDS_INFO' || { echo "planning failed (no questions to ask)"; exit 1; }
-      { echo "🤖 **Spaghetti Code Foundry** needs more information before it can work on this ticket:"; echo
+      { echo "$FACTORY_FIRST_PLANNER_QUESTIONS"; echo
+        echo "🤖 **Spaghetti Code Foundry** needs more information before it can work on this ticket:"; echo
         printf '%s\n' "$out" | sed -E '/^(PLAN_STATUS|ROUTE):/d'
         echo; echo "_${FACTORY_NEXT_PLANNER_QUESTIONS}_"
         echo; echo "<!-- claude-factory run=$FACTORY_RUN_ID -->"; } \
@@ -210,6 +211,7 @@ steps:
     type: shell
     run: |
       {
+        echo "$FACTORY_FIRST_APPROVAL"; echo
         echo "✋ **Spaghetti Code Foundry is ready to push** branch \`$(git branch --show-current)\`:"
         echo; git log --oneline origin/HEAD..HEAD 2>/dev/null
         echo; echo '```'; git diff --stat origin/HEAD 2>/dev/null | tail -20; echo '```'

@@ -53,3 +53,6 @@ export function fakeGithub() {
 
 /** The last two non-empty lines of a comment: its closing sentence and its hidden marker. */
 export const closing = (body: string) => body.split("\n").filter((l) => l.trim()).slice(-2);
+
+/** The first non-empty line of a comment. */
+export const first = (body: string) => body.split("\n").find((l) => l.trim()) ?? "";

@@ -9,8 +9,8 @@ import { loadFlow, parseFlow } from "../src/flow/load.js";
 import { Scheduler } from "../src/queue/scheduler.js";
 import { Watcher } from "../src/queue/watcher.js";
 import { buildStamp, RESTART_CODE, supervise } from "../src/supervise.js";
-import { commentText, runNextStep } from "../src/next-step.js";
-import { claudeBin, closing, fakeGithub } from "./helpers/fake-github.js";
+import { commentFirst, commentText, firstLine, nextStepEnv, runNextStep } from "../src/next-step.js";
+import { claudeBin, closing, fakeGithub, first } from "./helpers/fake-github.js";
 
 // The simpler pipeline: one label (Factory_go) → questions up front → plan + risk gate + code in one
 // run → one rolling factory PR with a daily report.
@@ -66,6 +66,10 @@ describe("deliver pipeline", () => {
     const log = gh.ghLog();
     expect(log).toContain("**Risk: 20/100** — small local change");
     expect(log).toContain("Coding starts now");
+    const plan = gh.comments().find((c) => c.body.includes("Coding starts now"))!.body;
+    expect(first(plan)).toBe(nextStepEnv().FACTORY_FIRST_NOTHING);
+    expect(plan.split("\n")[2]).toMatch(/^🤖 \*\*Spaghetti Code Foundry plan\*\*/);
+    expect(plan.split("\n").at(-1)).toBe(`<!-- claude-factory run=${run.runId} plan -->`);
     expect(log).toContain("It is in the Foundry pull request: https://github.com/owner/repo/pull/99");
     expect(prs()).toHaveLength(1);
     expect(log).toMatch(/gh issue edit 5 .*--remove-label Factory_go.*--add-label Factory_done/);
@@ -102,6 +106,9 @@ describe("deliver pipeline", () => {
     expect(gh.ghLog()).toMatch(/gh issue edit 5 .*--add-label Factory_waiting/);
     const planNext = runNextStep(run, { watched: true });
     expect(planNext.kind).toBe("approve_plan");
+    const planBody = gh.comments().find((c) => c.body.includes("A human decides"))!.body;
+    expect(first(planBody)).toBe(firstLine(planNext));
+    expect(first(planBody)).toBe(commentFirst("approve_plan"));
     expect(closing(gh.comments().find((c) => c.body.includes("A human decides"))!.body)).toEqual([`_${planNext.text}_`, `<!-- claude-factory run=${run.runId} approval -->`]);
     expect(planNext.text).toBe(commentText("approve_plan"));
 
@@ -208,6 +215,9 @@ describe("deliver pipeline", () => {
     expect(gh.ghLog()).toContain("✋ **You decide** (the split risk is 70/100 (above 50)).");
     const splitNext = runNextStep(run, { watched: true });
     expect(splitNext.kind).toBe("approve_split");
+    const splitBody = gh.comments().find((c) => c.body.includes("split risk: 70/100"))!.body;
+    expect(first(splitBody)).toBe(firstLine(splitNext));
+    expect(first(splitBody)).toBe(commentFirst("approve_split"));
     expect(closing(gh.comments().find((c) => c.body.includes("split risk: 70/100"))!.body)).toEqual([`_${splitNext.text}_`, `<!-- claude-factory run=${run.runId} approval -->`]);
     expect(splitNext.text).toBe(commentText("approve_split"));
     issues([5, ["Factory_go", "Factory_waiting"]]);
@@ -294,6 +304,8 @@ describe("deliver pipeline", () => {
     }]);
     expect(w.status.holds![0]!.reason).toContain("/defaults");
     const asked = gh.comments().find((c) => c.issue === 6 && c.body.includes("has questions before it builds"))!;
+    expect(first(asked.body)).toBe(commentFirst("questions"));
+    expect(asked.body.split("\n")[2]).toMatch(/^🤖 \*\*Spaghetti Code Foundry\*\* has questions before it builds this issue/);
     expect(closing(asked.body)).toEqual([`_${commentText("questions")}_`, expect.stringMatching(/^<!-- claude-factory run=\S+ questions -->$/)]);
 
     // A bot comment with only the new marker is not an answer.

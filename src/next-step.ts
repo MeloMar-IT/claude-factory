@@ -445,15 +445,40 @@ export function briefFailure(n: NextStep): NextStep {
 export type CommentKind = Extract<NextKind, "questions" | "planner_questions" | "approve_plan" | "approve_split" | "approval">;
 export const COMMENT_KINDS: readonly CommentKind[] = ["questions", "planner_questions", "approve_plan", "approve_split", "approval"];
 
-/** The sentence a Foundry comment on an issue ends with: the record's text for an issue that is answered on GitHub, without per-run details (number of questions, approval message). */
-export function commentText(kind: CommentKind): string {
+/** The fixed record of a comment kind, without per-run details. */
+function commentRecord(kind: CommentKind): NextStep {
   // issueUrl is set only so "approval" does not fall back to "on the run page"; it never appears in text.
-  return nextStep(kind, {}, { watched: true, issueUrl: "issue" }).text;
+  return nextStep(kind, {}, { watched: true, issueUrl: "issue" });
 }
 
-/** Step environment: FACTORY_NEXT_<KIND> for every comment kind, e.g. FACTORY_NEXT_APPROVE_PLAN. */
+/** The sentence a Foundry comment on an issue ends with: the record's text for an issue that is answered on GitHub, without per-run details (number of questions, approval message). */
+export function commentText(kind: CommentKind): string { return commentRecord(kind).text; }
+
+/** One line, no end punctuation. */
+const tidy = (t: string) => t.replace(/\s+/g, " ").trim().replace(/[.!?]+$/, "");
+
+/**
+ * The bold first line of a Foundry comment: what to do when the next move is yours or something
+ * is wrong, else that nothing is needed and why. Markdown; print it, never put it in a command.
+ */
+export function firstLine(n: Pick<NextStep, "who" | "action" | "why">): string {
+  if (n.who === "You" || n.who === "Something is wrong") return `**What you need to do:** ${tidy(n.action)}.`;
+  const why = lowerFirst(tidy(n.why));
+  return why ? `**Nothing needed from you** — ${why}.` : "**Nothing needed from you**";
+}
+
+/** firstLine() of the fixed record of a comment kind. */
+export function commentFirst(kind: CommentKind): string { return firstLine(commentRecord(kind)); }
+
+/** Step environment: FACTORY_NEXT_<KIND> and FACTORY_FIRST_<KIND> for every comment kind, plus FACTORY_FIRST_NOTHING. */
 export function nextStepEnv(): Record<string, string> {
-  return Object.fromEntries(COMMENT_KINDS.map((k) => [`FACTORY_NEXT_${k.toUpperCase()}`, commentText(k)]));
+  return {
+    ...Object.fromEntries(COMMENT_KINDS.flatMap((k) => [
+      [`FACTORY_NEXT_${k.toUpperCase()}`, commentText(k)],
+      [`FACTORY_FIRST_${k.toUpperCase()}`, commentFirst(k)],
+    ])),
+    FACTORY_FIRST_NOTHING: firstLine(nextStep("running")),
+  };
 }
 
 /** Last "stopped at step" id of a reason, without sub-flow prefix. */

@@ -9,8 +9,9 @@ import { loadRun, saveRun } from "../src/engine/state.js";
 import { Scheduler } from "../src/queue/scheduler.js";
 import { failureComment, parseInterval, Watcher } from "../src/queue/watcher.js";
 import { watcherProblem } from "../src/server/next.js";
+import { firstLine } from "../src/next-step.js";
 import { LABEL_WORDS } from "../src/words.js";
-import { claudeBin, fakeGithub } from "./helpers/fake-github.js";
+import { claudeBin, fakeGithub, first } from "./helpers/fake-github.js";
 
 describe("parseInterval", () => {
   it("parses units and defaults to minutes", () => {
@@ -229,7 +230,9 @@ describe("watcher", () => {
     expect(start).toBeGreaterThanOrEqual(0);
     expect(end).toBeGreaterThan(start);
     expect(log).not.toContain("<!-- spaghetti-code-foundry");
-    const posted = log.slice(start, end + marker.length);
+    const posted = gh.comments().at(-1)!.body; // the whole comment, starting with the first line
+    expect(posted.startsWith("**")).toBe(true);
+    expect(posted).toContain(marker);
 
     issues([6, "factory:waiting-approval"]);
     process.env.FAKE_GH_COMMENTS = JSON.stringify({ comments: [
@@ -420,7 +423,7 @@ describe("watcher", () => {
       runId: "r9", reason: `step "a" failed: ${hostile}`,
       history: [{ id: "a", type: "shell", ok: false, visit: 1, output: "````\n</details>\n# Title", error: "e" }],
     } as never;
-    const body = failureComment(s, "Do the thing, then retry");
+    const body = failureComment(s, { who: "Something is wrong", action: "Do the thing, then retry", why: "x" } as never);
     const fences = body.match(/`{3,}/g) ?? [];
     expect(fences).toEqual(["```", "```"]);
     const open = body.indexOf("```");
@@ -431,17 +434,24 @@ describe("watcher", () => {
     }
     const head = body.slice(0, body.indexOf("<details>"));
     expect(head).toContain("- **What happened:** The step a failed.");
-    expect(head).toContain("- **What you can do:** Do the thing, then retry.");
+    expect(head).not.toContain("What you can do");
     expect(head).toContain("Last failing step: `a`");
     for (const bad of ["@someone", "```", "evil", "# Title"]) expect(head).not.toContain(bad);
     expect(body.split("\n").at(-1)).toBe("<!-- claude-factory run=r9 -->");
-    expect(body.startsWith("🤖 **Spaghetti Code Foundry** could not finish this issue.\n")).toBe(true);
+    expect(body.startsWith("**What you need to do:** Do the thing, then retry.\n\n🤖 **Spaghetti Code Foundry** could not finish this issue.\n")).toBe(true);
+  });
+
+  it("failureComment for a Foundry failure has the 'itself failed' heading and no Why line", () => {
+    const s = { runId: "r9", reason: "boom", history: [] } as never;
+    const body = failureComment(s, { who: "Something is wrong", action: "Fix it", why: "The Foundry failed, not the code: boom", cause: "factory" } as never);
+    expect(body.split("\n")[2]).toBe("🤖 **Spaghetti Code Foundry** itself failed on this issue, not the code.");
+    expect(body).toContain("- **What happened:** The Foundry failed, not the code: boom.");
+    expect(body).not.toContain("- **Why:**");
   });
 
   describe("failure comment", () => {
     const FACTORY_LINE = "🤖 **Spaghetti Code Foundry** itself failed on this issue, not the code.";
     const bodyOf = (issue: number) => gh.comments().find((c) => c.issue === issue)!.body;
-    const todoLine = (body: string) => body.split("\n").find((l) => l.startsWith("- **What you can do:** "))!;
     const headOf = (body: string) => body.slice(0, body.indexOf("<details>"));
     const localFlow = (yaml: string) => {
       const file = join(gh.tmp, "local.yaml");
@@ -456,22 +466,23 @@ describe("watcher", () => {
       await w.tick();
       await settle();
       const body = bodyOf(4);
-      expect(body.split("\n")[0]).toBe(FACTORY_LINE);
+      expect(body.split("\n")[2]).toBe(FACTORY_LINE);
       expect(body.split("\n").at(-1)).toBe(`<!-- claude-factory run=${runFor("4").runId} -->`);
       expect(headOf(body)).not.toContain("- **Why:**");
       issues([4, "factory:failed"]);
       await w.tick();
       expect(w.status.holds).toMatchObject([{ issue: 4, next: { kind: "failed", who: "Something is wrong", cause: "factory" } }]);
-      expect(todoLine(body)).toBe(`- **What you can do:** ${w.status.holds![0]!.next.action}.`);
+      expect(first(body)).toBe(firstLine(w.status.holds![0]!.next));
       expectHoldsFromRecords(w);
     });
 
-    it("keeps the old first line for a code failure", async () => {
+    it("keeps the old heading for a code failure", async () => {
       const w = watcher({ flow: localFlow("name: local\nworkspace: inplace\nsteps:\n  - {id: a, type: shell, run: 'echo boom; exit 1'}\n") });
       issues([5]);
       await w.tick();
       await settle();
-      expect(bodyOf(5).split("\n")[0]).toBe("🤖 **Spaghetti Code Foundry** could not finish this issue.");
+      expect(bodyOf(5).split("\n")[0]).toMatch(/^\*\*What you need to do:\*\* /);
+      expect(bodyOf(5).split("\n")[2]).toBe("🤖 **Spaghetti Code Foundry** could not finish this issue.");
     });
 
     it("names the custom failed label", async () => {
@@ -480,7 +491,7 @@ describe("watcher", () => {
       const w = watcher({ status_labels: { failed: "Factory_ERROR" } });
       await w.tick();
       await settle();
-      expect(todoLine(bodyOf(4))).toContain("`Factory_ERROR`");
+      expect(first(bodyOf(4))).toContain("`Factory_ERROR`");
     });
 
     it("shows only the tool and program of a blocked command", async () => {
@@ -490,7 +501,7 @@ describe("watcher", () => {
       await w.tick();
       await settle();
       const body = bodyOf(6);
-      expect(body.split("\n")[0]).toBe(FACTORY_LINE);
+      expect(body.split("\n")[2]).toBe(FACTORY_LINE);
       // The raw text under Details is the unchanged output tail; the plain lines above it carry only the tool and program.
       const head = headOf(body);
       expect(head).toContain("Bash: curl");

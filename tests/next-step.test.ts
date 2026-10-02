@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { WatcherSchema } from "../src/config.js";
 import type { RunSummary } from "../src/engine/state.js";
 import { statusName } from "../src/words.js";
-import { briefFailure, COMMENT_KINDS, commentText, countQuestions, nextStep, nextStepEnv, releaseAtFor, releaseWatchersFor, runClosedIssue, runNextStep, trackingWatcher, type NextKind, type NextStep } from "../src/next-step.js";
+import { briefFailure, COMMENT_KINDS, commentFirst, commentText, firstLine, countQuestions, nextStep, nextStepEnv, releaseAtFor, releaseWatchersFor, runClosedIssue, runNextStep, trackingWatcher, type NextKind, type NextStep } from "../src/next-step.js";
 
 const run = (over: Partial<RunSummary> = {}) =>
   ({
@@ -18,17 +18,31 @@ describe("comment sentences", () => {
   const base = { repo: "acme/app", issue: 7, title: "T", runId: "r1" };
   const data = { watched: true, issueUrl: ISSUE, failedLabel: "factory:failed" };
 
-  it("has exactly the five FACTORY_NEXT_ variables, equal to the record's text", () => {
+  it("has exactly the FACTORY_NEXT_ and FACTORY_FIRST_ variables, equal to the record", () => {
     const env = nextStepEnv();
-    expect(Object.keys(env).sort()).toEqual(
-      ["FACTORY_NEXT_APPROVAL", "FACTORY_NEXT_APPROVE_PLAN", "FACTORY_NEXT_APPROVE_SPLIT", "FACTORY_NEXT_PLANNER_QUESTIONS", "FACTORY_NEXT_QUESTIONS"],
-    );
+    expect(Object.keys(env).sort()).toEqual([
+      "FACTORY_FIRST_APPROVAL", "FACTORY_FIRST_APPROVE_PLAN", "FACTORY_FIRST_APPROVE_SPLIT", "FACTORY_FIRST_NOTHING", "FACTORY_FIRST_PLANNER_QUESTIONS", "FACTORY_FIRST_QUESTIONS",
+      "FACTORY_NEXT_APPROVAL", "FACTORY_NEXT_APPROVE_PLAN", "FACTORY_NEXT_APPROVE_SPLIT", "FACTORY_NEXT_PLANNER_QUESTIONS", "FACTORY_NEXT_QUESTIONS",
+    ]);
+    expect(env.FACTORY_FIRST_NOTHING).toBe(firstLine(nextStep("running")));
+    for (const k of COMMENT_KINDS) {
+      const f = env[`FACTORY_FIRST_${k.toUpperCase()}`]!;
+      expect(f).toBe(commentFirst(k));
+      expect(f).toBe(firstLine(nextStep(k, base, data)));
+    }
+    for (const [k, v] of Object.entries(env)) if (k.startsWith("FACTORY_FIRST_")) expect(v).toMatch(/^\*\*[^\n\\`$"]*\.$/);
     for (const k of COMMENT_KINDS) {
       const v = env[`FACTORY_NEXT_${k.toUpperCase()}`]!;
       expect(v).toBe(nextStep(k, base, data).text);
       expect(v).toMatch(/^[^\n]*\.$/);
       expect(v).not.toMatch(/[\\`$"_*]/);
     }
+  });
+
+  it("words the first line", () => {
+    expect(commentFirst("approve_plan")).toBe("**What you need to do:** Reply /approve or /reject.");
+    expect(commentFirst("planner_questions")).toBe("**What you need to do:** Answer the questions.");
+    expect(nextStepEnv().FACTORY_FIRST_NOTHING).toBe("**Nothing needed from you** — it is being worked on.");
   });
 
   it("names the replies", () => {
@@ -40,13 +54,17 @@ describe("comment sentences", () => {
     expect(commentText("approval")).not.toContain("run page");
   });
 
-  it("matches the real run record for a waiting plan, a split and questions", () => {
+  it("matches the real run first line for a waiting plan, a split and questions", () => {
     const waiting = (step: string) => run({ status: "waiting", state: { next: step, steps: {}, visits: {} }, waiting: { stepId: step, message: "m" } } as Partial<RunSummary>);
+    expect(firstLine(runNextStep(waiting("approve_plan"), { watched: true }))).toBe(commentFirst("approve_plan"));
+    expect(firstLine(runNextStep(waiting("approve_split"), { watched: true }))).toBe(commentFirst("approve_split"));
+    expect(firstLine(runNextStep(run({ status: "running" }), watched))).toBe(nextStepEnv().FACTORY_FIRST_NOTHING);
     expect(runNextStep(waiting("approve_plan"), { watched: true }).text).toBe(commentText("approve_plan"));
     expect(runNextStep(waiting("approve_split"), { watched: true }).text).toBe(commentText("approve_split"));
     for (const step of ["send_back", "ask_for_info"]) {
       const r = run({ status: "stopped", reason: `stopped at step "${step}" — needs attention` });
       expect(runNextStep(r, { watched: true }).text).toBe(commentText("planner_questions"));
+      expect(firstLine(runNextStep(r, { watched: true }))).toBe(commentFirst("planner_questions"));
     }
   });
 
@@ -118,6 +136,28 @@ describe("next-step records, one per kind", () => {
     expect(n.where.url).toBe(url);
     expect(n.user).toBe("");
     expect(n).toMatchObject({ repo: "acme/app", issue: 7, title: "T", runId: "r1" });
+  });
+
+  it.each(cases)("first line of %s", (kind, d, who, action) => {
+    const line = firstLine(nextStep(kind, base, d));
+    expect(line).not.toMatch(/\n|Nothing — /);
+    if (who === "You" || who === "Something is wrong") expect(line).toBe(`**What you need to do:** ${action}.`);
+    else {
+      expect(line.startsWith("**Nothing needed from you** — ")).toBe(true);
+      expect(line.endsWith(".")).toBe(true);
+    }
+  });
+
+  it("words the first line for spot checks and odd records", () => {
+    expect(firstLine(nextStep("questions", base, { ...data, questions: 3 }))).toMatch(/Answer 3 questions\.$/);
+    const failed = firstLine(nextStep("failed", base, data));
+    expect(failed.split("`factory:failed`")).toHaveLength(2);
+    expect(failed).toMatch(/[^.]\.$/);
+    expect(firstLine(nextStep("release", base, { pr: { number: 99 } }))).toBe("**What you need to do:** Merge the release pull request #99.");
+    expect(firstLine(nextStep("release", base, { releaseAt: "17:00" }))).toBe("**Nothing needed from you** — it is finished and waits for the 17:00 release.");
+    expect(firstLine(nextStep("dependency", base, { blockers: [{ issue: 3 }] }))).toBe("**Nothing needed from you** — #7 waits for #3, which is to be done.");
+    expect(firstLine({ who: "You", action: "Do it now.\n", why: "" })).toBe("**What you need to do:** Do it now.");
+    expect(firstLine({ who: "Foundry", action: "", why: "" })).toBe("**Nothing needed from you**");
   });
 
   it("carries status and help from the glossary, kind first", () => {
