@@ -5,6 +5,7 @@ import { flowDir, parseFlow } from "../flow/load.js";
 import { readRateLimit, type RateReading } from "../github.js";
 import { collectNames } from "../monitor/clean.js";
 import type { DetectorInput, LogLine } from "../monitor/detectors.js";
+import { describeEntry, storiesVerdict, writeLog } from "../monitor/guard.js";
 import { Monitor } from "../monitor/monitor.js";
 import { buildLabelFor, Reporter } from "../monitor/report.js";
 import type { BuiltinSteps } from "../monitor/story.js";
@@ -24,6 +25,8 @@ export interface WatcherManagerOptions {
   serverLog?: () => LogLine[];
   /** Set while the server waits to restart, for the monitor. */
   restart?: () => DetectorInput["restart"];
+  /** When the server started (the monitor's quiet time counts from here; the Monitor object is made again when its config changes). */
+  startedAt?: Date;
 }
 
 /** What a watcher tracks right now, for the next-step records. */
@@ -116,12 +119,28 @@ export class WatcherManager {
         names: (t) => collectNames(t, this.o.config()),
         builtinSteps: () => this.builtinSteps(),
         rateLimit: () => this.rate,
+        guard: () => storiesVerdict({ startedAt: this.o.startedAt, cooldownMinutes: this.o.config().monitor.cooldown_minutes }),
+        record: (e) => {
+          writeLog(e, { onError: (m) => this.o.log(`[${cfg.id}] ${m}`) });
+          // A made story reaches the activity through the check's actions; only the log gets this line.
+          if (e.event !== "story-made") monitor.act(describeEntry(e));
+        },
         log: this.o.log,
       }),
     });
     this.monitor = { monitor, key: key! };
     monitor.start();
     this.o.log(`[${cfg.id}] monitoring the Foundry every ${cfg.every}`);
+  }
+
+  /** When the server started, if it told us. */
+  get startedAt(): Date | undefined {
+    return this.o.startedAt;
+  }
+
+  /** Puts a line in the monitor's recent activity; does nothing when no monitor runs. */
+  monitorAct(msg: string) {
+    this.monitor?.monitor.act(msg);
   }
 
   private steps?: BuiltinSteps;

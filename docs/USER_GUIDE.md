@@ -716,6 +716,7 @@ at a public one.
 monitor:
   report_to: your-name/your-foundry-repo
   report_limits: { per_day: 3, per_check: 1 }   # per_check: at most 3
+  cooldown_minutes: 10                          # quiet time after a server start; 0: none
 ```
 
 - **When.** Critical and major findings: after 2 checks in a row. Minor: after 3 different days. A
@@ -739,6 +740,40 @@ monitor:
 *Unexplained* is strict: no rule in the Foundry's failure rules matched (an AI's summary does not
 count). An ordinary failing command (`exit code 1`) is explained. The request-limit numbers come
 from `gh api rate_limit`, read at most once a minute for the server's own login and the bot token.
+
+#### Stop bug stories: the off switch and the quiet time
+
+One switch stops the monitor from making bug stories. It needs no GitHub.
+
+- **Switch.** On the monitor's card on the Watchers page, the line says "Bug stories: on",
+  "Bug stories: off since 14:05" or "Bug stories: quiet until 14:15 after the restart", and a button
+  switches them off or on. Only an admin can do this. On the command line: `scf monitor off`,
+  `scf monitor on` and `scf monitor status`. The commands only read and write the state file, so
+  they work when the server is not running. The server reads the state at every check and again
+  right before each GitHub call that makes or touches a story. The state (since when, by whom: the
+  account id or `cli`) is kept in `monitor-guard.json` in the data folder and survives a restart.
+- **While it is off.** The monitor still records findings. It makes no story, writes no comment
+  and makes no GitHub call for stories. Nothing new becomes owed; stories owed before stay owed and
+  are made after you switch on, at the next check.
+- **Off does not stop building.** Stories that already exist still carry the build label, so the
+  issue watcher keeps building them (with `hotfix_to_main` on, it still pushes fixes to main). To
+  stop that, disable the issue watcher or remove the label from the issue.
+- **Quiet time.** For the first `cooldown_minutes` (default 10, 0 = none) after the server started,
+  findings are recorded but no story is made and none becomes owed. A server that restarts more
+  often than that never makes a story.
+- **A state file that cannot be read.** Stories stop and the card says so. `scf monitor on` or the
+  button keeps the old file as `monitor-guard.json.broken` (older ones as `.broken.1`, `.broken.2`,
+  …), starts a fresh file and switches on. Later parts add other state to this file; it is reset
+  too, and the card and the log say so. "Off" does nothing on an unreadable file.
+- **The log.** `monitor-log.jsonl` in the data folder has one JSON line per event: `off`, `on`,
+  `story-made` and `story-skipped`, with the reason (`off`, `cooldown`, `unreadable`, `day_limit`,
+  `check_limit`, `request_limit`, `github`). A skipped story is written once per finding and
+  reason, not at every check. The file moves to `monitor-log.1.jsonl` at 512 KiB, so it keeps
+  between 512 KiB and 1 MiB of history. Lines from the server also show in the card's recent
+  activity; a switch made on the command line does not.
+- **Lock.** Changes take `monitor.lock` in the data folder for a moment. If `scf monitor on` says
+  the lock is held, try again; if no process uses it, remove the folder `monitor.lock`. "Off" never
+  waits for it: it takes the lock over.
 
 ### How issue watchers use labels
 
@@ -1603,6 +1638,9 @@ Change a role with `scf user role <e-mail> admin|user`, or create an admin with
 | `PUT /api/config` | yes | no | change the settings |
 | `GET /api/watchers` | yes | no | list the watchers |
 | `POST /api/watchers/:id/tick` | yes | no | run a watcher now |
+| `GET /api/monitor` | yes | no | whether the monitor makes bug stories (on, off, or quiet after a restart) |
+| `POST /api/monitor/off` | yes | no | stop the monitor from making bug stories |
+| `POST /api/monitor/on` | yes | no | let the monitor make bug stories again |
 | `POST /api/clean` | yes | no | clean up old runs |
 | `GET /api/providers` | yes | no | agent providers |
 | `POST /api/providers/test` | yes | no | test a provider |
@@ -1893,6 +1931,7 @@ The command is `scf`. `factory` still works as an alias and prints a short note.
 | `scf user delete <e-mail>` | Delete an account, its sessions and its stored credentials (not the last admin) |
 | `scf credential rotate-key` | Re-encrypt all stored credentials under a new key |
 | `scf credential check` | Check that the macOS Keychain can store, read and remove the key |
+| `scf monitor off` / `on` / `status` | Stop the monitor from making bug stories, let it make them again, or print the state. Works when the server is not running |
 
 The password is asked twice on a terminal, or read from the first line of stdin; it is never an
 option or an environment variable. A password has 12 to 200 characters and must not be a common

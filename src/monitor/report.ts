@@ -4,6 +4,7 @@ import { commentOnIssue, createIssue, createLabelIfMissing, listIssuesByLabel, r
 import { LABEL_WORDS } from "../words.js";
 import { cleanLines, type CleanDeps, type Names } from "./clean.js";
 import { dayOf, type Finding, type Severity, type StoryRef } from "./findings.js";
+import type { LogEntry, Verdict } from "./guard.js";
 import { buildStory, hashIn, markerHash, seenAgainComment, type BuiltinSteps } from "./story.js";
 
 const HOUR = 3_600_000;
@@ -30,6 +31,10 @@ export interface ReporterDeps {
   names: (target: string) => Names;
   builtinSteps: () => BuiltinSteps;
   rateLimit?: () => RateReading | undefined;
+  /** May bug stories be made now? Asked at the top of a check and again before each call that makes or touches a story. Without it, always. */
+  guard?: () => Verdict;
+  /** Writes one line to the monitor's own log (a story made or skipped, with the reason). */
+  record?: (entry: LogEntry) => void;
   /** The server log: only a cleaned error line goes there. */
   log?: (msg: string) => void;
   /** For tests. */
@@ -72,6 +77,13 @@ export class Reporter {
       touched = false;
     };
     const done = (): ReportResult => {
+      for (const f of findings) {
+        // Nothing owed any more (made, gone, adopted): the reasons are written again if it comes back.
+        if (f.skipped && !(f.due && !muted(f) && !open(f)) && !owes(f)) {
+          delete f.skipped;
+          touched = true;
+        }
+      }
       for (const f of findings) if (f.report && same(f.report.repo, target) && f.report.muted && !f.gone) notes.push(`Bug story #${f.report.issue} was closed as not planned: no new story until it is reopened.`);
       if (touched) commit();
       return { findings, actions, notes };
@@ -93,14 +105,35 @@ export class Reporter {
       if (f.severity === "minor") return (f.days ?? []).filter((d) => d > dayOf(new Date(c))).length >= 3;
       return true;
     };
-    const markDue = (f: Finding) => {
-      if (!seenNow(f) || f.due || muted(f)) return;
+    /** A story is owed for this finding (it is seen now, lasts, and has no story or a closed one). */
+    const owes = (f: Finding): boolean => {
+      if (!seenNow(f) || muted(f)) return false;
       const m = mine(f);
-      if ((!m && ripe(f)) || (m?.closedAt && cameBack(f))) {
-        f.due = stamp;
-        touched = true;
-      }
+      return (!m && ripe(f)) || (!!m?.closedAt && cameBack(f));
     };
+    /** The gate: once it has said no in this check, it stays no. */
+    let shut = undefined as Extract<Verdict, { go: false }> | undefined; // set by go(); the cast keeps TypeScript from narrowing it to undefined
+    const go = (): boolean => {
+      if (!shut) {
+        const v = this.d.guard?.() ?? { go: true as const };
+        if (!v.go) shut = v;
+      }
+      return !shut;
+    };
+    const markDue = (f: Finding) => {
+      if (shut || f.due || !owes(f)) return;
+      f.due = stamp;
+      touched = true;
+    };
+    /** Writes a skipped story to the log, once per finding and reason. */
+    const skip = (f: Finding, reason: string) => {
+      if (f.skipped?.includes(reason)) return;
+      f.skipped = [...(f.skipped ?? []), reason];
+      touched = true;
+      this.d.record?.({ event: "story-skipped", reason, detector: f.detector, fingerprint: f.fingerprint, repo: target });
+    };
+
+    go(); // 1. May stories be made at all? A closed gate owes nothing new.
 
     // 2. Seen again.
     for (const f of findings) {
@@ -123,11 +156,23 @@ export class Reporter {
     const label = this.d.buildLabel(target);
     if (!label) notes.push(`No watcher builds bug stories for ${target}: the stories only get the label bug.`);
 
+    const shutNote = (n: number) => `${plural(n)}: ${shut!.note}.`;
+    if (shut) {
+      // No call to GitHub, no comment. Findings that are owed (or would be) wait; each reason is logged once.
+      const waiting = findings.filter((f) => queue.includes(f) || owes(f));
+      for (const f of waiting) skip(f, shut.reason);
+      if (waiting.length) notes.push(shutNote(waiting.length));
+      return done();
+    }
+
     // 7. Nothing to ask GitHub?
     const dayNote = (left: number) => `${plural(left)}: at most ${stories(per_day)} a day.`;
     const checkNote = (left: number) => `${plural(left)}: at most ${stories(per_check)} per check.`;
     if (!look.length && (!queue.length || allowedNow() === 0)) {
-      if (queue.length) notes.push(dayNote(queue.length));
+      if (queue.length) {
+        notes.push(dayNote(queue.length));
+        for (const f of queue) skip(f, "day_limit");
+      }
       return done();
     }
     // 8. GitHub's request limit is used up: ask nothing.
@@ -135,6 +180,7 @@ export class Reporter {
     const core = rate && t - Date.parse(rate.at) < HOUR ? rate.resources.core : undefined;
     if (core && core.remaining === 0 && core.reset * 1000 > t) {
       if (queue.length) notes.push(`${plural(queue.length)}: GitHub's request limit is used up.`);
+      for (const f of queue) skip(f, "request_limit");
       return done();
     }
 
@@ -182,7 +228,7 @@ export class Reporter {
         const m = mine(f);
         if (!m || !(queue.includes(f) || look.includes(f))) continue;
         // Not in the newest 100: read it, before a successor or a comment is decided from the local state.
-        if (!spend(1)) {
+        if (!go() || !spend(1)) {
           unresolved.add(f);
           continue;
         }
@@ -193,6 +239,7 @@ export class Reporter {
           touched = true;
         }
       }
+      go(); // switched off while GitHub answered: nothing new becomes owed
       for (const f of findings) {
         markDue(f);
         if (mine(f)?.closedAt && f.due && !cameBack(f)) {
@@ -209,21 +256,29 @@ export class Reporter {
       let budgetOut = false;
       const names = queue.length ? this.d.names(target) : undefined;
       for (const f of queue.slice(0, allowed)) {
+        if (!go()) break;
         const wanted = [BUG, ...(label ? [{ name: label, color: "c2410c", description: LABEL_WORDS.trigger }] : [])].filter((l, i, all) => all.findIndex((x) => x.name === l.name) === i);
         const missing = wanted.filter((l) => !this.labelsOk.has(`${target}|${l.name}`));
         if (!spend(missing.length + 1)) {
           budgetOut = true;
           break;
         }
+        let stopped = false;
         for (const l of missing) {
+          if (!go()) {
+            stopped = true; // switched off while the call before answered: no further call
+            break;
+          }
           await createLabelIfMissing(target, l.name, l.color, l.description, CALL_TIMEOUT_MS);
           this.labelsOk.add(`${target}|${l.name}`);
         }
+        if (stopped) break;
         const foreign = (f.repo !== undefined && !same(f.repo, target)) || (f.evidence?.repos ?? []).some((r) => !same(r, target));
         const raw = f.evidence?.lines ?? [];
         const lines = raw.length === 0 ? [] : foreign ? undefined : await cleanLines(raw, names!, this.d.clean);
         const previous = mine(f)?.issue;
         const story = buildStory(f, { lines, previous, builtinSteps: this.d.builtinSteps() });
+        if (!go()) break; // asked again right before the call, after the awaits and the building of the text
         let issue: RestIssue;
         try {
           issue = await createIssue(target, { title: story.title, body: story.body, labels: wanted.map((l) => l.name) }, CALL_TIMEOUT_MS);
@@ -232,8 +287,11 @@ export class Reporter {
           for (const l of wanted) this.labelsOk.delete(`${target}|${l.name}`);
           throw e;
         }
+        // Written before the local save: a story that exists on GitHub must show in the log even when the save fails.
+        this.d.record?.({ event: "story-made", detector: f.detector, fingerprint: f.fingerprint, repo: target, issue: issue.number });
         f.report = { repo: target, issue: issue.number, url: issue.html_url, at: stamp, seen: 0, lookedAt: stamp };
         delete f.due;
+        delete f.skipped;
         commit();
         made++;
         actions.push(`bug story #${issue.number} made (${f.detector})`);
@@ -251,23 +309,44 @@ export class Reporter {
       }
       open1.sort((a, b) => Date.parse(mine(a)!.lookedAt ?? mine(a)!.at) - Date.parse(mine(b)!.lookedAt ?? mine(b)!.at));
       const next = open1[0];
-      if (next && spend(1)) {
-        next.report = { ...mine(next)!, lookedAt: stamp };
+      if (next && go() && spend(1)) {
+        const before = mine(next)!;
+        next.report = { ...before, lookedAt: stamp };
         commit(); // saved first: a lost answer must not mean a second comment
-        await commentOnIssue(target, mine(next)!.issue, seenAgainComment(next), CALL_TIMEOUT_MS);
-        actions.push(`commented on bug story #${mine(next)!.issue}: seen again`);
+        if (go()) {
+          await commentOnIssue(target, mine(next)!.issue, seenAgainComment(next), CALL_TIMEOUT_MS);
+          actions.push(`commented on bug story #${mine(next)!.issue}: seen again`);
+        } else {
+          // switched off while saving: no comment, and the story is looked at again later
+          next.report = before;
+          commit();
+        }
       }
 
       // Notes for what waits.
-      const left = queueOf().length;
+      const rest = queueOf();
+      const left = rest.length;
       if (left) {
-        if (made < allowed || budgetOut || unresolved.size) notes.push(`${plural(left)}: they are made at the next check.`);
-        else if (dayLeft <= per_check) notes.push(dayNote(left));
-        else notes.push(checkNote(left));
+        if (shut) {
+          notes.push(shutNote(left));
+          for (const f of rest) skip(f, shut.reason);
+        } else if (made < allowed || budgetOut || unresolved.size) {
+          notes.push(`${plural(left)}: they are made at the next check.`);
+          // Held back by the budget of calls (or by a story that could not be read): logged like any other limit.
+          for (const f of rest) skip(f, "check_limit");
+        } else if (dayLeft <= per_check) {
+          notes.push(dayNote(left));
+          for (const f of rest) skip(f, dayLeft - made <= 0 ? "day_limit" : "check_limit");
+        } else {
+          notes.push(checkNote(left));
+          for (const f of rest) skip(f, "check_limit");
+        }
       }
     } catch (e) {
       this.d.log?.(`bug stories: ${errorLine((e as Error).message)}`);
-      const left = queueOf().length;
+      const rest = queueOf();
+      const left = rest.length;
+      for (const f of rest) skip(f, "github");
       notes.push(left ? `${plural(left)}: GitHub did not answer or refused the call.` : "GitHub did not answer or refused a call of the monitor.");
     }
     return done();

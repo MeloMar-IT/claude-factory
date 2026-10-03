@@ -111,6 +111,8 @@ const MonitorSchema = z
     report_to: z.string().regex(/^[\w.-]+\/[\w.-]+$/, "owner/repo").optional(),
     /** At most `per_day` new bug stories a day and `per_check` in one check (at most 3: it bounds the GitHub calls of a check). */
     report_limits: z.object({ per_day: z.number().int().min(1).max(50).default(3), per_check: z.number().int().min(1).max(3).default(1) }).strict().prefault({}),
+    /** For this many minutes after the server started no bug story is made and none becomes owed (0: no quiet time). */
+    cooldown_minutes: z.number().int().min(0).max(1440).default(10),
   })
   .strict();
 

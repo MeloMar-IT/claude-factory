@@ -37,7 +37,7 @@ describe("bug stories from the monitor", () => {
   const newReporter = () => new Reporter({ config: cfg, buildLabel: () => label, names: () => NAMES, builtinSteps: () => ({ "issue-gitflow": ["claim_areas"] }), rateLimit: () => rate?.(), log: (m) => logLines.push(m) });
   const newMonitor = (reporter = newReporter()) =>
     new Monitor(WatcherSchema.parse({ id: "mon", source: "monitor", every: "5m" }), {
-      scheduler, watchers: () => [], thresholds: cfg, log: () => {}, file, now: () => clock, reporter, detectors: [{ name: "t", run: () => found }],
+      scheduler, watchers: () => [], thresholds: cfg, log: () => {}, file, now: () => clock, reporter, detectors: [{ name: "t", description: "test", run: () => found }],
     });
   let monitor: Monitor;
   const check = async (h: number, m = monitor) => {
@@ -502,5 +502,9 @@ describe("bug stories from the monitor", () => {
     const m = ConfigSchema.parse({}).monitor;
     expect(m.report_limits).toEqual({ per_day: 3, per_check: 1 });
     expect(m.report_to).toBeUndefined();
+    expect(m.cooldown_minutes).toBe(10);
+    expect(ConfigSchema.safeParse({ monitor: { cooldown_minutes: 0 } }).success).toBe(true);
+    expect(ConfigSchema.safeParse({ monitor: { cooldown_minutes: -1 } }).success).toBe(false);
+    expect(ConfigSchema.safeParse({ monitor: { cooldown_minutes: 1.5 } }).success).toBe(false);
   });
 });

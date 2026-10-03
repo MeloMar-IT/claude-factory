@@ -174,7 +174,8 @@ export class Monitor {
     this.status.nextTick = undefined;
   }
 
-  private act(msg: string) {
+  /** Writes a line to the server log and to the card's recent activity. */
+  act(msg: string) {
     this.d.log(`[${this.cfg.id}] ${msg}`);
     this.status.lastActions = [`${new Date().toLocaleTimeString()} ${msg}`, ...this.status.lastActions].slice(0, 20);
   }

@@ -49,7 +49,8 @@ Usage:
   scf user block <e-mail> [--stop-work] | unblock <e-mail>   Block or unblock an account
   scf user delete <e-mail>                       Delete an account and wipe its stored credentials
   scf credential rotate-key | check              Re-encrypt stored credentials; check the macOS Keychain
-  scf service install|uninstall|status          Keep \`scf serve\` running as a macOS login agent
+  scf monitor off|on|status                      Stop or allow the monitor's bug stories; print the state
+  scf service install|uninstall|status         Keep \`scf serve\` running as a macOS login agent
   scf watch [flow] --var github_repo=o/r         Every 5 min, run the flow (default issue-gitflow) on
         [--every 5m] [--label claude-factory]    each open issue with the label; results are marked
         [--max 1] [--once] [--source …]          with factory:* status labels; resumes runs when
@@ -419,6 +420,11 @@ async function main(argv: string[]): Promise<number> {
     case "credential": {
       const { credentialCommand } = await import("./credentials/cli.js");
       return credentialCommand(positionals.slice(1), (line) => void process.stdout.write(line + "\n"));
+    }
+
+    case "monitor": {
+      const { monitorCommand } = await import("./monitor/cli.js");
+      return monitorCommand(positionals.slice(1), (line) => void process.stdout.write(line + "\n"));
     }
 
     default:

@@ -71,6 +71,8 @@ export interface Finding extends FindingInput {
   missedAt?: string;
   /** In how many checks in a row it was seen (a missed check resets it). A story is owed for a problem that lasts: 2 in a row. */
   streak?: number;
+  /** The reasons a story for this finding was skipped and written to the monitor's log already (once per finding and reason). */
+  skipped?: string[];
 }
 
 export const GONE_AFTER_MS = 24 * 3_600_000;
@@ -104,7 +106,7 @@ export function mergeFindings(stored: Finding[], found: FindingInput[], now: Dat
     if (seen.has(input.fingerprint)) continue;
     seen.add(input.fingerprint);
     const have = old.get(input.fingerprint);
-    const carry = have ? { ...(have.report ? { report: have.report } : {}), ...(have.due ? { due: have.due } : {}), ...(have.missedAt ? { missedAt: have.missedAt } : {}) } : {};
+    const carry = have ? { ...(have.report ? { report: have.report } : {}), ...(have.due ? { due: have.due } : {}), ...(have.missedAt ? { missedAt: have.missedAt } : {}), ...(have.skipped ? { skipped: have.skipped } : {}) } : {};
     const days = [...new Set([...(have?.days ?? []), dayOf(now)])].slice(-3);
     if (have && !have.gone) {
       out.push({ ...input, firstSeen: have.firstSeen, lastSeen: at, count: have.count + 1, gone: false, streak: (have.streak ?? have.count) + 1, days, ...carry });
@@ -170,7 +172,7 @@ const validReport = (r: unknown): r is StoryRef => {
 };
 /** The optional fields of a stored finding: a malformed one is dropped, the finding stays. */
 function tidy(f: Finding): Finding {
-  const { days, due, report, missedAt, streak, ...rest } = f;
+  const { days, due, report, missedAt, streak, skipped, ...rest } = f;
   return {
     ...rest,
     ...(Number.isInteger(streak) && streak! >= 0 ? { streak } : {}),
@@ -178,6 +180,7 @@ function tidy(f: Finding): Finding {
     ...(isTime(due) ? { due } : {}),
     ...(validReport(report) ? { report } : {}),
     ...(isTime(missedAt) ? { missedAt } : {}),
+    ...(Array.isArray(skipped) && skipped.length <= 10 && skipped.every((x) => typeof x === "string" && x.length <= 40) ? { skipped } : {}),
   };
 }
 
