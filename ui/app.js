@@ -10,6 +10,7 @@ import { refreshModelLists, renderModels } from "./models.js";
 import { renderDashboard } from "./dashboard.js";
 import { renderRunDetail, renderRunsList } from "./runs.js";
 import { renderRepos } from "./repos.js";
+import { renderUsers } from "./users.js";
 import { renderBoard } from "./board.js";
 import { loadHealth, startHealth } from "./health.js";
 import { startSince } from "./since.js";
@@ -41,7 +42,7 @@ steps:
  * cur: the flow being edited.
  * { name: saved name | null, scope, saveScope, yaml, obj, mode: "visual"|"yaml", dirty, selected, validation }
  */
-const S = { info: null, flows: [], cur: null, cleanup: null, lastHash: "", admin: true };
+const S = { info: null, flows: [], cur: null, cleanup: null, lastHash: "", admin: true, me: "" };
 
 function tryParse(text) {
   try {
@@ -389,6 +390,7 @@ async function route() {
     else if (section === "settings") await renderSettings(main);
     else if (section === "models") await renderModels(main);
     else if (section === "repos") S.cleanup = await renderRepos(main, { admin: S.admin });
+    else if (section === "users") S.cleanup = await renderUsers(main, { me: S.me });
     else if (section === "runs" && arg) S.cleanup = renderRunDetail(main, arg, { admin: S.admin });
     else if (section === "runs") S.cleanup = await renderRunsList(main, { admin: S.admin });
     else if (section === "new") S.cur && !S.cur.name ? renderFlowView() : openNew();
@@ -410,6 +412,7 @@ document.addEventListener("keydown", (e) => {
 
 const me = await ensureSignedIn();
 S.admin = isAdmin(me);
+S.me = me.id;
 // Only now: before the role is known, a hash change must not draw a page.
 window.addEventListener("hashchange", route);
 await startApp(me, { startAdmin, route });

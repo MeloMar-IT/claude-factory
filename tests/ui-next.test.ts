@@ -479,8 +479,8 @@ describe("the Runs pages for a user", () => {
 
   it("the list of an admin also asks for the queue and the owners, and shows the owner column", async () => {
     const runs = (await import("../ui/runs.js" as string)) as any;
-    answers["/api/run-owners"] = [{ id: "u1", name: "Ann", runs: 3 }, { id: "u2", name: "Bob", runs: 1 }];
-    answers["/api/runs"] = [{ ...RUN, ownerName: "Ann" }, { ...RUN, runId: "r2" }];
+    answers["/api/run-owners"] = [{ id: "u1", name: "Ann", runs: 3 }, { id: "u2", name: "Bob", runs: 1 }, { id: "gone", name: "deleted account", runs: 1 }];
+    answers["/api/runs"] = [{ ...RUN, ownerName: "Ann" }, { ...RUN, runId: "r2", ownerName: "deleted account" }, { ...RUN, runId: "r3" }];
     answers["/api/runs?owner=u2"] = [RUN];
     try {
       const main = connected();
@@ -489,9 +489,9 @@ describe("the Runs pages for a user", () => {
       expect(main.textContent).toContain("0/2 running");
       expect(main.all("th").map((th) => th.textContent)).toContain("Owner");
       const cells = main.all("tr").map((tr) => tr.all("td").map((td) => td.textContent)).filter((c) => c.length);
-      expect(cells.map((c) => c[3])).toEqual(["Ann", "—"]);
+      expect(cells.map((c) => c[3])).toEqual(["Ann", "deleted user", ""]);
       const select = main.all("select")[0]!;
-      expect(select.all("option").map((o) => o.textContent)).toEqual(["All owners", "Ann (3)", "Bob (1)"]);
+      expect(select.all("option").map((o) => o.textContent)).toEqual(["All owners", "Ann (3)", "Bob (1)", "deleted user (1)"]);
       asked.length = 0;
       select.fire("change", { target: { value: "u2" } });
       await vi.advanceTimersByTimeAsync(0);
@@ -574,6 +574,55 @@ describe("the Runs pages for a user", () => {
     expect(main.textContent).not.toContain("$");
     expect(main.all("button").map((b) => b.textContent)).toContain("Steps");
     expect(main.textContent).not.toContain("transcripts");
+    expect(main.textContent).not.toContain("Owner");
+    stop();
+  });
+
+  it("ownerLabel, ownerNames and ownerText", async () => {
+    const runs = (await import("../ui/runs.js" as string)) as any;
+    expect(runs.ownerLabel("Ann")).toBe("Ann");
+    expect(runs.ownerLabel("deleted account")).toBe("deleted user");
+    expect(runs.ownerLabel(undefined)).toBe("");
+    expect(runs.ownerNames([{ id: "u1", name: "Ann" }])).toEqual(new Map([["u1", "Ann"]]));
+    expect(runs.ownerNames({})).toBeNull();
+    expect(runs.ownerNames(null)).toBeNull();
+    const names = new Map([["u1", "Ann"]]);
+    expect(runs.ownerText("u1", names)).toBe("Ann");
+    expect(runs.ownerText("u9", names)).toBe("deleted user");
+    expect(runs.ownerText(undefined, names)).toBe("");
+    expect(runs.ownerText("u1", null)).toBe("");
+  });
+
+  it("the run page of an admin shows who started the run", async () => {
+    const runs = (await import("../ui/runs.js" as string)) as any;
+    const { handlers } = stubEventSource();
+    answers["/api/users"] = [{ id: "u1", name: "Ann" }];
+    try {
+      for (const [owner, expected] of [["u1", "Ann"], ["u9", "deleted user"], [undefined, null]] as const) {
+        const main = connected();
+        const stop = runs.renderRunDetail(main, "r1");
+        handlers.update!({ data: JSON.stringify({ summary: { ...RUN, owner } }) });
+        await vi.advanceTimersByTimeAsync(0);
+        const dts = main.all("dt").map((d) => d.textContent);
+        if (expected === null) expect(dts).not.toContain("Owner");
+        else expect(main.all("dd")[dts.indexOf("Owner")]!.textContent).toBe(expected);
+        stop();
+      }
+    } finally {
+      delete answers["/api/users"];
+    }
+  });
+
+  it("the run page of an admin still draws when the account list fails", async () => {
+    const runs = (await import("../ui/runs.js" as string)) as any;
+    const { handlers } = stubEventSource();
+    (globalThis as any).fetch = async () => ({ ok: false, status: 500, statusText: "x", json: async () => ({ error: "no" }) });
+    const main = connected();
+    const stop = runs.renderRunDetail(main, "r1");
+    handlers.update!({ data: JSON.stringify({ summary: { ...RUN, owner: "u1" } }) });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(main.textContent).toContain("walk");
+    expect(main.all("dt").map((d) => d.textContent)).not.toContain("Owner");
     stop();
   });
 
