@@ -28,6 +28,47 @@ describe("parseInterval", () => {
   });
 });
 
+describe("monitor entries in the config", () => {
+  const parse = (watchers: unknown[]) => ConfigSchema.parse({ watchers });
+  const MON = { id: "mon", source: "monitor" };
+
+  it("a monitor needs no repository; another source does", () => {
+    expect(WatcherSchema.parse(MON)).toMatchObject({ source: "monitor", github_repo: "", enabled: true, every: "5m" });
+    expect(() => WatcherSchema.parse({ id: "x", source: "issues" })).toThrow(/github_repo/);
+    expect(() => WatcherSchema.parse({ id: "x", github_repo: "nope" })).toThrow(/owner\/repo/);
+  });
+
+  it("a monitor with a repository, flow, precheck flow or owner fails", () => {
+    for (const extra of [{ github_repo: "a/b" }, { flow: "issue-gitflow" }, { precheck_flow: "epic-questions" }, { owner: "a@b.c" }]) {
+      expect(() => WatcherSchema.parse({ ...MON, ...extra })).toThrow(/does not use this/);
+    }
+  });
+
+  it("only one monitor, and its id must be unique; other watchers may repeat an id", () => {
+    expect(() => parse([MON, { ...MON, id: "two" }])).toThrow(/only one monitor/);
+    expect(() => parse([MON, { id: "mon", github_repo: "a/b" }])).toThrow(/used by another watcher/);
+    const w = { id: "same", github_repo: "a/b" };
+    expect(parse([w, w]).watchers).toHaveLength(2);
+    expect(parse([MON, w]).watchers).toHaveLength(2);
+  });
+
+  it("the monitor section has defaults, and rejects out-of-range and unknown keys", () => {
+    expect(ConfigSchema.parse({}).monitor).toEqual({
+      restart_loop: { resumes: 5, within_minutes: 10 },
+      watcher_error: { checks: 3 },
+      github_limit: { percent: 80 },
+      watcher_silent: { intervals: 5 },
+      unexplained_failure: { runs: 1, within_hours: 24 },
+    });
+    expect(ConfigSchema.parse({ monitor: { restart_loop: { resumes: 9 } } }).monitor.restart_loop).toEqual({ resumes: 9, within_minutes: 10 });
+    expect(() => ConfigSchema.parse({ monitor: { restart_loop: { resumes: 50 } } })).toThrow(); // run.json keeps 50 resumes
+    expect(() => ConfigSchema.parse({ monitor: { github_limit: { percent: 0 } } })).toThrow();
+    expect(() => ConfigSchema.parse({ monitor: { github_limit: { percent: 101 } } })).toThrow();
+    expect(() => ConfigSchema.parse({ monitor: { nope: 1 } })).toThrow();
+    expect(() => ConfigSchema.parse({ monitor: { restart_loop: { nope: 1 } } })).toThrow();
+  });
+});
+
 describe("watcher", () => {
   let gh: ReturnType<typeof fakeGithub>;
   let scheduler: Scheduler;
@@ -69,6 +110,28 @@ describe("watcher", () => {
     expect(log).toMatch(/gh issue edit 5 .*--add-label factory:done/);
     expect(log).not.toMatch(/issue edit (3|9) /);
     expect(runFor("5").status).toBe("succeeded");
+  });
+
+  it("counts checks that fail in a row (errorCount) and calls afterCheck after good and failed checks", async () => {
+    let calls = 0;
+    let reject = false;
+    const w = new Watcher(WatcherSchema.parse({ id: "w", github_repo: "acme/app", flow: oldFlowFor({}) }), {
+      scheduler, runsDir: join(gh.tmp, "runs"), repo: gh.tmp, log: () => {},
+      afterCheck: async () => { calls++; if (reject) throw new Error("hook failed"); },
+    });
+    process.env.FAKE_GH_FAIL = "issue list";
+    await w.tick();
+    expect(w.status.errorCount).toBe(1);
+    await w.tick();
+    expect(w.status.errorCount).toBe(2);
+    expect(calls).toBe(2);
+    delete process.env.FAKE_GH_FAIL;
+    reject = true;
+    await w.tick(); // the hook's rejection changes nothing
+    expect(w.status.errorCount).toBeUndefined();
+    expect(w.status.lastError).toBeUndefined();
+    expect(w.status.lastOk).toBeDefined();
+    expect(calls).toBe(3);
   });
 
   describe("label descriptions", () => {

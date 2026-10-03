@@ -96,6 +96,8 @@ export interface WatcherDeps {
   statusComments?: StatusComments;
   /** Every watcher's config, to find the scheduled release of a finished run. */
   watchers?: () => WatcherConfig[];
+  /** Called after every check, good or failed (the monitor's request-limit reading). A rejection is ignored. */
+  afterCheck?: () => Promise<void> | void;
 }
 
 export interface WatcherStatus {
@@ -112,6 +114,8 @@ export interface WatcherStatus {
   holds?: Hold[];
   /** Since when the checks fail (kept while they keep failing). */
   errorSince?: string;
+  /** How many checks in a row failed (kept while they keep failing). */
+  errorCount?: number;
   /** The pull request that pauses new work (pause_while_pr_open). */
   pausedBy?: { number: number; url?: string; title?: string; createdAt?: string };
 }
@@ -290,15 +294,22 @@ export class Watcher {
       if (token === this.tickToken) {
         this.status.lastError = undefined;
         this.status.errorSince = undefined;
+        this.status.errorCount = undefined;
         this.status.lastOk = new Date().toISOString();
       }
     } catch (e) {
       this.status.lastError = errorLine((e as Error).message);
       this.status.errorSince ??= new Date().toISOString();
+      this.status.errorCount = (this.status.errorCount ?? 0) + 1;
       this.d.log(`[${this.cfg.id}] ! ${this.status.lastError}`);
     } finally {
       clearTimeout(timer);
       this.status.lastTick = new Date().toISOString();
+      try {
+        await this.d.afterCheck?.();
+      } catch {
+        // the hook must not change the outcome of a check
+      }
       this.ticking = false;
       if (this.kickAgain && !this.stopped) {
         this.kickAgain = false;

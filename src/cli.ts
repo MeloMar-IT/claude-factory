@@ -256,6 +256,7 @@ async function main(argv: string[]): Promise<number> {
     }
 
     case "watch": {
+      if (values.source === "monitor") throw new Error("the monitor only runs inside the server: add a watcher with source monitor on the Watchers page");
       const vars = parseVars(values.var);
       const { github_repo, ...rest } = vars;
       if (!github_repo || github_repo === "owner/repo") throw new Error("set the GitHub repo: --var github_repo=owner/repo");

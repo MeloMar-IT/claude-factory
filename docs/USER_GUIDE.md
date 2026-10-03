@@ -551,6 +551,7 @@ running (see [Keep it running](#keep-it-running)). GitHub access uses the `gh` C
 |---|---|---|
 | **Issues** | an open issue has the trigger label | `issue-gitflow` (or `issue-plan` / `issue-code-daily` for the human-in-the-loop pipeline) |
 | **Schedule** | it is time (every N, or once a day at a set time) | `release-daily` |
+| **Monitor** | never — it checks the Foundry itself and records problems (see [The monitor](#the-monitor-the-foundry-checks-itself)) | none |
 | *Review comments* | someone comments on a Foundry PR (branch `factory/*`) | none shipped — name your own flow |
 | *CI failures* | the latest CI run of a workflow on the default branch failed | none shipped — name your own flow |
 
@@ -558,6 +559,52 @@ running (see [Keep it running](#keep-it-running)). GitHub access uses the `gh` C
 
 For a **schedule**, the text becomes the run's task. Intervals: `30s`, `5m`, `1h`, `7d`; or set
 **Once a day at** `17:00` with a time zone.
+
+### The monitor: the Foundry checks itself
+
+The monitor is a watcher that looks at the Foundry itself and writes down what is wrong, so you
+do not have to find it. It is **off until you add it**: on the Watchers page choose **Add watcher**
+and the source **The Foundry itself**. It needs only an id and an interval. It has no repository, no
+flow and no label, only one is allowed, and only an admin can add it. It starts nothing and changes
+no run, label or file of a run; it only writes its findings.
+
+Each check runs these detectors. Each one reads the runs, the queue, the watchers and the server
+log; none calls an AI or GitHub.
+
+| Detector | Finds | Severity | Default |
+|---|---|---|---|
+| Restart loop | the same run resumed again and again | critical | more than 5 times in 10 minutes |
+| Watcher error | a watcher's checks fail one after the other (grouped by kind of error) | major | more than 3 checks in a row |
+| GitHub request limit | the limit was hit, or most of it is used | critical when hit, major when used | more than 80% |
+| Watcher silent | an enabled watcher finished no check | critical | 5 times its interval |
+| Unexplained failure | a run failed with an error no rule of the Foundry explains | minor | 1 run in 24 hours |
+
+*Critical* means work has stopped, *major* means work is slowed or wrong, *minor* means wrong but
+harmless. A detector that crashes shows up as a finding "Detector X failed"; the others still run.
+
+Change the thresholds in `config.yaml`:
+
+```yaml
+watchers:
+  - { id: monitor, source: monitor, every: 5m }
+monitor:
+  restart_loop: { resumes: 5, within_minutes: 10 }   # resumes: at most 49
+  watcher_error: { checks: 3 }
+  github_limit: { percent: 80 }
+  watcher_silent: { intervals: 5 }
+  unexplained_failure: { runs: 1, within_hours: 24 }
+```
+
+Findings are kept in `monitor-findings.json` in the data folder and survive a restart. Each has a
+detector, a fingerprint (the same problem gives the same one), a severity, one sentence, the
+evidence, when it was first and last seen and how often. A finding not seen for 24 hours becomes
+*gone* (kept 30 days; at most 500 findings are kept). A file that cannot be read is kept as
+`monitor-findings.json.broken`. If the monitor's own check fails, the Health line says so.
+Findings are not shown in the app yet.
+
+*Unexplained* is strict: no rule in the Foundry's failure rules matched (an AI's summary does not
+count). An ordinary failing command (`exit code 1`) is explained. The request-limit numbers come
+from `gh api rate_limit`, read at most once a minute for the server's own login and the bot token.
 
 ### How issue watchers use labels
 

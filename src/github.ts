@@ -22,6 +22,37 @@ export async function gh(args: string[], env?: NodeJS.ProcessEnv, timeoutMs?: nu
   return (await p).stdout;
 }
 
+/** One resource of GitHub's request limit (`gh api rate_limit`). */
+export interface RateResource { limit: number; used: number; remaining: number; reset: number }
+/** What `gh api rate_limit` said, and when it was read. */
+export interface RateReading { at: string; resources: Record<string, RateResource> }
+
+/** The valid resources of a `rate_limit` answer. */
+export function parseRateLimit(text: string, at = new Date(), prefix = ""): RateReading | undefined {
+  try {
+    const res = (JSON.parse(text) as { resources?: Record<string, Partial<RateResource>> }).resources ?? {};
+    const resources: Record<string, RateResource> = {};
+    // Every valid resource (core, graphql, search, …); `prefix` names another identity ("bot:").
+    for (const [k, r] of Object.entries(res)) {
+      if (r && [r.limit, r.used, r.remaining, r.reset].every((n) => typeof n === "number" && Number.isFinite(n)) && r.limit! > 0) {
+        resources[`${prefix}${k}`] = { limit: r.limit!, used: r.used!, remaining: r.remaining!, reset: r.reset! };
+      }
+    }
+    return Object.keys(resources).length ? { at: at.toISOString(), resources } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Reads the request limit (this call does not count against it). Never throws; undefined when it cannot be read. */
+export async function readRateLimit(timeoutMs = 4_000, env?: NodeJS.ProcessEnv, prefix = ""): Promise<RateReading | undefined> {
+  try {
+    return parseRateLimit(await gh(["api", "rate_limit"], env, timeoutMs), new Date(), prefix);
+  } catch {
+    return undefined;
+  }
+}
+
 export async function ghJson<T>(args: string[], env?: NodeJS.ProcessEnv, timeoutMs?: number): Promise<T> {
   const out = (await gh(args, env, timeoutMs)).trim();
   return (out ? JSON.parse(out) : []) as T;

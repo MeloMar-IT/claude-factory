@@ -25,6 +25,7 @@ import { adoptRuns } from "../auth/run-owner.js";
 import { hasAdmin, type User } from "../auth/users.js";
 import { repoRoutes } from "./api-repos.js";
 import { userRoutes } from "./api-users.js";
+import { logRing } from "../monitor/monitor.js";
 import { authorize, findRule } from "./permissions.js";
 import { sinceRoutes } from "./since.js";
 import { yourTurnRoutes } from "./your-turn.js";
@@ -75,7 +76,12 @@ const ROUTES: Route[] = [credentialRoutes, repoRoutes, userRoutes, adminRoutes, 
 export async function startServer(given: ServerOptions): Promise<{ url: string; close: () => void; ctx: ApiContext; notifier?: TurnNotifier }> {
   // every free-form server, watcher and notifier log line passes the redaction (fail closed)
   const sink = given.log ?? (() => {});
-  const log = (msg: string) => sink(redactText(msg));
+  const ring = logRing(); // the newest redacted lines, for the monitor
+  const log = (msg: string) => {
+    const text = redactText(msg);
+    ring.push(text);
+    sink(text);
+  };
   const opts: ServerOptions = { ...given, log };
   let config = loadConfig();
   const listen = config.server.listen;
@@ -99,7 +105,7 @@ export async function startServer(given: ServerOptions): Promise<{ url: string; 
       if (s.vars?.github_repo && !steppedAsideFor(s)) watchers.kickRepo(s.vars.github_repo);
     },
   });
-  const watchers = new WatcherManager({ scheduler, runsDir: opts.runsDir, repo: opts.repo, config: () => config, areaWait, log });
+  const watchers = new WatcherManager({ scheduler, runsDir: opts.runsDir, repo: opts.repo, config: () => config, areaWait, log, serverLog: ring.lines });
   const ctx: ApiContext = { opts, diagLog: sink, scheduler, watchers, config: () => config, reloadConfig: () => (config = loadConfig()), listen };
 
   // Before the first pump and before adopt(): jobs of blocked accounts never start, and a stop-work request made while

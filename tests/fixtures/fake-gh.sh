@@ -16,6 +16,7 @@ case "$all" in "api repos/"*"/issues/comments/"*)
   esac
   echo '{}'; exit 0 ;;
 esac
+case "$all" in "api rate_limit") if [ -n "$FAKE_GH_RATE_LIMIT" ]; then printf '%s\n' "$FAKE_GH_RATE_LIMIT"; else echo '{"resources":{}}'; fi; exit 0 ;; esac
 case "$1 $2" in
   "repo view")
     case "$*" in *--jq*|*nameWithOwner*) echo "repo: owner/repo"; echo "default branch: main" ;;

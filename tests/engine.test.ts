@@ -140,6 +140,28 @@ steps:
     expect(snaps.length).toBeGreaterThan(0);
     expect(snaps.some((x) => x.stepStartedAt === old)).toBe(false);
   });
+
+  it("a resume adds { at, from } to resumeLog, and the list keeps the last 50", async () => {
+    const s = await start(`
+name: t
+workspace: inplace
+steps:
+  - {id: a, type: shell, run: 'true'}
+  - {id: b, type: shell, run: 'test -f ok'}
+`);
+    expect(s.resumeLog).toBeUndefined();
+    const r = await resume(s.runId);
+    expect(r.status).toBe("failed");
+    expect(r.resumeLog).toHaveLength(1);
+    expect(r.resumeLog![0]).toMatchObject({ from: "b" });
+    expect(Number.isNaN(Date.parse(r.resumeLog![0]!.at))).toBe(false);
+    const old = Array.from({ length: 50 }, (_, i) => ({ at: `2026-01-01T00:00:${String(i).padStart(2, "0")}.000Z`, from: "a" }));
+    saveRun({ ...r, resumeLog: old });
+    const again = await resume(r.runId);
+    expect(again.resumeLog).toHaveLength(50);
+    expect(again.resumeLog![0]!.at).toBe(old[1]!.at);
+    expect(again.resumeLog!.at(-1)).toMatchObject({ from: "b" });
+  });
 });
 
 describe("approvals", () => {

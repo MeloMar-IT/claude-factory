@@ -155,7 +155,7 @@ export async function resumeRun(opts: ResumeOptions): Promise<RunSummary> {
   if (!summary.flowDef.steps.some((s) => s.id === from)) throw new Error(`unknown step "${from}"`);
 
   const decision = opts.decision && summary.waiting ? { ...opts.decision, stepId: summary.waiting.stepId } : undefined;
-  Object.assign(summary, { status: "running" as RunStatus, reason: undefined, failureNote: undefined, finishedAt: undefined, resumes: (summary.resumes ?? 0) + 1 });
+  Object.assign(summary, { status: "running" as RunStatus, reason: undefined, failureNote: undefined, finishedAt: undefined, resumes: (summary.resumes ?? 0) + 1, resumeLog: [...(summary.resumeLog ?? []), { at: new Date().toISOString(), from }].slice(-50) });
   summary.pid = process.pid;
   summary.stepStartedAt = undefined; // an old step time must not show on the resumed run
   claimRunStart(opts.runsDir, () => saveRun(summary));

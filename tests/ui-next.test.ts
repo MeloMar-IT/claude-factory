@@ -412,6 +412,18 @@ describe("the \"?\" and the status names", () => {
     expect(() => WatcherSchema.parse(item)).toThrow();
     expect(admin.watcherConfig()).toEqual({});
   });
+
+  it("describes a monitor, and a monitor entry keeps only id, source, every and enabled", async () => {
+    const { WatcherSchema } = await import("../src/config.js");
+    expect(admin.describeWatcher({ id: "m", source: "monitor", every: "5m" })).toBe("checks the Foundry itself for problems");
+    const full = WatcherSchema.parse({
+      id: "w", github_repo: "o/r", flow: "issue-gitflow", precheck_flow: "epic-questions", label: "go", exclude_labels: ["x"],
+      owner: "a@b.c", vars: { test_cmd: "npm test" }, every: "10m", enabled: false,
+    });
+    const entry = admin.monitorEntry(full);
+    expect(entry).toEqual({ id: "w", source: "monitor", every: "10m", enabled: false });
+    expect(WatcherSchema.parse(entry)).toMatchObject({ source: "monitor", github_repo: "" });
+  });
 });
 
 describe("the Runs pages for a user", () => {

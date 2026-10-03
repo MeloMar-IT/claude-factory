@@ -62,6 +62,22 @@ describe("health()", () => {
   const dirs: string[] = [];
   afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }); });
 
+  it("a monitor adds no repository; a failing monitor check is a problem with no repository", () => {
+    const cfg = WatcherSchema.parse({ id: "mon", source: "monitor" });
+    const withMonitor = (status: ReturnType<typeof wstatus>) => {
+      const ctx = ctxOf();
+      // the manager does not track a monitor, but lists its status
+      (ctx.watchers as unknown as { statuses: () => unknown }).statuses = () => [{ ...cfg, status }];
+      return health(ctx, NOW);
+    };
+    const good = withMonitor(wstatus("mon", { lastOk: ago(MIN), lastTick: ago(MIN) }));
+    expect(good).toEqual({ ok: true, summary: "All good", problems: [], repos: [] });
+    const bad = withMonitor(wstatus("mon", { lastError: "disk is gone" }));
+    expect(bad.problems.map((p) => p.kind)).toEqual(["watcher_error"]);
+    expect(bad.problems[0]!.repo).toBe("");
+    expect(bad.repos).toEqual([]);
+  });
+
   it("says All good when nothing is wrong", () => {
     expect(health(ctxOf(), NOW)).toEqual({ ok: true, summary: "All good", problems: [], repos: [] });
   });

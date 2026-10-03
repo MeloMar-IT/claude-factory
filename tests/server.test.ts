@@ -66,6 +66,18 @@ describe("ui server", () => {
     expect((await json("DELETE", "/api/flows/used-by-step")).status).toBe(200);
   });
 
+  it("runs a monitor watcher: listed as active, Check now writes the findings file, a second monitor is refused", async () => {
+    const cfg = (await (await json("GET", "/api/config")).json()) as { watchers: unknown[] };
+    const mon = { id: "mon", source: "monitor", every: "1h" };
+    expect((await json("PUT", "/api/config", { ...cfg, watchers: [mon] })).status).toBe(200);
+    const list = (await (await json("GET", "/api/watchers")).json()) as { id: string; state: { name: string }; status?: { id: string } }[];
+    expect(list.find((w) => w.id === "mon")).toMatchObject({ state: { name: "active" }, status: { id: "mon" } });
+    expect((await json("POST", "/api/watchers/mon/tick", {})).status).toBe(200);
+    expect(existsSync(join(tmp, "home", "monitor-findings.json"))).toBe(true);
+    expect((await json("PUT", "/api/config", { ...cfg, watchers: [mon, { ...mon, id: "mon2" }] })).status).toBe(400);
+    expect((await json("PUT", "/api/config", { ...cfg, watchers: [] })).status).toBe(200);
+  });
+
   it("serves the UI and the yaml browser build", async () => {
     expect((await fetch(base + "/")).headers.get("content-type")).toContain("text/html");
     expect((await fetch(base + "/vendor/yaml/index.js")).status).toBe(200);
