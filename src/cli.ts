@@ -332,7 +332,7 @@ async function main(argv: string[]): Promise<number> {
         idle,
         drain: () => {
           ctx.restart = { why: "new_version", since: new Date().toISOString() };
-          ctx.watchers.stopAll(); // watchers start again with the new version
+          ctx.watchers.drain(); // watchers start again with the new version; the monitor keeps watching the wait
         },
         beforeExit,
         log,

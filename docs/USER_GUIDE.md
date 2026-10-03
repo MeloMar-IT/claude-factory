@@ -619,6 +619,14 @@ log; none calls an AI or GitHub.
 | GitHub request limit | the limit was hit, or most of it is used | critical when hit, major when used | more than 80% |
 | Watcher silent | an enabled watcher finished no check | critical | 5 times its interval |
 | Unexplained failure | a run failed with an error no rule of the Foundry explains | minor | 1 run in 24 hours |
+| Stuck run | a running run wrote nothing to its log for longer than its step's timeout plus a margin (no timeout: 120 minutes) | major | timeout + 10 minutes |
+| Same step keeps failing | the same step of the same flow ended runs as failed for different issues | major | 3 issues in 24 hours |
+| Label and run disagree | an issue's status label does not match its newest run | minor | more than 3 checks |
+| Lock without owner | a code-area lock or a run lock is held by a run that is not running | major | more than 10 minutes |
+| Queue not moving | jobs are queued, slots are free, and nothing started | critical | 15 minutes |
+| Restart overdue | a new version is installed and the server has not restarted | major | more than 2 hours |
+| Develop is red | the tests after a merge into develop failed one after the other | critical | 2 in a row, looking back 24 hours |
+| Slow step | a step took much longer than its usual time (the times kept for estimates; needs 3 earlier runs and more than 2 minutes) | minor | more than 3 times, 3 times in 24 hours |
 
 *Critical* means work has stopped, *major* means work is slowed or wrong, *minor* means wrong but
 harmless. A detector that crashes shows up as a finding "Detector X failed"; the others still run.
@@ -634,7 +642,34 @@ monitor:
   github_limit: { percent: 80 }
   watcher_silent: { intervals: 5 }
   unexplained_failure: { runs: 1, within_hours: 24 }
+  stuck_run: { extra_minutes: 10, no_timeout_minutes: 120 }
+  same_step_failing: { issues: 3, within_hours: 24 }
+  label_mismatch: { checks: 3 }
+  orphan_lock: { minutes: 10 }
+  queue_stalled: { minutes: 15 }
+  restart_overdue: { hours: 2 }
+  develop_red: { failures: 2, within_hours: 24 }
+  slow_step: { factor: 3, times: 3, within_hours: 24 }
 ```
+
+**What is never a finding:** a run that waits for a person (approval or questions), a usage limit
+that resets by itself, a sign-out (that is your turn, already shown), a story that waits for a
+dependency or a release, and a `factory:done` label. While the server waits to restart, the label
+and watcher-silent detectors are quiet.
+
+Notes:
+
+- Label data comes from the watchers' last checks. A `done` label is never a mismatch.
+- A run inside a sub-flow step is not checked for being stuck.
+- Same step keeps failing counts runs that ended failed, not steps that failed and were fixed in
+  the same run. A step that only handles another step's failure is not named.
+- Develop is red counts every test run after a merge, also several of one story, and looks back
+  `within_hours`.
+- A lock without owner is counted from the check that first saw it. A lock whose owner's `run.json`
+  cannot be read is counted the same way.
+- Slow step compares with the newest 500 succeeded runs that finished before the last
+  `within_hours`, rebuilt about once an hour.
+- The monitor keeps running while a new version waits for the server to restart.
 
 Findings are kept in `monitor-findings.json` in the data folder and survive a restart. Each has a
 detector, a fingerprint (the same problem gives the same one), a severity, one sentence, the

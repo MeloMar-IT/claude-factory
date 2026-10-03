@@ -154,7 +154,7 @@ export function saveRun(s: RunSummary) {
   writeFileSync(runFile(s.runDir), JSON.stringify(s, null, 2));
 }
 
-const pidAlive = (pid: unknown): boolean => {
+export const pidAlive = (pid: unknown): boolean => {
   if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) return false;
   if (pid === process.pid) return true;
   try {

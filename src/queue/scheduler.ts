@@ -91,6 +91,7 @@ export function queuerOf(q: QueuedJob): string | undefined {
 export class Scheduler {
   private pending: QueuedJob[] = [];
   private active = new Map<string, Active>();
+  private lastStartAt = new Date().toISOString();
   private recent = new Map<string, Active>(); // finished, kept briefly for late subscribers
   /** Viewers of runs that are not running right now; attached when the run starts. */
   private pendingListeners = new Map<string, Set<(e: RunEvent) => void>>();
@@ -409,7 +410,13 @@ export class Scheduler {
     this.persist();
   }
 
+  /** When a job last started, or the scheduler was created. */
+  lastStart(): string {
+    return this.lastStartAt;
+  }
+
   private start(q: QueuedJob) {
+    this.lastStartAt = new Date().toISOString();
     const a: Active = {
       queued: q,
       controller: new AbortController(),

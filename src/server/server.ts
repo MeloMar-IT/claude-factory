@@ -106,7 +106,7 @@ export async function startServer(given: ServerOptions): Promise<{ url: string; 
       if (s.vars?.github_repo && !steppedAsideFor(s)) watchers.kickRepo(s.vars.github_repo);
     },
   });
-  const watchers = new WatcherManager({ scheduler, runsDir: opts.runsDir, repo: opts.repo, config: () => config, areaWait, log, serverLog: ring.lines });
+  const watchers = new WatcherManager({ scheduler, runsDir: opts.runsDir, repo: opts.repo, config: () => config, areaWait, log, serverLog: ring.lines, restart: () => ctx.restart });
   const ctx: ApiContext = { opts, diagLog: sink, scheduler, watchers, config: () => config, reloadConfig: () => (config = loadConfig()), listen };
 
   // Before the first pump and before adopt(): jobs of blocked accounts never start, and a stop-work request made while

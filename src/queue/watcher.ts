@@ -152,6 +152,8 @@ export interface TrackedIssue {
   createdAt?: string;
   /** Priority only: the run that holds the code area this story waits for. */
   claims?: string;
+  /** The status label has not fitted the newest run for `checks` checks in a row (for the monitor). `label` is the key, e.g. "working". */
+  labelOff?: { checks: number; label: string; run: string };
 }
 
 /** Does the issue carry one of the priority labels? GitHub label names ignore case. */
@@ -192,6 +194,21 @@ function labelFor(s: RunSummary, L: LabelNames): string {
   }
 }
 
+/**
+ * Does the issue's status label disagree with its newest run? Returns the label (its key) and what the run says, or
+ * undefined when they fit. A done label is left alone, as the watcher does; an issue without a run or a label fits.
+ * A job that is queued or active counts as working. A cancelled run fits working too (the watcher resumes it).
+ */
+export function labelLies(status: string | undefined, busy: boolean, run: RunSummary | undefined, L: LabelNames): { label: string; run: string } | undefined {
+  if (!status || status === L.done) return undefined;
+  const key = (Object.keys(L) as LabelKey[]).find((k) => L[k] === status);
+  if (!key) return undefined;
+  if (busy) return status === L.working ? undefined : { label: key, run: "working" };
+  if (!run) return undefined;
+  if (status === labelFor(run, L) || (run.status === "cancelled" && status === L.working)) return undefined;
+  return { label: key, run: run.status };
+}
+
 /** Minutes since midnight in a time zone (default: this machine's). */
 export function minutesNow(timeZone?: string, now = new Date()): { day: string; minutes: number } {
   const parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
@@ -205,6 +222,8 @@ export class Watcher {
   status: WatcherStatus;
   /** Issues the last tick saw (for the next-step records). */
   tracked: TrackedIssue[] = [];
+  /** Per issue: in how many checks in a row its label did not fit its newest run. */
+  private labelOff = new Map<number, number>();
   private timer?: NodeJS.Timeout;
   private ticking = false;
   private tickToken = 0;
@@ -596,6 +615,7 @@ export class Watcher {
     if (paused && this.status.lastActions[0]?.includes(paused.text) !== true) this.act(`not starting new work while ${paused.text} is open`);
     const holds: Hold[] = [];
     const tracked: TrackedIssue[] = [];
+    const offNow = new Map<number, number>(); // checks in a row that the label did not fit, per issue
     let anyRuns: Map<string, RunSummary> | undefined; // newest run per issue in any flow (to describe blockers)
     const checked = this.prechecked();
     const toCheck: Issue[] = [];
@@ -625,6 +645,12 @@ export class Watcher {
       const queuedId = pending.find((p) => p.githubRepo === this.repo && p.issue === String(n))?.runId;
       const track: TrackedIssue = { issue: n, title: issue.title, runId: queuedId ?? run?.runId, done: status === this.L.done, ...(isFirst ? { priority: true, createdAt: issue.createdAt } : {}) };
       tracked.push(track);
+      const off = labelLies(status, queuedId !== undefined || (!!run && this.d.scheduler.isActive(run.runId)), run, this.L);
+      if (off) {
+        const checks = (this.labelOff.get(n) ?? 0) + 1;
+        offNow.set(n, checks);
+        track.labelOff = { checks, ...off };
+      }
       // A job of this watcher that is queued follows the label: it goes first, or goes back when the label is gone.
       const own = pending.find((p) => p.runId === (queuedId ?? run?.runId) && (p.source === `watcher ${this.cfg.id} issue #${n}` || /^ui (resume|approve|reject)$/.test(p.source ?? "")));
       if (own) this.d.scheduler.setPriority(own.runId, isFirst, issue.createdAt);
@@ -773,6 +799,7 @@ export class Watcher {
     this.status.holds = holds;
     this.status.pausedBy = paused ? { number: paused.number, url: paused.url, title: paused.title, createdAt: paused.createdAt } : undefined;
     this.tracked = tracked;
+    this.labelOff = offNow;
     if (this.cfg.status_comment) await this.reportStatus(runs, holds, tracked, closed, !tidyError && closedWhole && whole, () => mine === this.tickToken && !this.stopped);
     // The closed-issue scan is part of the check: its failure is the check's error.
     if (tidyError) throw new Error(`tidying closed issues: ${errorLine(tidyError.message)}`);

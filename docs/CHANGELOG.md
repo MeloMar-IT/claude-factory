@@ -4,6 +4,15 @@ Changes that are merged but not yet in a release go under **Unreleased**. Newest
 
 ## Unreleased
 
+- Self-repair 2 — more monitor detectors (#86).
+  - **New detectors** (each has a threshold under `monitor:` in `config.yaml`): **stuck run** (nothing written to the log for longer than the step's timeout plus 10 minutes; a step without a timeout counts 120 minutes), **same step keeps failing** (the same step of a flow ended runs as failed for 3 different issues in 24 hours), **label and run disagree** (more than 3 checks), **lock without owner** (a code-area lock or a run lock held by a run that is not running, more than 10 minutes), **queue not moving** (jobs queued, slots free, nothing started for 15 minutes), **restart overdue** (a new version waits more than 2 hours), **develop is red** (the tests after a merge into develop failed 2 times in a row, looking back 24 hours) and **slow step** (more than 3 times the usual time, 3 times in 24 hours).
+  - **Normal is never a finding.** A run that waits for a person, a usage limit that resets by itself, a sign-out, a story that waits for a dependency or a release, and a `done` label are left out. Interrupted runs, rejected approvals and the run budget do not count as a failing step. A run inside a sub-flow step is not judged as stuck.
+  - **Descriptions.** Every detector has a two-sentence `description`; `detectorInfo()` lists them (and `detector-failed`) for the app.
+  - **The monitor keeps running while a new version waits** (`WatcherManager.drain()`), so a restart that takes too long is seen. `stopAll()` still stops it.
+  - **Formats.** New `monitor:` keys (`stuck_run`, `same_step_failing`, `label_mismatch`, `orphan_lock`, `queue_stalled`, `restart_overdue`, `develop_red`, `slow_step`) that an older build rejects once the config is saved. The findings file and `GET /api/queue` are unchanged.
+  - **Code.** New `src/monitor/work-detectors.ts`; `slowVisits()` in `src/estimate.ts`; `labelLies()` and `TrackedIssue.labelOff` in `src/queue/watcher.ts`; `Scheduler.lastStart()`; `lastLogWrite()`, `readAreaLocks()` and `areaLockDir()` in `src/monitor/monitor.ts`; `pidAlive` is exported from `src/engine/state.ts`.
+  - **Not included.** Showing findings or descriptions in the app.
+
 - Fix a test that failed on a busy machine: the clean-up after the failure-explanation tests retries while a stopped model process still writes its log (it failed the tests before the change for two stories).
 - Docs: new `docs/DESIGN.md` (how the Foundry is built, with diagrams) and `docs/LESSONS_LEARNED.md`; the user guide and README have pictures of the current interface (Your turn, Board, sign-in, My repositories, the user display) and every older picture was retaken. The README is rewritten around the current way of working (one label, Your turn, gitflow, accounts) and its quick start no longer uses a flow that is not shipped.
 - Users page (#65).
