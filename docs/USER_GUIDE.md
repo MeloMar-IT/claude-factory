@@ -1377,6 +1377,7 @@ you can do first. Find yours in the table:
 | The run failed: no reason was saved | Look at the steps and the log on the run page |
 | The run failed: the error is not one the Foundry can explain | Look at Details on the run page |
 | The watcher for … can't reach GitHub: GitHub did not answer or did not let it in | Check the network and `gh auth status` |
+| GitHub's request limit is used up: the Foundry asked GitHub too much in the last hour | Nothing — GitHub lifts the limit within the hour, and the watcher continues by itself |
 | The watcher for … cannot reach the repository: a call to GitHub failed | Check that gh is logged in and the repository is there |
 | The watcher for … did not finish its check: it took too long and was given up | Press Check now on the Watchers page to try again |
 | The watcher for … cannot start: its check interval is not a valid time | Change the check interval of the watcher to a time like 5m |

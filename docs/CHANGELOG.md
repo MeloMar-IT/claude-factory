@@ -4,6 +4,8 @@ Changes that are merged but not yet in a release go under **Unreleased**. Newest
 
 ## Unreleased
 
+- Fixed: a run that stepped aside for a busy code area was restarted again and again while the other run still worked. The endless checks used up GitHub's request limit and showed as a watcher error. It is now restarted only when the other run has stopped working.
+- A watcher error caused by GitHub's request limit now says so, and that it continues by itself, instead of asking to check the login.
 - Fix flaky tests: the "next story starts right away" tests wait for the event without a tight time limit (they failed on a busy machine and blocked stories).
 - Gitflow: tests before the change and after the merge into `develop` run once more when they fail (a timing-sensitive test can fail by chance on a busy machine); a fix attempt that changes nothing just tests again instead of failing.
 - A run that waits for a person (questions, a decision) ends by itself when its issue is closed on GitHub, so it no longer shows as needing attention.

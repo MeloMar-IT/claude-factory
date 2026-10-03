@@ -7,7 +7,7 @@ import { ConfigSchema, WatcherSchema } from "../src/config.js";
 import { runFlow } from "../src/engine/runner.js";
 import { loadFlow } from "../src/flow/load.js";
 import { Scheduler } from "../src/queue/scheduler.js";
-import { Watcher } from "../src/queue/watcher.js";
+import { steppedAsideFor, Watcher } from "../src/queue/watcher.js";
 import { reportFirst } from "../src/next-step.js";
 import { claudeBin, closing, fakeGithub, first } from "./helpers/fake-github.js";
 
@@ -174,8 +174,37 @@ describe("gitflow pipeline", () => {
     expect(waiting.status).toBe("stopped");
     expect(waiting.reason).toMatch(/stopped at step "wait_for_area"/);
     expect(scheduler.queue().active).toHaveLength(0); // no slot held while waiting
+    expect(steppedAsideFor(waiting)).toBe("other");
     // The other run finishes; the next check resumes it.
     writeFileSync(join(other, "run.json"), JSON.stringify({ status: "succeeded" }));
+    await w.tick();
+    await settle();
+    expect(runOf("5")!.status).toBe("succeeded");
+  });
+
+  it("does not restart a run that stepped aside while the run that holds the area still works", async () => {
+    // The holder is a run of this Foundry (in the runs folder), still running.
+    const other = join(runsDir(), "holder-1");
+    mkdirSync(other, { recursive: true });
+    writeFileSync(join(other, "run.json"), JSON.stringify({ runId: "holder-1", status: "running", history: [], vars: {} }));
+    const env = { ...process.env, FACTORY_VAR_GITHUB_REPO: REPO };
+    expect(spawnSync(resolve("tools/area-lock"), ["acquire", "holder-1", other, "src/area5"], { env, encoding: "utf8" }).stdout).toContain("LOCKED");
+    issues(5);
+    const w = watcher();
+    await w.tick();
+    await settle();
+    const waiting = runOf("5")!;
+    expect(waiting.reason).toMatch(/stopped at step "wait_for_area"/);
+    expect(steppedAsideFor(waiting)).toBe("holder-1");
+    const resumes = waiting.resumes ?? 0;
+    // More checks while the holder works: no restart (each restart would only stop again).
+    await w.tick();
+    await w.tick();
+    await settle();
+    expect(runOf("5")!.resumes ?? 0).toBe(resumes);
+    expect(runOf("5")!.status).toBe("stopped");
+    // The holder finishes: the next check continues the run.
+    writeFileSync(join(other, "run.json"), JSON.stringify({ runId: "holder-1", status: "succeeded", history: [], vars: {} }));
     await w.tick();
     await settle();
     expect(runOf("5")!.status).toBe("succeeded");

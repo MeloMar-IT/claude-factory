@@ -53,6 +53,7 @@ const ROWS: Row[] = [
   { re: /^interval must be\b/, only: "watcher", make: () => ({ what: "The watcher cannot start", why: "its check interval is outside what is allowed", todo: "Change the check interval of the watcher to a time like 5m" }) },
   { re: /the check took longer than/, only: "watcher", make: () => ({ what: "The watcher did not finish its check", why: "it took too long and was given up", todo: "Press Check now on the Watchers page to try again" }) },
   { re: /^cannot access |could not resolve host|error connecting|dial tcp|timeout|ENOTFOUND|ECONNREFUSED|HTTP 5\d\d/i, only: "watcher", make: () => ({ what: "The watcher can't reach GitHub", why: "GitHub did not answer or did not let it in", todo: "Check the network and `gh auth status`" }) },
+  { re: /API rate limit (?:already )?exceeded|secondary rate limit/i, only: "watcher", make: () => ({ what: "GitHub's request limit is used up", why: "the Foundry asked GitHub too much in the last hour", todo: "Nothing — GitHub lifts the limit within the hour, and the watcher continues by itself" }) },
   { re: /Command failed: gh\b/, only: "watcher", make: () => ({ what: "The watcher cannot reach the repository", why: "a call to GitHub failed", todo: "Check that gh is logged in and the repository is there" }) },
   { re: /^internal error\b/, make: () => ({ what: "The run failed", why: "the Foundry hit an error of its own", todo: RUN_PAGE_LOG }) },
 ];
