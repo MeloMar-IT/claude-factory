@@ -1,13 +1,20 @@
 import type { MonitorConfig, WatcherConfig } from "../config.js";
+import type { DurationHistory } from "../estimate.js";
 import type { RunSummary } from "../engine/state.js";
 import { cleanLine, errorKind, explainError, GITHUB_LIMIT_RE, NOT_EXPLAINED } from "../errors.js";
 import { classifyFailure, failedIndex } from "../failure.js";
 import type { RateReading } from "../github.js";
 import type { Scheduler } from "../queue/scheduler.js";
-import { parseInterval, type WatcherStatus } from "../queue/watcher.js";
+import { parseInterval, type TrackedIssue, type WatcherStatus } from "../queue/watcher.js";
 import type { Evidence, FindingInput, Severity } from "./findings.js";
 
 export interface LogLine { at: string; text: string }
+
+/** A run that runs now, with the newest write to any of its logs. */
+export interface ActiveRun { run: RunSummary; lastWrite?: string }
+
+/** A lock the lock tool honours. `orphanSince` is set while its owner is not running. No run id. */
+export interface AreaLock { repo: string; areas: string[]; at: string; orphanSince?: string }
 
 /** Everything a detector may look at. Plain data: no detector calls an AI or GitHub. */
 export interface DetectorInput {
@@ -17,38 +24,52 @@ export interface DetectorInput {
   config: MonitorConfig;
   /** Runs that were resumed lately and runs that failed lately (loaded in full). */
   runs: RunSummary[];
-  watchers: { cfg: WatcherConfig; status: WatcherStatus }[];
+  watchers: { cfg: WatcherConfig; status: WatcherStatus; issues?: TrackedIssue[] }[];
   log: LogLine[];
   rate?: RateReading;
   /** The queue as it is now. */
   queue: ReturnType<Scheduler["queue"]>;
   /** The monitor's own id: its log lines are not evidence. */
   monitorId: string;
+  /** When the server woke up after a sleep (set only for the check right after it). */
+  wokeAt?: string;
+  /** Runs that run now. */
+  active?: ActiveRun[];
+  /** Area locks that the lock tool honours. */
+  areaLocks?: AreaLock[];
+  /** When a job last started (or the scheduler was created). */
+  lastStart?: string;
+  /** Set while the server waits to restart. */
+  restart?: { why: "new_version" | "data_folder"; since: string };
+  /** Usual step times from older succeeded runs. */
+  history?: DurationHistory;
 }
 
 export interface Detector {
   name: string;
+  /** What it looks for and why it matters: two short sentences the app can show. */
+  description: string;
   run(input: DetectorInput): FindingInput[];
 }
 
-const HOUR = 3_600_000;
+export const HOUR = 3_600_000;
 const RANK: Record<Severity, number> = { critical: 0, major: 1, minor: 2 };
-const iso = (ms: number) => new Date(ms).toISOString();
-const uniq = <T>(list: T[]) => [...new Set(list)];
-const when = (r: RunSummary) => Date.parse(r.finishedAt ?? r.startedAt);
-const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
+export const iso = (ms: number) => new Date(ms).toISOString();
+export const uniq = <T>(list: T[]) => [...new Set(list)];
+export const when = (r: RunSummary) => Date.parse(r.finishedAt ?? r.startedAt);
+export const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
 /** The newest `n` of a list of times, as ISO text. */
-const latest = (times: number[], n = 5) => [...times].sort((a, b) => b - a).slice(0, n).map(iso);
+export const latest = (times: number[], n = 5) => [...times].sort((a, b) => b - a).slice(0, n).map(iso);
 
 /** The failed step of a run, and its error (or the run's reason without the "step … failed:" prefix). */
-function failure(run: RunSummary): { step: string; error: string; record?: RunSummary["history"][number] } {
+export function failure(run: RunSummary): { step: string; error: string; record?: RunSummary["history"][number] } {
   const history = Array.isArray(run.history) ? run.history : [];
   const record = history[failedIndex(history)];
   const reason = (run.reason ?? "").replace(/^step "[\w./-]+" failed:\s*/, "");
   return { step: record?.id ?? "", error: (record?.error ?? reason).trim(), record };
 }
 
-const ownerRepo = (r: RunSummary): string | undefined => {
+export const ownerRepo = (r: RunSummary): string | undefined => {
   const v = r.vars?.github_repo;
   return v && v !== "owner/repo" && /^[\w.-]+\/[\w.-]+$/.test(v) ? v : undefined;
 };
@@ -56,6 +77,7 @@ const ownerRepo = (r: RunSummary): string | undefined => {
 /** Same run resumed more than N times in M minutes. */
 const restartLoop: Detector = {
   name: "restart-loop",
+  description: "The same run is resumed again and again within a few minutes. It keeps a slot busy and never gets further.",
   run({ now, config, runs }) {
     const { resumes, within_minutes } = config.restart_loop;
     const from = now.getTime() - within_minutes * 60_000;
@@ -89,6 +111,7 @@ const restartLoop: Detector = {
 /** A watcher's check failed more than N checks in a row; grouped by kind of error. */
 const watcherError: Detector = {
   name: "watcher-error",
+  description: "A watcher's check failed many times in a row. It finds no new work until the cause is fixed.",
   run({ config, watchers }) {
     const groups = new Map<string, { kind: string; ids: string[]; checks: number; since: number[]; lines: string[] }>();
     for (const { cfg, status } of watchers) {
@@ -117,6 +140,7 @@ const watcherError: Detector = {
 /** GitHub's request limit was hit, or more than N% of it was used. */
 const githubLimit: Detector = {
   name: "github-limit",
+  description: "GitHub's request limit is used up or nearly used up. Every call of the Foundry is refused until it resets.",
   run({ now, config, watchers, log, rate, monitorId, runs }) {
     const t = now.getTime();
     const found = new Map<string, FindingInput>();
@@ -185,8 +209,9 @@ const githubLimit: Detector = {
 /** An enabled watcher finished no check for N times its interval. */
 const watcherSilent: Detector = {
   name: "watcher-silent",
-  run({ now, asleep, config, watchers }) {
-    if (asleep) return [];
+  description: "An enabled watcher finished no check for many times its interval. It may be stuck, so no new work arrives.",
+  run({ now, asleep, config, watchers, restart }) {
+    if (asleep || restart) return [];
     const out: FindingInput[] = [];
     for (const { cfg, status } of watchers) {
       if (!cfg.enabled) continue;
@@ -217,6 +242,7 @@ const watcherSilent: Detector = {
 /** A run failed with an error that no rule of the Foundry explains. */
 const unexplainedFailure: Detector = {
   name: "unexplained-failure",
+  description: "A run failed with an error that no rule of the Foundry explains. It may be a bug that needs a fix.",
   run({ now, config, runs }) {
     const from = now.getTime() - config.unexplained_failure.within_hours * HOUR;
     const groups = new Map<string, { flow: string; step: string; line: string; repo?: string; times: number[] }>();

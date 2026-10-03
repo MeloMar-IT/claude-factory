@@ -1,6 +1,6 @@
 import type { Config, WatcherConfig } from "../config.js";
 import { readRateLimit, type RateReading } from "../github.js";
-import type { LogLine } from "../monitor/detectors.js";
+import type { DetectorInput, LogLine } from "../monitor/detectors.js";
 import { Monitor } from "../monitor/monitor.js";
 import type { RunSummary } from "../engine/state.js";
 import type { Scheduler } from "./scheduler.js";
@@ -16,6 +16,8 @@ export interface WatcherManagerOptions {
   log: (msg: string) => void;
   /** The newest server log lines, for the monitor. */
   serverLog?: () => LogLine[];
+  /** Set while the server waits to restart, for the monitor. */
+  restart?: () => DetectorInput["restart"];
 }
 
 /** What a watcher tracks right now, for the next-step records. */
@@ -95,7 +97,8 @@ export class WatcherManager {
     if (!cfg || this.monitor) return;
     const monitor = new Monitor(cfg, {
       scheduler: this.o.scheduler,
-      watchers: () => this.tracked().map(({ watcher, status }) => ({ cfg: watcher, status })),
+      watchers: () => this.tracked().map(({ watcher, status, issues }) => ({ cfg: watcher, status, issues })),
+      restart: this.o.restart,
       thresholds: () => this.o.config().monitor,
       serverLog: this.o.serverLog,
       rateLimit: () => this.rate,
@@ -160,11 +163,18 @@ export class WatcherManager {
     return r.watcher.status;
   }
 
-  stopAll() {
+  /** Stops the watchers; the monitor too, unless `keepMonitor` (it watches the drain of a new version). */
+  stopAll(keepMonitor = false) {
     this.drained = [...this.running.values()].map((r) => r.watcher);
     for (const r of this.running.values()) r.watcher.stop();
     this.running.clear();
+    if (keepMonitor) return;
     this.monitor?.monitor.stop();
     this.monitor = undefined;
+  }
+
+  /** Stops the watchers and keeps the monitor running, so a restart that takes too long is seen. */
+  drain() {
+    this.stopAll(true);
   }
 }

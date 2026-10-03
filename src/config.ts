@@ -90,6 +90,22 @@ const MonitorSchema = z
     watcher_silent: z.object({ intervals: z.number().min(1).max(1000).default(5) }).strict().prefault({}),
     /** At least `runs` failed runs with an error the Foundry cannot explain, within `within_hours`. */
     unexplained_failure: z.object({ runs: z.number().int().min(1).max(1000).default(1), within_hours: z.number().int().min(1).max(720).default(24) }).strict().prefault({}),
+    /** A running run wrote nothing to its log for longer than its step's timeout plus `extra_minutes`; a step without a timeout counts `no_timeout_minutes`. */
+    stuck_run: z.object({ extra_minutes: z.number().int().min(1).max(1440).default(10), no_timeout_minutes: z.number().int().min(1).max(10080).default(120) }).strict().prefault({}),
+    /** The same step of the same flow ended a run as failed for `issues` different issues within `within_hours`. */
+    same_step_failing: z.object({ issues: z.number().int().min(2).max(1000).default(3), within_hours: z.number().int().min(1).max(168).default(24) }).strict().prefault({}),
+    /** An issue's status label did not match its newest run for more than `checks` checks. */
+    label_mismatch: z.object({ checks: z.number().int().min(1).max(1000).default(3) }).strict().prefault({}),
+    /** A lock is held by a run that is not running for more than `minutes`. */
+    orphan_lock: z.object({ minutes: z.number().int().min(1).max(1440).default(10) }).strict().prefault({}),
+    /** Jobs are queued, slots are free and nothing started for `minutes`. */
+    queue_stalled: z.object({ minutes: z.number().int().min(1).max(1440).default(15) }).strict().prefault({}),
+    /** A new version is installed and the server waited more than `hours` to restart. */
+    restart_overdue: z.object({ hours: z.number().min(0.1).max(168).default(2) }).strict().prefault({}),
+    /** The tests after a merge into develop failed `failures` times in a row; looks back `within_hours`. */
+    develop_red: z.object({ failures: z.number().int().min(1).max(100).default(2), within_hours: z.number().int().min(1).max(720).default(24) }).strict().prefault({}),
+    /** A step took more than `factor` times its usual time, `times` times within `within_hours`. */
+    slow_step: z.object({ factor: z.number().min(1.5).max(100).default(3), times: z.number().int().min(1).max(1000).default(3), within_hours: z.number().int().min(1).max(720).default(24) }).strict().prefault({}),
   })
   .strict();
 

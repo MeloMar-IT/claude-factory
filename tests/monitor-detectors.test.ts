@@ -268,8 +268,8 @@ describe("runDetectors", () => {
   it("turns a crash into a finding and still runs the next detector; hides paths", () => {
     const out = runDetectors(
       [
-        { name: "boom", run: () => { throw new Error("cannot read /Users/me/secret/file"); } },
-        { name: "ok", run: () => [{ detector: "ok", fingerprint: "ok|1", severity: "minor", summary: "s", evidence: {}, about: "foundry" }] },
+        { name: "boom", description: "", run: () => { throw new Error("cannot read /Users/me/secret/file"); } },
+        { name: "ok", description: "", run: () => [{ detector: "ok", fingerprint: "ok|1", severity: "minor", summary: "s", evidence: {}, about: "foundry" }] },
       ],
       input(),
     );

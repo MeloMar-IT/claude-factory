@@ -59,7 +59,19 @@ describe("monitor entries in the config", () => {
       github_limit: { percent: 80 },
       watcher_silent: { intervals: 5 },
       unexplained_failure: { runs: 1, within_hours: 24 },
+      stuck_run: { extra_minutes: 10, no_timeout_minutes: 120 },
+      same_step_failing: { issues: 3, within_hours: 24 },
+      label_mismatch: { checks: 3 },
+      orphan_lock: { minutes: 10 },
+      queue_stalled: { minutes: 15 },
+      restart_overdue: { hours: 2 },
+      develop_red: { failures: 2, within_hours: 24 },
+      slow_step: { factor: 3, times: 3, within_hours: 24 },
     });
+    expect(() => ConfigSchema.parse({ monitor: { same_step_failing: { issues: 1 } } })).toThrow();
+    expect(() => ConfigSchema.parse({ monitor: { slow_step: { factor: 1 } } })).toThrow();
+    expect(() => ConfigSchema.parse({ monitor: { stuck_run: { no_timeout_minutes: 10081 } } })).toThrow();
+    expect(() => ConfigSchema.parse({ monitor: { queue_stalled: { minutes: 0 } } })).toThrow();
     expect(ConfigSchema.parse({ monitor: { restart_loop: { resumes: 9 } } }).monitor.restart_loop).toEqual({ resumes: 9, within_minutes: 10 });
     expect(() => ConfigSchema.parse({ monitor: { restart_loop: { resumes: 50 } } })).toThrow(); // run.json keeps 50 resumes
     expect(() => ConfigSchema.parse({ monitor: { github_limit: { percent: 0 } } })).toThrow();

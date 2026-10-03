@@ -155,6 +155,32 @@ export function runTiming(run: RunSummary, history: DurationHistory, now: Date =
   return out;
 }
 
+/** A visit of a step that took much longer than usual. */
+export interface SlowVisit { id: string; visit: number; endedAt: number; durationMs: number; usualMs: number }
+
+/**
+ * The visits of a run that took more than `factor` times the median of the same visit in the history (and more than
+ * 2 minutes). Needs MIN_SAMPLES samples. Visits cut short by a limit and children of other steps are ignored.
+ */
+export function slowVisits(run: RunSummary, history: DurationHistory, factor = SLOW_FACTOR): SlowVisit[] {
+  const key = keyOf(run);
+  const h = key ? history.get(key) : undefined;
+  if (!h) return [];
+  const out: SlowVisit[] = [];
+  const seen: Record<string, number> = {};
+  for (const r of counted(run)) {
+    const visit = (seen[r.id] = (seen[r.id] ?? 0) + 1);
+    const ms = h.ms[`${r.id}#${visit}`];
+    if (!enough(ms) || !validMs(r.durationMs)) continue;
+    const usualMs = quantile(ms, 0.5);
+    const started = Date.parse(r.startedAt);
+    if (r.durationMs > factor * usualMs && r.durationMs > SLOW_FLOOR_MS && Number.isFinite(started)) {
+      out.push({ id: r.id, visit, endedAt: started + r.durationMs, durationMs: r.durationMs, usualMs: Math.round(usualMs) });
+    }
+  }
+  return out;
+}
+
 /** "after #88" becomes "after #88 (about 20 min left)". */
 export function withWaitLeft(n: NextStep, leftMs: number | undefined): NextStep {
   if (leftMs === undefined || !Number.isFinite(leftMs)) return n;

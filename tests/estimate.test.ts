@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildHistory, runProgress, runTiming, withWaitLeft } from "../src/estimate.js";
+import { buildHistory, runProgress, runTiming, slowVisits, withWaitLeft } from "../src/estimate.js";
 import type { RunSummary } from "../src/engine/state.js";
 import { nextStep } from "../src/next-step.js";
 
@@ -170,6 +170,39 @@ describe("broken data", () => {
     const bare = { runId: "x", flow: "f", status: "succeeded" } as unknown as RunSummary;
     expect(buildHistory([bare]).size).toBe(0);
     expect(runTiming({ ...bare, status: "running" } as RunSummary, buildHistory([]), NOW)).toBeUndefined();
+  });
+});
+
+describe("slowVisits", () => {
+  const h = buildHistory(five()); // step b: 10, 10, 15, 25, 25 minutes (median 15)
+  const slow = (b: number, over: Record<string, unknown> = {}) => done(b, { runId: "judged", ...over });
+
+  it("finds a visit of more than 3 times the median and says when it ended", () => {
+    const r = slow(50, { history: [rec("a", 5), rec("b", 50, { startedAt: ago(60) }), rec("c", 10)] });
+    expect(slowVisits(r, h)).toEqual([{ id: "b", visit: 1, endedAt: Date.parse(ago(60)) + 50 * MIN, durationMs: 50 * MIN, usualMs: 15 * MIN }]);
+    expect(slowVisits(slow(45), h)).toEqual([]); // exactly 3 times is not more
+    expect(slowVisits(slow(50), h, 4)).toEqual([]);
+  });
+
+  it("needs 3 samples and keeps the 2-minute floor", () => {
+    expect(slowVisits(slow(50), buildHistory(five().slice(0, 2)))).toEqual([]);
+    const quick = buildHistory([1, 2, 3].map((i) => run({ runId: `q${i}`, history: [rec("a", 0.5), rec("b", 0.5), rec("c", 0.5)] })));
+    expect(slowVisits(run({ history: [rec("a", 0.5), rec("b", 1.9), rec("c", 0.5)] }), quick)).toEqual([]);
+    expect(slowVisits(run({ history: [rec("a", 0.5), rec("b", 2.5), rec("c", 0.5)] }), quick).map((v) => v.id)).toEqual(["b"]);
+  });
+
+  it("judges every visit of a looping step on its own, and ignores limited and child records", () => {
+    const loop = flowDef(["a", "b"]);
+    const base = (i: number) => run({ runId: `l${i}`, flowDef: loop, history: [rec("a", 5), rec("b", 5), rec("a", 5), rec("b", 5)] });
+    const hist = buildHistory([1, 2, 3].map(base));
+    const judged = run({ flowDef: loop, history: [rec("a", 5), rec("b", 5), rec("a", 30), rec("b", 5), rec("a", 99, { limited: true }), rec("x", 99, { parent: "sub" })] });
+    expect(slowVisits(judged, hist).map((v) => `${v.id}#${v.visit}`)).toEqual(["a#2"]);
+  });
+
+  it("gives nothing for a run without a key, an empty history or broken data", () => {
+    expect(slowVisits(run({ flowDef: undefined }), h)).toEqual([]);
+    expect(slowVisits(slow(50), new Map())).toEqual([]);
+    expect(slowVisits({ runId: "x" } as unknown as RunSummary, h)).toEqual([]);
   });
 });
 

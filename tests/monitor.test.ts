@@ -1,9 +1,10 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ConfigSchema, WatcherSchema } from "../src/config.js";
 import { saveRun, type RunSummary } from "../src/engine/state.js";
-import { Monitor, logRing } from "../src/monitor/monitor.js";
+import { parseFlow } from "../src/flow/load.js";
+import { Monitor, areaLockDir, logRing, readAreaLocks } from "../src/monitor/monitor.js";
 import { loadFindings } from "../src/monitor/findings.js";
 import type { DetectorInput } from "../src/monitor/detectors.js";
 import { Scheduler } from "../src/queue/scheduler.js";
@@ -150,7 +151,7 @@ describe("monitor", () => {
   });
 
   it("a detector that crashes does not stop the check", async () => {
-    const m = monitor({ detectors: [{ name: "bad", run: () => { throw new Error("x"); } }] });
+    const m = monitor({ detectors: [{ name: "bad", description: "", run: () => { throw new Error("x"); } }] });
     await m.tick();
     expect(loadFindings(file).findings.map((f) => f.fingerprint)).toEqual(["detector-failed|bad"]);
   });
@@ -158,7 +159,7 @@ describe("monitor", () => {
   it("passes asleep when a check starts long after the last one", async () => {
     let now = new Date("2026-10-01T12:00:00Z");
     const seen: boolean[] = [];
-    const m = monitor({ now: () => now, detectors: [{ name: "spy", run: (i: DetectorInput) => (seen.push(i.asleep), []) }] });
+    const m = monitor({ now: () => now, detectors: [{ name: "spy", description: "", run: (i: DetectorInput) => (seen.push(i.asleep), []) }] });
     await m.tick();
     now = new Date(now.getTime() + 5 * MIN + 2 * MIN);
     await m.tick();
@@ -167,6 +168,182 @@ describe("monitor", () => {
     now = new Date(now.getTime() + 60 * MIN);
     await m.tick(true); // a manual check is never "after a sleep"
     expect(seen).toEqual([false, true, false, false]);
+  });
+
+  it("passes wokeAt after a sleep, and not otherwise", async () => {
+    let now = new Date("2026-10-01T12:00:00Z");
+    const seen: (string | undefined)[] = [];
+    const m = monitor({ now: () => now, detectors: [{ name: "spy", description: "", run: (i: DetectorInput) => (seen.push(i.wokeAt), []) }] });
+    await m.tick();
+    now = new Date(now.getTime() + 7 * MIN);
+    await m.tick();
+    expect(seen).toEqual([undefined, now.toISOString()]);
+    const woke = now.toISOString();
+    now = new Date(now.getTime() + 5 * MIN);
+    await m.tick();
+    expect(seen[2]).toBe(woke); // the next check still knows when the server woke up
+  });
+
+  describe("work detectors", () => {
+    const stored = () => loadFindings(file).findings.map((f) => f.fingerprint);
+    const flowDef = (steps: object[] = [{ id: "build", type: "shell", run: "x", timeout_sec: 600 }]) => ({ name: "issue-gitflow", defaults: {}, steps }) as never;
+    const old = (path: string, ms: number) => utimesSync(path, new Date(Date.now() - ms), new Date(Date.now() - ms));
+    const step = (over: Record<string, unknown>) => ({ id: "a", type: "shell", visit: 1, ok: true, output: "", startedAt: ago(2 * 3600_000), durationMs: 1000, logFile: "x", ...over });
+
+    it("an active run with an old live.log is stored as stuck-run; a fresh step log clears it", async () => {
+      const r = makeRun({ status: "running", finishedAt: undefined, reason: undefined, startedAt: ago(10 * 3600_000), stepStartedAt: ago(10 * 3600_000), flowDef: flowDef(), state: { next: "build", steps: {}, visits: {} } });
+      writeFileSync(join(r.runDir, "live.log"), "hello\n");
+      old(join(r.runDir, "live.log"), 3600_000);
+      const fake = { briefs: () => [], get: () => r, queue: () => ({ pending: [], active: [{ runId: r.runId }], concurrency: 2 }), lastStart: () => ago(0) };
+      const m = monitor({ scheduler: fake as never });
+      await m.tick();
+      expect(stored()).toContain("stuck-run|acme/app|issue-gitflow|build");
+      mkdirSync(join(r.runDir, "logs"));
+      writeFileSync(join(r.runDir, "logs", "001-build.log"), "still working\n");
+      await m.tick();
+      // A finding is only marked gone after a day, so the proof is that the second check did not see it again.
+      expect(loadFindings(file).findings.find((f) => f.fingerprint === "stuck-run|acme/app|issue-gitflow|build")).toMatchObject({ count: 1 });
+    });
+
+    describe("area locks", () => {
+      const T0 = new Date("2026-10-01T12:00:00Z").getTime();
+      let lockDir: string;
+      let ownerDir: string;
+      let now = T0;
+      const owner = (over: Record<string, unknown> = {}) => writeFileSync(join(ownerDir, "run.json"), JSON.stringify({ status: "running", pid: 2_000_000_000, ...over }));
+      const lock = (over: Record<string, unknown> = {}, name = "r1.json") => {
+        mkdirSync(join(lockDir, "acme_app"), { recursive: true });
+        writeFileSync(join(lockDir, "acme_app", name), JSON.stringify({ runId: "20261001-120000-aaaa", runDir: ownerDir, areas: ["src/engine"], at: new Date(T0).toISOString(), ...over }));
+      };
+      const checkAt = async (m: Monitor, minutes: number) => {
+        now = T0 + minutes * MIN;
+        await m.tick(true);
+        return stored();
+      };
+      beforeEach(() => {
+        lockDir = join(gh.tmp, "locks");
+        ownerDir = join(gh.tmp, "owner");
+        mkdirSync(ownerDir, { recursive: true });
+        process.env.FACTORY_LOCK_DIR = lockDir;
+        now = T0;
+      });
+      const mon = () => monitor({ now: () => new Date(now) });
+      const fp = "orphan-lock|area|acme_app";
+
+      it("stores nothing at the first check and the finding 11 minutes later", async () => {
+        owner();
+        lock();
+        const m = mon();
+        expect(await checkAt(m, 0)).not.toContain(fp);
+        expect(await checkAt(m, 9)).not.toContain(fp);
+        expect(await checkAt(m, 11)).toContain(fp);
+        const f = loadFindings(file).findings.find((x) => x.fingerprint === fp)!;
+        expect(f.evidence.lines).toEqual(["src/engine"]);
+        expect(JSON.stringify(f)).not.toMatch(/20261001-120000-aaaa/);
+      });
+
+      it("makes no finding when the owner failed, its run.json is missing, or another live process runs it", async () => {
+        lock();
+        const m = mon();
+        owner({ status: "failed" });
+        await checkAt(m, 0);
+        expect(await checkAt(m, 30)).not.toContain(fp);
+        rmSync(join(ownerDir, "run.json"));
+        expect(await checkAt(m, 60)).not.toContain(fp);
+        owner({ pid: process.ppid });
+        await checkAt(m, 61);
+        expect(await checkAt(m, 90)).not.toContain(fp);
+      });
+
+      it("ignores a relative runDir and a lock file that is not JSON", async () => {
+        owner();
+        lock({ runDir: "owner" });
+        lock({}, "broken.json");
+        writeFileSync(join(lockDir, "acme_app", "broken.json"), "{nope");
+        const m = mon();
+        await checkAt(m, 0);
+        expect(await checkAt(m, 30)).not.toContain(fp);
+      });
+
+      it("reports a lock whose owner's run.json stays broken, but not one that is repaired in time", async () => {
+        lock();
+        writeFileSync(join(ownerDir, "run.json"), "{half");
+        const m = mon();
+        await checkAt(m, 0);
+        expect(await checkAt(m, 9)).not.toContain(fp);
+        expect(await checkAt(m, 11)).toContain(fp);
+        const again = mon();
+        await checkAt(again, 100);
+        owner({ pid: process.ppid });
+        await checkAt(again, 105);
+        expect(loadFindings(file).findings.find((f) => f.fingerprint === fp)!.count).toBe(1);
+      });
+
+      it("starts the clock anew when the lock gets an owner again", async () => {
+        owner();
+        lock();
+        const m = mon();
+        await checkAt(m, 0);
+        owner({ pid: process.ppid });
+        await checkAt(m, 6);
+        owner();
+        await checkAt(m, 7);
+        expect(await checkAt(m, 11)).not.toContain(fp);
+        expect(await checkAt(m, 18)).toContain(fp);
+      });
+
+      it("reads the lock files with readAreaLocks, skipping bad entries", () => {
+        lock();
+        lock({ areas: "x" }, "a.json");
+        lock({ runId: 5 }, "b.json");
+        lock({ at: undefined }, "c.json");
+        expect(readAreaLocks(lockDir).map((l) => l.key)).toEqual(["acme_app/r1.json"]);
+        expect(readAreaLocks(join(gh.tmp, "nowhere"))).toEqual([]);
+        expect(areaLockDir()).toBe(lockDir);
+      });
+    });
+
+    it("finds a slow step end to end, and builds the usual times once for two checks", async () => {
+      const def = flowDef([{ id: "a", type: "shell", run: "x" }]);
+      const base = [0, 1, 2].map(() => makeRun({ status: "succeeded", reason: undefined, flowDef: def, finishedAt: ago(48 * 3600_000), startedAt: ago(49 * 3600_000), history: [step({ durationMs: 10 * MIN })] as never }));
+      for (const b of base) old(join(b.runDir, "run.json"), 48 * 3600_000);
+      for (let i = 0; i < 3; i++) makeRun({ status: "succeeded", reason: undefined, flowDef: def, finishedAt: ago(3600_000), startedAt: ago(2 * 3600_000), history: [step({ durationMs: 60 * MIN })] as never });
+      const calls: string[] = [];
+      const get = scheduler.get.bind(scheduler);
+      scheduler.get = (id: string) => (calls.push(id), get(id));
+      const m = monitor();
+      await m.tick();
+      await m.tick();
+      expect(stored()).toContain("slow-step|acme/app|issue-gitflow|a");
+      const dirs = base.map((b) => b.runId);
+      expect(calls.filter((c) => dirs.includes(c))).toHaveLength(3);
+    });
+
+    it("finds develop is red end to end from run files", async () => {
+      const red = (min: number) => makeRun({ history: [step({ id: "test_develop", ok: false, error: "tests failed", startedAt: ago(min * MIN) })] as never, reason: 'step "test_develop" failed: tests failed' });
+      red(120);
+      red(60);
+      await monitor().tick();
+      expect(stored()).toContain("develop-red|acme/app");
+    });
+
+    it("still finds develop is red when 1,005 older failed runs fill the cap", async () => {
+      for (let i = 0; i < 1005; i++) {
+        const s = makeRun();
+        old(join(s.runDir, "run.json"), 2 * 3600_000);
+      }
+      for (const min of [20, 10]) makeRun({ history: [step({ id: "test_develop", ok: false, error: "tests failed", startedAt: ago(min * MIN) })] as never, reason: 'step "test_develop" failed: tests failed' });
+      await monitor().tick();
+      expect(stored()).toContain("develop-red|acme/app");
+    }, 60_000);
+
+    it("the scheduler's lastStart moves when a job starts", async () => {
+      const first = scheduler.lastStart();
+      await new Promise((r) => setTimeout(r, 15));
+      const id = scheduler.submit({ kind: "run", flow: parseFlow("name: x\nworkspace: inplace\nsteps:\n  - {id: a, type: shell, run: 'true'}\n"), task: "", repo: gh.tmp, vars: {} });
+      await scheduler.wait(id);
+      expect(Date.parse(scheduler.lastStart())).toBeGreaterThan(Date.parse(first));
+    });
   });
 });
 
@@ -225,6 +402,25 @@ describe("the monitor in the WatcherManager", () => {
     expect(status.lastTick).not.toBe(before);
     m.stopAll();
     expect(m.statuses()[0]!.status).toBeUndefined();
+    await expect(m.runNow("mon")).rejects.toThrow(/not running/);
+  });
+
+  it("drain() stops the watchers but keeps the monitor, and the restart state reaches the detectors", async () => {
+    cfg = ConfigSchema.parse({ watchers: [watcher("w"), mon] });
+    const scheduler = new Scheduler({ runsDir: join(gh.tmp, "runs"), config: () => cfg });
+    let restart: { why: "new_version"; since: string } | undefined;
+    manager = new WatcherManager({ scheduler, runsDir: join(gh.tmp, "runs"), repo: gh.tmp, config: () => cfg, log: () => {}, restart: () => restart });
+    const m = manager;
+    m.sync();
+    await settled(m, ["w", "mon"]);
+    restart = { why: "new_version", since: new Date(Date.now() - 3 * 3600_000).toISOString() };
+    m.drain();
+    expect(m.statuses().find((s) => s.id === "w")!.status).toBeUndefined();
+    expect(m.statuses().find((s) => s.id === "mon")!.status).toBeDefined();
+    await m.runNow("mon");
+    const found = loadFindings(join(process.env.FACTORY_HOME!, "monitor-findings.json")).findings;
+    expect(found.map((f) => f.fingerprint)).toContain("restart-overdue");
+    m.stopAll(); // still stops everything
     await expect(m.runNow("mon")).rejects.toThrow(/not running/);
   });
 
