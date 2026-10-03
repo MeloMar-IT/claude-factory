@@ -1,7 +1,7 @@
 import { basename } from "node:path";
 import { StoreError } from "../auth/store.js";
 import { getUser, listUsers, takeStopWork } from "../auth/users.js";
-import type { Scheduler } from "../queue/scheduler.js";
+import type { AccountCancelCounts, Scheduler } from "../queue/scheduler.js";
 
 /** How often the server looks for blocked and deleted accounts, in ms. */
 export const ACCOUNT_SWEEP_MS = 2000;
@@ -73,4 +73,22 @@ export function accountSweeper(scheduler: Scheduler, log: (msg: string) => void)
       tell("enforce", `! could not cancel the work of blocked accounts: ${errName(e)}`);
     }
   };
+}
+
+/**
+ * Cancels the work of an account at once, so an API call need not wait for the sweep. A plain block or delete drops
+ * the queued jobs; `stopWork` also takes the pending stop-work request (so the sweep does not repeat it) and cancels
+ * the running and waiting runs. Logs the counts with the account id only.
+ */
+export function cancelAccountNow(scheduler: Scheduler, log: ((msg: string) => void) | undefined, id: string, why: "blocked" | "deleted", stopWork = false): AccountCancelCounts {
+  let counts: AccountCancelCounts = { queued: 0, running: 0, waiting: 0 };
+  if (stopWork) {
+    takeStopWork(id, () => {
+      counts = scheduler.cancelAccount(id, { stopWork: true });
+    });
+  } else {
+    counts = scheduler.cancelAccount(id);
+  }
+  log?.(`account ${id} ${stopWork ? "stop-work" : why}: cancelled ${counts.queued} queued, ${counts.running} running, ${counts.waiting} waiting`);
+  return counts;
 }

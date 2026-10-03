@@ -367,7 +367,7 @@ export function takeStopWork(id: string, act: (request: string) => void, waitMs 
   }, waitMs);
 }
 
-/** Changes name, e-mail and role in one step. Only a role change is logged. */
+/** Changes name, e-mail and role in one step. A role change is logged as `role`, any other change as `edit`. */
 export async function updateUser(id: string, changes: UserChanges, opts: ChangeOptions = {}): Promise<User> {
   const name = changes.name === undefined ? undefined : checkName(changes.name);
   const email = changes.email === undefined ? undefined : checkEmail(changes.email);
@@ -382,7 +382,7 @@ export async function updateUser(id: string, changes: UserChanges, opts: ChangeO
       if (role !== undefined && role !== "admin" && isLastAdmin(all, u)) throw new UserError("last-admin", LAST_ADMIN);
       const next: User = { ...u, name: name ?? u.name, email: email ?? u.email, role: role ?? u.role };
       if (next.name === u.name && next.email === u.email && next.role === u.role) return undefined;
-      return next.role !== u.role ? { next, event: { action: "role", oldRole: u.role, newRole: next.role } } : { next };
+      return { next, event: next.role !== u.role ? { action: "role", oldRole: u.role, newRole: next.role } : { action: "edit" } };
     },
     { by: opts.by },
   );
