@@ -127,6 +127,7 @@ describe("columnOf", () => {
     ["dependency", rec("dependency", { blockers: [{ issue: 2 }] }), "waiting"],
     ["one at a time", rec("one_at_a_time"), "waiting"],
     ["area lock", rec("area_lock"), "waiting"],
+    ["bug story goes first", rec("bug_first"), "waiting"],
     ["queued", rec("queued"), "queued"],
     ["starting", rec("starting"), "queued"],
     ["checking", rec("checking"), "queued"],
@@ -161,6 +162,13 @@ describe("buildBoard", () => {
     ]);
     expect(b.empty).toBeUndefined();
     expect(buildBoard([], { now: NOW })).toEqual({ repos: [], empty: EMPTY_BOARD });
+  });
+
+  it("marks a card goes first only when asked, and never in Done", () => {
+    const b = buildBoard([src(rec("bug_first", {}, 1), { goesFirst: true }), src(rec("queued", {}, 2)), src(rec("done", {}, 3), { goesFirst: true })], { now: NOW });
+    expect(cardsOf(b, "waiting")[0]!.goesFirst).toBe(true);
+    expect(cardsOf(b, "queued")[0]!).not.toHaveProperty("goesFirst");
+    expect(cardsOf(b, "done")[0]!).not.toHaveProperty("goesFirst");
   });
 
   it("drops sources without an issue or a repository", () => {

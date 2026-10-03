@@ -43,6 +43,7 @@ export interface Issue {
   labels: { name: string }[];
   body?: string;
   state?: string;
+  createdAt?: string;
 }
 
 export const isBot = (c: { body: string }) => BOT_MARKERS.some((m) => c.body.includes(m));

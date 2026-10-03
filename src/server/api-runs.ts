@@ -144,11 +144,13 @@ export const runRoutes: Route = async (ctx, req, res, seg, method, user) => {
     const lockKey = vars.github_repo && (vars.issue || vars.pr) ? `${vars.github_repo}#${vars.issue || vars.pr}` : undefined;
     // The same answer for both roles; any other failure of submit is unexpected (and generic for a user).
     if (scheduler.isActive(id) || scheduler.isQueued(id)) throw new HttpError(400, `run ${id} is already queued or running`);
+    // A bug story keeps its place at the front: its watcher saw the label at its last check.
+    const story = ctx.watchers.tracked().flatMap((t) => t.issues).find((i) => i.runId === id && i.priority);
     scheduler.submit(
       action === "resume"
         ? { kind: "resume", runId: id, from }
         : { kind: "resume", runId: id, decision: { approved: action === "approve", by: "ui", note: str(body, "note", false) || undefined } },
-      { lockKey, source: `ui ${action}`, queuedBy: user.id },
+      { lockKey, source: `ui ${action}`, queuedBy: user.id, ...(story ? { priority: true, storyAt: story.createdAt } : {}) },
     );
     return send(res, 202, { runId: id }), true;
   }

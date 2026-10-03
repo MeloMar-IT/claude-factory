@@ -126,7 +126,7 @@ export function statusTargets(repo: string, views: StatusView[], known: Readonly
       const runRecord = (r: RunSummary): NextStep => {
         const pj = pending.find((p) => p.runId === r.runId);
         const rec = runNextStep(r, {
-          queued: pj && { waitingFor: pj.waitingFor }, watched: true, failedLabel: v.failedLabel, title,
+          queued: pj && { waitingFor: pj.waitingFor, behindPriority: pj.behindPriority }, watched: true, failedLabel: v.failedLabel, title,
           areaWait: v.areaWait?.(r), releaseAt: r.status === "succeeded" ? v.releaseAt?.(r) : undefined, forUser: true,
         });
         if (pj || r.status === "running" || r.status === "waiting") {

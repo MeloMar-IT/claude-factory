@@ -63,6 +63,7 @@ const GLOSSARY: Record<NextKind, Words> = {
   },
   checking: { status: "checking for questions", help: "The Foundry reads the new issues and looks for questions only you can answer. Nothing to do — an issue without questions starts after the check." },
   starting: { status: "starting soon", help: "Nothing is in the way, it only waits for the watcher's next check. Nothing to do — it starts by itself." },
+  bug_first: { status: "waiting — a bug story goes first", help: "A story with a bug label is repaired before other work. Nothing to do — it goes on by itself after that." },
   queued: { status: "queued", help: "It waits in the queue until a run finishes. Nothing to do — it starts by itself." },
   running: { status: "working", help: "The Foundry is working on it right now. Nothing to do — you can follow it on the run page." },
   interrupted: { status: "interrupted", help: "The run was cut off, for example by a restart of the server. A watched issue resumes by itself at the next check, any other run you resume on its page." },

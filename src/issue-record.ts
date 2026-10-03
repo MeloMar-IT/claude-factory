@@ -11,7 +11,7 @@ export interface IssueRecordInput {
   /** The issue's run is running or queued. */
   live: boolean;
   /** A queued job of the issue (used when it has no run file yet). */
-  queuedJob?: { waitingFor?: string };
+  queuedJob?: { waitingFor?: string; behindPriority?: boolean };
   /** The watcher's record for the issue (why it is not started, a question, a closed issue …). */
   hold?: NextStep;
   /** The issue carries the done label. */
@@ -30,7 +30,7 @@ export interface IssueRecordInput {
 export function issueRecord(i: IssueRecordInput): { source: IssueSource; next: NextStep } {
   if (i.run && i.live) return { source: "live", next: i.nextOf(i.run) };
   if (i.queuedJob && !i.run) {
-    return { source: "queued", next: nextStep(i.queuedJob.waitingFor ? "one_at_a_time" : "queued", i.base, { ...i.data, blockingRun: i.queuedJob.waitingFor }) };
+    return { source: "queued", next: nextStep(i.queuedJob.waitingFor ? "one_at_a_time" : i.queuedJob.behindPriority ? "bug_first" : "queued", i.base, { ...i.data, blockingRun: i.queuedJob.waitingFor }) };
   }
   if (i.hold) return { source: "hold", next: i.hold };
   if (i.run) return { source: "run", next: i.nextOf(i.run) };
