@@ -1,3 +1,4 @@
+import { createReadStream, lstatSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import { basename, join } from "node:path";
 import { z } from "zod";
@@ -158,6 +159,143 @@ export function auditAction(log: ((msg: string) => void) | undefined, by: string
       /* the log itself must not fail the action */
     }
   }
+}
+
+// ---- reading -----------------------------------------------------------------------------------------
+
+export const ACCOUNT_ACTIONS = ["create", "password", "link", "edit", "unblock", "delete", "block", "role"] as const;
+/** Every action a reader can see: the account actions and the event actions. */
+export const AUDIT_ACTIONS: readonly string[] = [...ACCOUNT_ACTIONS, ...EVENT_ACTIONS];
+
+/** True for an account id as stored (a UUID, either case). */
+export const isAccountId = (s: string): boolean => z.uuid().safeParse(s).success;
+
+/** The time of an ISO text (with seconds and `Z` or an offset), as milliseconds; undefined for anything else. */
+export function auditTime(s: string): number | undefined {
+  if (!z.iso.datetime({ offset: true }).safeParse(s).success) return undefined;
+  const t = Date.parse(s);
+  return Number.isNaN(t) ? undefined : t;
+}
+
+/** One line of either kind, in one shape. */
+export interface AuditRecord {
+  time: string;
+  by: string;
+  action: string;
+  result: "ok" | "failed";
+  userId?: string;
+  target?: string;
+  detail?: string;
+}
+
+export interface AuditFilter {
+  user?: string;
+  action?: string;
+  from?: number;
+  to?: number;
+}
+
+/** Maps a valid line of either kind to the view. Old account lines are `ok` and name the account as target. */
+export function auditRecord(e: AuditEntry): AuditRecord {
+  if ("result" in e) {
+    return {
+      time: e.time,
+      by: e.by,
+      action: e.action,
+      result: e.result,
+      ...(e.userId !== undefined ? { userId: e.userId } : {}),
+      ...(e.target !== undefined ? { target: e.target } : {}),
+      ...(e.detail !== undefined ? { detail: e.detail } : {}),
+    };
+  }
+  const base = { time: e.time, by: e.by, action: e.action, result: "ok" as const, userId: e.userId };
+  if (e.action === "role") return { ...base, detail: `${e.oldRole} -> ${e.newRole}` };
+  if (e.action === "block" && e.stopWork === true) return { ...base, detail: "stop work" };
+  return base;
+}
+
+const MAX_LINE = 64 * 1024;
+
+/** The lines of audit.jsonl, read in chunks. A missing file has none; anything else that cannot be read is a StoreError. */
+async function* auditLines(): AsyncGenerator<string> {
+  const file = auditPath();
+  const unreadable = () => new StoreError("unreadable", file, "cannot be read");
+  let regular: boolean;
+  try {
+    regular = lstatSync(file).isFile();
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw unreadable();
+  }
+  if (!regular) throw unreadable();
+  const stream = createReadStream(file);
+  let parts: Buffer[] = [];
+  let size = 0;
+  let skipping = false;
+  try {
+    for await (const chunk of stream as AsyncIterable<Buffer>) {
+      let start = 0;
+      for (;;) {
+        const nl = chunk.indexOf(10, start);
+        const end = nl === -1 ? chunk.length : nl;
+        if (!skipping) {
+          size += end - start;
+          if (size > MAX_LINE) {
+            skipping = true;
+            parts = [];
+          } else parts.push(chunk.subarray(start, end));
+        }
+        if (nl === -1) break;
+        if (!skipping) yield Buffer.concat(parts).toString("utf8");
+        parts = [];
+        size = 0;
+        skipping = false;
+        start = nl + 1;
+      }
+    }
+  } catch (e) {
+    if (e instanceof StoreError) throw e;
+    throw unreadable();
+  } finally {
+    stream.destroy();
+  }
+  if (!skipping && size > 0) yield Buffer.concat(parts).toString("utf8");
+}
+
+/** The matching records in file order (oldest first). Lines that do not parse are skipped. Throws a StoreError. */
+export async function* scanAudit(filter: AuditFilter = {}): AsyncGenerator<AuditRecord> {
+  for await (const line of auditLines()) {
+    if (!line.trim()) continue;
+    let json: unknown;
+    try {
+      json = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const parsed = AuditEntrySchema.safeParse(json);
+    if (!parsed.success) continue;
+    const r = auditRecord(parsed.data);
+    if (filter.user !== undefined && r.by !== filter.user && r.userId !== filter.user) continue;
+    if (filter.action !== undefined && r.action !== filter.action) continue;
+    if (filter.from !== undefined || filter.to !== undefined) {
+      const t = Date.parse(r.time);
+      if (filter.from !== undefined && t < filter.from) continue;
+      if (filter.to !== undefined && t > filter.to) continue;
+    }
+    yield r;
+  }
+}
+
+/** The last `limit` matches, newest first (by the order of the lines), and whether there were more. */
+export async function latestAudit(filter: AuditFilter, limit: number): Promise<{ records: AuditRecord[]; more: boolean }> {
+  let kept: AuditRecord[] = [];
+  let count = 0;
+  for await (const r of scanAudit(filter)) {
+    count++;
+    kept.push(r);
+    if (kept.length >= 2 * limit) kept = kept.slice(-limit);
+  }
+  return { records: kept.slice(-limit).reverse(), more: count > limit };
 }
 
 /** The names of the top-level keys whose values differ, sorted. Names only, never a value. */
