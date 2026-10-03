@@ -373,10 +373,10 @@ describe("the monitor in the WatcherManager", () => {
 
   const watcher = (id: string) => ({ id, github_repo: "acme/app", flow: "issue-gitflow", every: "1h" });
   const mon = { id: "mon", source: "monitor", every: "1h" };
-  const setup = (watchers: unknown[], monitor: unknown = {}) => {
+  const setup = (watchers: unknown[], monitor: unknown = {}, startedAt?: Date) => {
     cfg = ConfigSchema.parse({ watchers, monitor });
     const scheduler = new Scheduler({ runsDir: join(gh.tmp, "runs"), config: () => cfg });
-    manager = new WatcherManager({ scheduler, runsDir: join(gh.tmp, "runs"), repo: gh.tmp, config: () => cfg, log: () => {} });
+    manager = new WatcherManager({ scheduler, runsDir: join(gh.tmp, "runs"), repo: gh.tmp, config: () => cfg, log: () => {}, startedAt });
     manager.sync();
     return manager;
   };
@@ -474,8 +474,42 @@ describe("the monitor in the WatcherManager", () => {
   describe("bug stories", () => {
     const findingsPath = () => join(process.env.FACTORY_HOME!, "monitor-findings.json");
     const storyCalls = () => gh.ghLog().split("\n").filter((l) => /^gh (api repos|label create|issue comment)/.test(l));
-    beforeEach(() => rmSync(findingsPath(), { force: true }));
-    afterEach(() => rmSync(findingsPath(), { force: true }));
+    const extra = () => ["monitor-guard.json", "monitor-log.jsonl", "monitor-log.1.jsonl"].map((f) => join(process.env.FACTORY_HOME!, f));
+    beforeEach(() => [findingsPath(), ...extra()].forEach((f) => rmSync(f, { force: true })));
+    afterEach(() => [findingsPath(), ...extra()].forEach((f) => rmSync(f, { force: true })));
+
+    const owedFinding = () => {
+      const iso = new Date().toISOString();
+      mkdirSync(process.env.FACTORY_HOME!, { recursive: true });
+      writeFileSync(findingsPath(), JSON.stringify({ version: 1, findings: [{
+        detector: "restart-loop", fingerprint: "restart-loop|a", severity: "critical", summary: "s", evidence: { counts: { runs: 2 } }, about: "foundry",
+        firstSeen: iso, lastSeen: iso, count: 2, gone: false, due: iso,
+      }] }));
+    };
+
+    it("is quiet after the server started (default 10 minutes) and makes the story with cooldown_minutes 0", async () => {
+      owedFinding();
+      const m = setup([mon], { report_to: "acme/app" }, new Date());
+      await settled(m, ["mon"]);
+      await m.runNow("mon");
+      expect(gh.createdBodies()).toHaveLength(0);
+      expect(m.statuses()[0]!.status?.notes?.join(" ")).toContain("quiet time after the restart");
+      m.stopAll();
+      const m2 = setup([mon], { report_to: "acme/app", cooldown_minutes: 0 }, new Date());
+      await settled(m2, ["mon"]);
+      await m2.runNow("mon");
+      expect(gh.createdBodies()).toHaveLength(1);
+      expect(readFileSync(join(process.env.FACTORY_HOME!, "monitor-log.jsonl"), "utf8")).toContain('"event":"story-made"');
+    });
+
+    it("monitorAct shows in the recent activity, and does nothing when no monitor runs", async () => {
+      const m = setup([mon]);
+      await settled(m, ["mon"]);
+      m.monitorAct("x");
+      expect(m.statuses()[0]!.status!.lastActions[0]).toContain("x");
+      m.stopAll();
+      expect(() => m.monitorAct("y")).not.toThrow();
+    });
 
     it("a monitor with report_to and an issue watcher make one story with the watcher's label from two checks", async () => {
       const runDir = join(gh.tmp, "runs", "20261001-120000-abcd");

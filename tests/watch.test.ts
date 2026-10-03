@@ -68,6 +68,7 @@ describe("monitor entries in the config", () => {
       develop_red: { failures: 2, within_hours: 24 },
       slow_step: { factor: 3, times: 3, within_hours: 24 },
       report_limits: { per_day: 3, per_check: 1 },
+      cooldown_minutes: 10,
     });
     expect(() => ConfigSchema.parse({ monitor: { same_step_failing: { issues: 1 } } })).toThrow();
     expect(() => ConfigSchema.parse({ monitor: { slow_step: { factor: 1 } } })).toThrow();

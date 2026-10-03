@@ -13,6 +13,45 @@ const num = (el) => (el.value.trim() === "" ? undefined : Number(el.value));
 /** The notes of a watcher's status (what waits or is wrong with the monitor's bug stories) as a list, or null when there are none. */
 export const watcherNotes = (st) => (st?.notes?.length ? h("ul", { class: "holds" }, st.notes.map((n) => h("li", {}, n))) : null);
 
+/** A time as the card shows it: the clock time on the same local day, else with the short month and the day. */
+function storyTime(iso, now) {
+  const d = new Date(iso);
+  const clock = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return d.toDateString() === now.toDateString() ? clock : `${d.toLocaleDateString([], { month: "short", day: "numeric" })} ${clock}`;
+}
+
+/** The one line that says whether the monitor makes bug stories. */
+export function storiesLine(m, now = new Date()) {
+  let line;
+  if (m.state === "off") line = `Bug stories: off since ${storyTime(m.since, now)}`;
+  else if (m.state === "quiet") line = `Bug stories: quiet until ${storyTime(m.until, now)} after the restart`;
+  else if (m.state === "unreadable") line = "Bug stories: stopped. The state file monitor-guard.json cannot be read.";
+  else line = `Bug stories: on${m.reportTo === false ? " (no repository is set: monitor.report_to)" : ""}`;
+  if (m.reset) line += ` The state file could not be read at ${storyTime(m.reset, now)}; it was kept as monitor-guard.json.broken and started fresh.`;
+  return line;
+}
+
+/** The line and the switch button for the monitor's card; null without a state. */
+export function storiesRow(m, reload) {
+  if (!m) return null;
+  const isOn = m.state === "on" || m.state === "quiet";
+  const wantOn = m.state === "off" || m.state === "unreadable";
+  const click = async () => {
+    if (m.state === "unreadable" && !confirm("The state file cannot be read. Switching on keeps it as monitor-guard.json.broken and starts a fresh one. Go on?")) return;
+    try {
+      await (wantOn ? api.monitorOn() : api.monitorOff());
+      toast(wantOn ? "Bug stories are on" : "Bug stories are off");
+    } catch (e) {
+      toast(e.message, "error");
+    }
+    await reload();
+  };
+  return h("div", { class: "row" },
+    h("span", { class: isOn ? "status ok" : "status bad" }, storiesLine(m)),
+    h("span", { class: "spacer" }),
+    h("button", { class: "small", onClick: click }, wantOn ? "Switch bug stories on" : "Switch bug stories off"));
+}
+
 /** The `notify` setting from the raw values of the Settings controls (strings for text, booleans for checkboxes). */
 export function notifyFrom(v) {
   const t = (x) => String(x ?? "").trim();
@@ -176,6 +215,7 @@ export const lastOkText = (st) => (!st ? "" : st.lastOk ? ` · last successful c
 export async function renderWatchers(main) {
   const [watchers, flows] = await Promise.all([api.watchers(), api.flows()]);
   const reload = () => renderWatchers(main);
+  const mon = watchers.some((w) => w.source === "monitor") ? await api.monitor().catch(() => undefined) : undefined;
   mount(main,
     h("div", { class: "toolbar" }, h("h1", {}, "Watchers"),
       h("span", { class: "muted" }, "Poll GitHub and start runs automatically while this server runs"),
@@ -205,6 +245,7 @@ export async function renderWatchers(main) {
           w.enabled ? lastOkText(st) : "",
           st?.nextTick ? ` · next ${new Date(st.nextTick).toLocaleTimeString()}` : ""),
         w.enabled && watcherNext(w).length ? h("div", {}, h("div", { class: "muted", style: { fontSize: "12.5px", marginTop: "6px" } }, "What happens next:"), nextList(watcherNext(w))) : null,
+        w.source === "monitor" ? storiesRow(mon, reload) : null,
         watcherNotes(st),
         st?.lastError ? h("details", {}, h("summary", {}, "Error details"), h("pre", { class: "mono" }, st.lastError)) : null,
         st?.lastActions?.length ? h("details", {}, h("summary", {}, `Recent activity (${st.lastActions.length})`), h("pre", { class: "mono" }, st.lastActions.join("\n"))) : null);

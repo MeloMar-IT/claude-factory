@@ -97,6 +97,21 @@ describe("bug story state in findings", () => {
     expect(back.days!.length).toBeGreaterThanOrEqual(1);
   });
 
+  it("skipped survives a re-sighting; one that is not a list of short strings is dropped on load", () => {
+    const f = [{ ...base()[0]!, skipped: ["off"] }];
+    expect(mergeFindings(f, [input("x")], at(HOUR)).findings[0]!.skipped).toEqual(["off"]);
+    const dir = mkdtempSync(join(tmpdir(), "monitor-findings-"));
+    try {
+      const file = join(dir, "f.json");
+      const good = base()[0]!;
+      writeFileSync(file, JSON.stringify({ version: 1, findings: [{ ...good, skipped: ["off"] }, { ...good, fingerprint: "m", skipped: "off" }, { ...good, fingerprint: "n", skipped: [5] }, { ...good, fingerprint: "o", skipped: ["x".repeat(41)] }] }));
+      const r = loadFindings(file).findings;
+      expect(r.map((x) => x.skipped)).toEqual([["off"], undefined, undefined, undefined]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("a stored finding with a report that is not seen gets missedAt; one without is unchanged", () => {
     const withReport = { ...base()[0]!, report };
     const plain = { ...mergeFindings([], [input("y")], T0).findings[0]! };

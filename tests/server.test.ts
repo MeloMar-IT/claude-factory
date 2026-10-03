@@ -102,6 +102,56 @@ describe("ui server", () => {
     expect((await json("PUT", "/api/config", { ...cfg, watchers: [] })).status).toBe(200);
   });
 
+  describe("the monitor's off switch", () => {
+    const home = () => join(tmp, "home");
+    const logLines = () => (existsSync(join(home(), "monitor-log.jsonl")) ? readFileSync(join(home(), "monitor-log.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as { event: string; by?: string }) : []);
+    const get = async () => (await json("GET", "/api/monitor")).json() as Promise<Record<string, unknown>>;
+    const activity = async () => {
+      const list = (await (await json("GET", "/api/watchers")).json()) as { id: string; status?: { lastActions: string[] } }[];
+      return list.find((w) => w.id === "mon")?.status?.lastActions ?? [];
+    };
+    beforeAll(() => {
+      rmSync(join(home(), "monitor-guard.json"), { force: true });
+      rmSync(join(home(), "monitor-log.jsonl"), { force: true });
+    });
+
+    it("GET says quiet with `until` just after the start", async () => {
+      expect(await get()).toMatchObject({ state: "quiet", reportTo: false });
+      expect(typeof (await get()).until).toBe("string");
+    });
+
+    it("off and on set the state with the account id, log once, show in the activity, and a second one changes nothing", async () => {
+      const cfg = (await (await json("GET", "/api/config")).json()) as { watchers: unknown[] };
+      expect((await json("PUT", "/api/config", { ...cfg, watchers: [{ id: "mon", source: "monitor", every: "1h" }] })).status).toBe(200);
+      const off = await json("POST", "/api/monitor/off", {});
+      expect(off.status).toBe(200);
+      expect(await off.json()).toMatchObject({ state: "off", by: session.user.id, changed: true });
+      expect(JSON.parse(readFileSync(join(home(), "monitor-guard.json"), "utf8")).off.by).toBe(session.user.id);
+      expect(logLines()).toMatchObject([{ event: "off", by: session.user.id }]);
+      expect((await activity())[0]).toContain("bug stories switched off");
+      expect(await (await json("POST", "/api/monitor/off", {})).json()).toMatchObject({ state: "off", changed: false });
+      expect(logLines()).toHaveLength(1);
+      expect(await activity()).toHaveLength(1);
+      expect(await (await json("POST", "/api/monitor/on", {})).json()).toMatchObject({ state: "quiet", changed: true });
+      expect(logLines().map((l) => l.event)).toEqual(["off", "on"]);
+      expect((await activity())[0]).toContain("bug stories switched on");
+      expect((await json("PUT", "/api/config", { ...cfg, watchers: [] })).status).toBe(200);
+    });
+
+    it("a broken file reads as unreadable; on resets it and keeps .broken", async () => {
+      writeFileSync(join(home(), "monitor-guard.json"), "{nope");
+      expect(await get()).toMatchObject({ state: "unreadable" });
+      const on = (await (await json("POST", "/api/monitor/on", {})).json()) as { reset?: string };
+      expect(typeof on.reset).toBe("string");
+      expect(existsSync(join(home(), "monitor-guard.json.broken"))).toBe(true);
+    });
+
+    it("a POST without the CSRF token is refused", async () => {
+      const r = await fetch(base + "/api/monitor/off", { method: "POST", headers: { cookie: session.cookie, "content-type": "application/json" }, body: "{}" });
+      expect(r.status).toBe(403);
+    });
+  });
+
   it("serves the UI and the yaml browser build", async () => {
     expect((await fetch(base + "/")).headers.get("content-type")).toContain("text/html");
     expect((await fetch(base + "/vendor/yaml/index.js")).status).toBe(200);

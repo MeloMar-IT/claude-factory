@@ -12,6 +12,7 @@ import { WatcherManager } from "../queue/watchers.js";
 import { SESSION_RECHECK_MS, authRoutes, requireSession, sessionAlive } from "./api-auth.js";
 import { adminRoutes } from "./api-admin.js";
 import { credentialRoutes } from "./api-credentials.js";
+import { monitorRoutes } from "./api-monitor.js";
 import { flowRoutes } from "./api-flows.js";
 import { runRoutes } from "./api-runs.js";
 import { HttpError, send, serveStatic } from "./http.js";
@@ -78,7 +79,7 @@ export interface ApiContext {
 /** A route handler: returns true when it handled the request. */
 export type Route = (ctx: ApiContext, req: IncomingMessage, res: ServerResponse, seg: string[], method: string, user: User) => Promise<boolean>;
 
-const ROUTES: Route[] = [credentialRoutes, repoRoutes, refinementRoutes, userRoutes, adminRoutes, flowRoutes, runRoutes, nextRoutes, yourTurnRoutes, turnActionRoutes, sinceRoutes, boardRoutes, healthRoutes, clarityRoutes];
+const ROUTES: Route[] = [monitorRoutes, credentialRoutes, repoRoutes, refinementRoutes, userRoutes, adminRoutes, flowRoutes, runRoutes, nextRoutes, yourTurnRoutes, turnActionRoutes, sinceRoutes, boardRoutes, healthRoutes, clarityRoutes];
 
 export async function startServer(given: ServerOptions): Promise<{ url: string; close: () => void; ctx: ApiContext; notifier?: TurnNotifier }> {
   // every free-form server, watcher and notifier log line passes the redaction (fail closed)
@@ -112,7 +113,7 @@ export async function startServer(given: ServerOptions): Promise<{ url: string; 
       if (s.vars?.github_repo && !steppedAsideFor(s)) watchers.kickRepo(s.vars.github_repo);
     },
   });
-  const watchers = new WatcherManager({ scheduler, runsDir: opts.runsDir, repo: opts.repo, config: () => config, areaWait, log, serverLog: ring.lines, restart: () => ctx.restart });
+  const watchers = new WatcherManager({ scheduler, runsDir: opts.runsDir, repo: opts.repo, config: () => config, areaWait, log, serverLog: ring.lines, restart: () => ctx.restart, startedAt: new Date() });
   const ctx: ApiContext = { opts, diagLog: sink, scheduler, watchers, config: () => config, reloadConfig: () => (config = loadConfig()), listen };
 
   // Before the first pump and before adopt(): jobs of blocked accounts never start, and a stop-work request made while
