@@ -168,6 +168,9 @@ const EXAMPLES: Record<string, Example> = {
   "POST users/:id/unblock": no(`users/${UNKNOWN}/unblock`, 404, {}),
   "POST users/:id/link": no(`users/${UNKNOWN}/link`, 404, {}),
   "DELETE users/:id": no(`users/${UNKNOWN}`, 404),
+  "GET audit": no("audit", 200),
+  // the walk reads every answer as JSON; a good export is CSV and is covered in audit-api.test.ts
+  "GET audit/export": no("audit/export?user=x", 400),
   "DELETE credentials/:id": { path: `credentials/${UNKNOWN}`, user: 404, admin: 404 },
   "GET repos": { path: "repos", user: 200, admin: 200 },
   "POST repos": { path: "repos", body: {}, user: 400, admin: 400 },
@@ -204,6 +207,10 @@ describe("the table", () => {
     expect(findRule("GET", ["admin", "repos"])?.path).toBe("admin/repos");
     expect(findRule("PUT", ["admin", "repos", "a", "settings"])?.path).toBe("admin/repos/:id/settings");
     expect(findRule("GET", ["admin"])).toBeUndefined();
+    expect(findRule("GET", ["audit"])?.path).toBe("audit");
+    expect(findRule("GET", ["audit", "export"])?.path).toBe("audit/export");
+    expect(findRule("GET", ["audit", "export", "x"])).toBeUndefined();
+    expect(findRule("POST", ["audit"])).toBeUndefined();
     expect(findRule("POST", ["refinement", "a", "drop"])?.path).toBe("refinement/:id/drop");
   });
 

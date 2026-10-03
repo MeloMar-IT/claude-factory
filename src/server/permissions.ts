@@ -73,6 +73,8 @@ export const RULES: Rule[] = [
   r("POST", "users/:id/unblock", "no", "unblock an account"),
   r("POST", "users/:id/link", "no", "a new set-password token for an account without a password"),
   r("DELETE", "users/:id", "no", "delete an account with its sessions, repositories, refinement sessions and stored credentials"),
+  r("GET", "audit", "no", "read the audit log, newest first, with filters"),
+  r("GET", "audit/export", "no", "download the audit log as CSV, with the same filters"),
   r("GET", "repos", "yes", "your repositories"),
   r("POST", "repos", "yes", "add a repository (a URL, and a token or a deploy key for it)"),
   r("PUT", "repos/:id/auth", "yes", "change the method, user name, token or address of your repository, or make a new deploy key"),
