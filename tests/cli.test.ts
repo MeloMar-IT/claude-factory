@@ -64,6 +64,15 @@ describe("scf command", () => {
     expect(run(cli, ["validate"]).stderr).toContain("usage: scf validate <flow>");
   });
 
+  it("scf watch --source monitor says the monitor only runs inside the server", () => {
+    const cli = resolve("dist/cli.js");
+    for (const extra of [[], ["--var", "github_repo=acme/app"]]) {
+      const r = run(cli, ["watch", "--source", "monitor", ...extra]);
+      expect(r.status).not.toBe(0);
+      expect(r.stderr).toContain("only runs inside the server");
+    }
+  });
+
   it("UI hints are exact commands", () => {
     expect(readFileSync("ui/dashboard.js", "utf8")).toContain('"scf eval evals/example.yaml"');
   });

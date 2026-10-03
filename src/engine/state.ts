@@ -75,6 +75,8 @@ export interface RunSummary {
   failureNote?: FailureNote;
   /** How many times the run was resumed. */
   resumes?: number;
+  /** The last 50 resumes (when, and the step each restarted at); the monitor reads it to find restart loops. */
+  resumeLog?: { at: string; from: string }[];
   /** Process that last started or resumed the run. */
   pid?: number;
   /** When the top-level step in `state.next` started; only while that step runs. */
@@ -114,24 +116,35 @@ const briefCache = new Map<string, { mtimeMs: number; size: number; brief: RunBr
 
 /** A brief of every run, newest first. A run.json is read again only when its time or size changed; broken files are skipped. */
 export function listRunBriefs(runsDir: string): RunBrief[] {
+  return listRunIds(runsDir).flatMap((id) => briefOf(runsDir, id) ?? []);
+}
+
+/** Like listRunBriefs, but gives the event loop a turn after every 50 runs (a cold start reads every file). */
+export async function listRunBriefsAsync(runsDir: string): Promise<RunBrief[]> {
   const out: RunBrief[] = [];
-  for (const id of listRunIds(runsDir)) {
-    const file = runFile(join(runsDir, id));
-    try {
-      const st = statSync(file);
-      let hit = briefCache.get(file);
-      if (!hit || hit.mtimeMs !== st.mtimeMs || hit.size !== st.size) {
-        const s = JSON.parse(readFileSync(file, "utf8")) as RunSummary;
-        if (!s || typeof s.runId !== "string" || typeof s.status !== "string") continue;
-        hit = { mtimeMs: st.mtimeMs, size: st.size, brief: { runId: s.runId, flow: s.flow, status: s.status, startedAt: s.startedAt, finishedAt: s.finishedAt, source: s.source, owner: s.owner, runDir: s.runDir, dirName: id, updatedAt: new Date(Math.round(st.mtimeMs)).toISOString() } };
-        briefCache.set(file, hit);
-      }
-      out.push(hit.brief);
-    } catch {
-      continue;
-    }
+  for (const [i, id] of listRunIds(runsDir).entries()) {
+    if (i > 0 && i % 50 === 0) await new Promise<void>((r) => setImmediate(r));
+    const b = briefOf(runsDir, id);
+    if (b) out.push(b);
   }
   return out;
+}
+
+function briefOf(runsDir: string, id: string): RunBrief | undefined {
+  const file = runFile(join(runsDir, id));
+  try {
+    const st = statSync(file);
+    let hit = briefCache.get(file);
+    if (!hit || hit.mtimeMs !== st.mtimeMs || hit.size !== st.size) {
+      const s = JSON.parse(readFileSync(file, "utf8")) as RunSummary;
+      if (!s || typeof s.runId !== "string" || typeof s.status !== "string") return undefined;
+      hit = { mtimeMs: st.mtimeMs, size: st.size, brief: { runId: s.runId, flow: s.flow, status: s.status, startedAt: s.startedAt, finishedAt: s.finishedAt, source: s.source, owner: s.owner, runDir: s.runDir, dirName: id, updatedAt: new Date(Math.round(st.mtimeMs)).toISOString() } };
+      briefCache.set(file, hit);
+    }
+    return hit.brief;
+  } catch {
+    return undefined;
+  }
 }
 
 export const runFile = (runDir: string) => join(runDir, "run.json");

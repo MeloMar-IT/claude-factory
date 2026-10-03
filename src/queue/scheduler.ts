@@ -3,7 +3,7 @@ import { dirname, join, resolve } from "node:path";
 import type { Config } from "../config.js";
 import type { ApprovalDecision } from "../engine/execute.js";
 import { cancelWaitingRun, newRunId, resumeRun, runFlow } from "../engine/runner.js";
-import { listRunBriefs, listRunIds, loadRun, readLiveLog, runUpdatedAt, type RunBrief, type RunSummary } from "../engine/state.js";
+import { listRunBriefs, listRunBriefsAsync, listRunIds, loadRun, readLiveLog, runUpdatedAt, type RunBrief, type RunSummary } from "../engine/state.js";
 import type { Flow } from "../flow/schema.js";
 import { redactText } from "../credentials/redact.js";
 
@@ -327,12 +327,19 @@ export class Scheduler {
 
   /** A brief of every run, newest first (cheap: files are read again only when they changed). */
   briefs(): RunBrief[] {
-    return listRunBriefs(this.o.runsDir).map((b) => {
-      const live = this.active.get(b.runId)?.summary;
-      if (live) return { ...b, status: live.status };
-      // An interrupted run ended when its run.json was last written: a time that stays the same.
-      return b.status === "running" && !this.active.has(b.runId) ? { ...b, status: "failed" as const, finishedAt: b.finishedAt ?? b.updatedAt } : b;
-    });
+    return listRunBriefs(this.o.runsDir).map((b) => this.liveBrief(b));
+  }
+
+  /** The same, reading in batches so the server keeps answering (for the monitor). */
+  async briefsAsync(): Promise<RunBrief[]> {
+    return (await listRunBriefsAsync(this.o.runsDir)).map((b) => this.liveBrief(b));
+  }
+
+  private liveBrief(b: RunBrief): RunBrief {
+    const live = this.active.get(b.runId)?.summary;
+    if (live) return { ...b, status: live.status };
+    // An interrupted run ended when its run.json was last written: a time that stays the same.
+    return b.status === "running" && !this.active.has(b.runId) ? { ...b, status: "failed" as const, finishedAt: b.finishedAt ?? b.updatedAt } : b;
   }
 
   /** A "running" run.json with no live process was interrupted (e.g. the server died). */

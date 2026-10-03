@@ -21,6 +21,7 @@ node scripts/build-flows.mjs   # regenerate flows/*.yaml (see below)
 | `src/steps/` | Step runners: `claude.ts` (Claude Code CLI), `codex.ts`, `shell.ts` |
 | `src/agents/` | Picking agent/provider/model, fallbacks on limits |
 | `src/flow/` | Flow schema (zod) and loading; `blocks.ts` for the block library |
+| `src/monitor/` | The monitor: detectors, findings store, the `Monitor` check (`detectors.ts`, `findings.ts`, `monitor.ts`) |
 | `src/queue/` | Scheduler (concurrency, locks), GitHub watchers, dependencies |
 | `src/server/` | HTTP API (`api-*.ts`) and the server; the UI calls it |
 | `ui/` | Web UI: plain JavaScript modules, no build step, no framework |

@@ -74,6 +74,13 @@ export function health(ctx: ApiContext, now = new Date()): Health {
     problems.push(p);
   }
 
+  // The monitor is not in `tracked` (it has no repository): a check that fails is a problem of its own.
+  for (const w of ctx.watchers.statuses()) {
+    if (w.source !== "monitor" || !w.enabled || !w.status?.lastError) continue;
+    const p = watcherProblem(w, w.status, t);
+    if (p) problems.push(p);
+  }
+
   const busy = new Set([...q.active.map((a) => a.runId), ...q.pending.map((p) => p.runId)]);
   const closed = new Set<string>();
   for (const w of tracked) {
@@ -98,6 +105,7 @@ export function health(ctx: ApiContext, now = new Date()): Health {
   const lastOk = new Map<string, string | undefined>();
   for (const w of ctx.watchers.statuses()) {
     if (!w.enabled) continue;
+    if (w.source === "monitor") continue;
     const ok = tracked.find((x) => x.watcher.id === w.id)?.status.lastOk ?? w.status?.lastOk;
     if (!lastOk.has(w.github_repo)) lastOk.set(w.github_repo, ok);
     else {
