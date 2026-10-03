@@ -19,6 +19,7 @@ import { areaWait, forgetHistory, nextRoutes, type RestartState } from "./next.j
 import { healthRoutes } from "./health.js";
 import { boardRoutes } from "./board.js";
 import { TurnNotifier } from "./notifier.js";
+import { ClarityRecorder, clarityRoutes } from "./clarity.js";
 import { CSP, HSTS, listenProblem, localUrl, requestAccess } from "./net.js";
 import { ACCOUNT_SWEEP_MS, accountActive, accountSweeper } from "./account-work.js";
 import { adoptRuns } from "../auth/run-owner.js";
@@ -70,7 +71,7 @@ export interface ApiContext {
 /** A route handler: returns true when it handled the request. */
 export type Route = (ctx: ApiContext, req: IncomingMessage, res: ServerResponse, seg: string[], method: string, user: User) => Promise<boolean>;
 
-const ROUTES: Route[] = [credentialRoutes, repoRoutes, userRoutes, adminRoutes, flowRoutes, runRoutes, nextRoutes, yourTurnRoutes, turnActionRoutes, sinceRoutes, boardRoutes, healthRoutes];
+const ROUTES: Route[] = [credentialRoutes, repoRoutes, userRoutes, adminRoutes, flowRoutes, runRoutes, nextRoutes, yourTurnRoutes, turnActionRoutes, sinceRoutes, boardRoutes, healthRoutes, clarityRoutes];
 
 export async function startServer(given: ServerOptions): Promise<{ url: string; close: () => void; ctx: ApiContext; notifier?: TurnNotifier }> {
   // every free-form server, watcher and notifier log line passes the redaction (fail closed)
@@ -195,11 +196,14 @@ export async function startServer(given: ServerOptions): Promise<{ url: string; 
     notifier = new TurnNotifier(ctx, { baseUrl: localUrl(listen, opts.port), log });
     notifier.start();
   }
+  const clarity = new ClarityRecorder(ctx, { log });
+  clarity.start();
   return {
     url: localUrl(listen, opts.port),
     ctx,
     notifier,
     close: () => {
+      clarity.stop();
       clearInterval(adoptTimer);
       clearInterval(sweepTimer);
       notifier?.stop();

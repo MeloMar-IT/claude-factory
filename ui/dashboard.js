@@ -50,10 +50,41 @@ function rateBar(ok, total) {
   return h("span", { class: "rate" }, h("span", { class: "rate-track" }, h("span", { class: "rate-fill", style: { width: `${w}%` } })), h("span", { class: "mono" }, pct(ok, total)));
 }
 
+/** A length of time in plain words: "less than a minute", "5 min", "2 h 10 min", "3 days". `up` rounds up instead of to the nearest. */
+export function durationText(ms, up = false) {
+  const round = up ? Math.ceil : Math.round;
+  if (!(ms >= 60_000)) return "less than a minute";
+  const min = round(ms / 60_000);
+  if (min < 60) return `${min} min`;
+  const hours = Math.floor(min / 60);
+  if (hours < 24) return min % 60 ? `${hours} h ${min % 60} min` : `${hours} h`;
+  const days = round(ms / 86_400_000);
+  return `${days} ${days === 1 ? "day" : "days"}`;
+}
+
+/** "Your turn in numbers": how long items waited for the owner, and what Your turn missed. `c` is the answer of GET /api/clarity. */
+export function clarityCard(c) {
+  const title = h("h3", {}, "Your turn in numbers");
+  if (!c || !c.sampled) return h("div", { class: "card" }, title, h("p", { class: "muted" }, "No sample yet. The first one is taken within a minute."));
+  const lines = [];
+  if (c.count === 0) lines.push("No item has waited for you yet (last 30 days).");
+  else if (c.count === 1) lines.push(`1 item waited for you, for ${durationText(c.halfMs)}.`);
+  else {
+    lines.push(c.halfMs < 60_000 ? "Half waited less than a minute." : `Half waited ${durationText(c.halfMs, true)} or less.`);
+    lines.push(`${c.count} items waited for you; the longest ${durationText(c.longestMs)}.`);
+  }
+  if (c.dismissed > 0) lines.push(`${c.dismissed} dismissed ${c.dismissed === 1 ? "item is" : "items are"} not counted.`);
+  lines.push(`Waiting for you now: ${c.waitingNow ?? 0}.`);
+  lines.push(c.missed === 0 ? "Waiting for you without being on Your turn: 0." : `Waiting for you without being on Your turn: ${c.missed} (should be 0)${c.missedNow > 0 ? " — still missing" : ""}.`);
+  return h("div", { class: "card" }, title,
+    lines.map((l) => h("p", {}, l)),
+    c.misses?.length ? h("ul", { class: "muted" }, c.misses.map((m) => h("li", {}, `${m.id} — ${m.status}`))) : null);
+}
+
 export async function renderDashboard(main) {
   mount(main, h("div", { class: "row" }, h("span", { class: "spinner" }), " Loading…"));
-  const [s, info, evals, watchers, runs] = await Promise.all([api.stats(), api.info(), api.evals().catch(() => []), api.watchers().catch(() => []),
-    api.runs().catch(() => [])]);
+  const [s, info, evals, watchers, runs, clarity] = await Promise.all([api.stats(), api.info(), api.evals().catch(() => []), api.watchers().catch(() => []),
+    api.runs().catch(() => []), api.clarity().catch(() => null)]);
   const { yours, rest } = waitingGroups(watchers);
   const group = ({ w, records }) => h("div", { class: "hold-group" },
     h("div", { class: "muted", style: { fontSize: "12.5px" } }, h("b", { class: "mono" }, w.id), ` · ${w.github_repo}${w.source === "issues" ? ` · label ${w.label}` : ""}`),
@@ -67,6 +98,7 @@ export async function renderDashboard(main) {
       tile("Spent (30 days)", usd(t.costUsd), `${t.runs} runs`),
       tile("Success rate", pct(t.succeeded, t.runs), `${t.succeeded} succeeded · ${t.failed} failed`),
       tile("Needs a human", String(needsYou(runs).length), h("a", { href: "#/runs" }, "see Needs you on the Runs page"))),
+    clarity ? clarityCard(clarity) : null,
     yours.length || rest.length ? h("div", { class: "card" }, h("h3", {}, "Waiting — what happens next"),
       yours.map(group),
       yours.length && rest.length ? h("div", { class: "hold-rest" }, rest.map(group)) : rest.map(group)) : null,

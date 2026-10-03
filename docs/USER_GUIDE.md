@@ -107,6 +107,8 @@ When a run finishes, its branch stays in your repository. Review it, merge it, o
 - **Answer and approve here:** for an item of a watcher, buttons next to the GitHub link do the work. **Show questions** has **Accept all recommendations** (only for questions asked up front) and **Answer…** (a box per question; each needs an answer, and **Use recommendation** fills one in visibly). **Show plan**, **Show split** and **Show request** show the risk and **Approve** / **Reject** (say what to change). A failed item has **Retry** and **Retry with a hint…**. Each action is a normal comment on the issue under the Foundry's GitHub login, signed with your name, so replying on GitHub still works. Approve and reject need write access for that login. The item then shows under **Done — continuing**.
 - **Dismiss** hides an item. It stays hidden until its situation changes (a new question, a new approval, a new failure). **Show again** at the bottom brings all dismissed items back. Watcher errors cannot be dismissed. Dismissals are kept in `your-turn.json` in the data folder.
 - **No refresh needed:** the page updates every 5 seconds. When you come back from a GitHub link, the watcher checks GitHub at once. An answer you give elsewhere shows at the next watcher check.
+- **Closed on GitHub, run still working:** such an issue is listed, with a link to the run (the Runs page while the run is only queued). Cancel the run if the work is no longer wanted, or Dismiss it to let the run finish.
+- **Checked every minute:** the Foundry checks that the Board, the watchers, the runs and this page agree. The result is on the [Dashboard](#dashboard).
 - **Empty:** it says "Nothing needs you." and, when it can, how many stories are being built and when the next release pull request is expected.
 - **Badge:** the number of items shows in the navigation and in the tab title, for example "(3) Foundry". When something waits, the app opens on this page.
 - **Notifications:** new items can also reach you as a macOS or Slack message; see **Notifications** under Settings.
@@ -1215,6 +1217,7 @@ Change a role with `scf user role <e-mail> admin|user`, or create an admin with
 | `POST /api/your-turn/restore` | yes | no | restore dismissed items |
 | `GET /api/your-turn/detail` | yes | no | the questions, plan or split of an item |
 | `POST /api/your-turn/act` | yes | no | answer, approve, reject or retry an item, as a comment on the issue |
+| `GET /api/clarity` | yes | no | how long items waited for you, and what Your turn missed |
 | `GET /api/credentials` | yes | yes | your stored credentials |
 | `POST /api/credentials` | yes | yes | store a credential |
 | `DELETE /api/credentials/:id` | yes | yes | remove a credential |
@@ -1387,7 +1390,16 @@ Spend today and over 30 days, success rate, **Needs a human** (the number of run
 move is yours — the same as **Needs you** on the Runs page), the **Waiting** card (every
 labelled issue that isn't being worked on: who has the next move, what to do, why, and a link;
 lines for you come first), cost per day, results per flow and per repository,
-the steps where runs fail most, and eval results. A server that waits to restart shows in the
+the steps where runs fail most, and eval results.
+
+**Your turn in numbers** shows how long items waited for you (last 30 days) and whether anything waited for you without being on Your turn:
+
+- *Half waited X or less* and *the longest* — measured to the minute, and only while the server runs. A wait ends when you act in the app (the item moves to "Done — continuing") or the item leaves the page.
+- *Dismissed items are not counted* — they are counted apart.
+- *Waiting for you without being on Your turn* — 0 is normal. A higher number lists what was missing; "still missing" means it is missing now.
+- The data is in `clarity.json` in the data folder and never leaves the computer.
+
+A server that waits to restart shows in the
 [health line](#the-health-line), not on the Dashboard.
 
 ### Evals

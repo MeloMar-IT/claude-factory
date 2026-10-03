@@ -62,6 +62,7 @@ export const api = {
   restoreTurn: () => req("POST", "/api/your-turn/restore", {}),
   turnDetail: (key) => req("GET", `/api/your-turn/detail?key=${enc(key)}`),
   actTurn: (body) => req("POST", "/api/your-turn/act", body),
+  clarity: () => req("GET", "/api/clarity"),
   board: () => req("GET", "/api/board"),
   stats: () => req("GET", "/api/stats"),
   evals: () => req("GET", "/api/evals"),
