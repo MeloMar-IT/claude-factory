@@ -11,6 +11,7 @@ import { Scheduler } from "../src/queue/scheduler.js";
 import { failureComment, parseInterval, Watcher } from "../src/queue/watcher.js";
 import { watcherProblem } from "../src/server/next.js";
 import { firstLine } from "../src/next-step.js";
+import { failureSummary } from "../src/failure.js";
 import { LABEL_WORDS } from "../src/words.js";
 import { claudeBin, fakeGithub, first, oldFlowFor } from "./helpers/fake-github.js";
 
@@ -491,6 +492,11 @@ describe("watcher", () => {
     }
     const head = body.slice(0, body.indexOf("<details>"));
     expect(head).toContain("- **What happened:** The step a failed.");
+    expect(head).toContain("- **Why:** ");
+    expect(head).toContain("- **Kind of problem:** ");
+    expect(head).toContain("- **Already tried:** Nothing else — it failed at the first attempt.");
+    const opts = head.slice(head.indexOf("**Your options**")).split("\n").filter((l) => l.startsWith("- "));
+    expect(opts.map((l) => l.split(" — ")[0])).toEqual(["- Retry", "- Retry with a hint", "- Change the plan", "- Close"]);
     expect(head).not.toContain("What you can do");
     expect(head).toContain("Last failing step: `a`");
     for (const bad of ["@someone", "```", "evil", "# Title"]) expect(head).not.toContain(bad);
@@ -498,12 +504,34 @@ describe("watcher", () => {
     expect(body.startsWith("**What you need to do:** Do the thing, then retry.\n\n🤖 **Spaghetti Code Foundry** could not finish this issue.\n")).toBe(true);
   });
 
-  it("failureComment for a Foundry failure has the 'itself failed' heading and no Why line", () => {
-    const s = { runId: "r9", reason: "boom", history: [] } as never;
-    const body = failureComment(s, { who: "Something is wrong", action: "Fix it", why: "The Foundry failed, not the code: boom", cause: "factory" } as never);
+  it("failureComment for a Foundry failure has the 'itself failed' heading, and what and why", () => {
+    const s = { runId: "r9", status: "failed", reason: "Boom", history: [] } as never;
+    const body = failureComment(s, { who: "Something is wrong", action: "Fix it", why: "The Foundry failed, not the code: Boom", cause: "factory" } as never);
     expect(body.split("\n")[2]).toBe("🤖 **Spaghetti Code Foundry** itself failed on this issue, not the code.");
-    expect(body).toContain("- **What happened:** The Foundry failed, not the code: boom.");
-    expect(body).not.toContain("- **Why:**");
+    expect(body).toContain("- **What happened:** The run failed.");
+    expect(body).toContain("- **Why:** Boom.");
+  });
+
+  it("failureComment names the failed child of a parallel step and shows its output", () => {
+    const h = (id: string, ok: boolean, output: string, over = {}) => ({ id, type: "shell", ok, visit: 1, output, ...over });
+    const s = {
+      runId: "r9", status: "failed", reason: 'step "p" failed: failed: a',
+      history: [h("a", false, "child failure text"), h("b", true, "sibling ok text"), h("p", false, "## a\nchild failure text\n\n## b\nsibling ok text", { type: "parallel", error: "failed: a" })],
+    } as never;
+    const body = failureComment(s, { who: "Something is wrong", action: "Fix it", why: "x" } as never);
+    expect(body).toContain("Last failing step: `a`");
+    expect(body).toContain("child failure text");
+    expect(body).not.toContain("sibling ok text");
+  });
+
+  it("failureComment says when a model wrote the Why, and names a custom failed label in the options", () => {
+    const s = { runId: "r9", status: "failed", reason: 'step "a" failed: exit code 1', history: [], failureNote: { kind: "code", why: "the tests keep failing", by: "claude:anthropic:haiku" } } as never;
+    const sum = failureSummary(s, { watched: true, failedLabel: "Factory_ERROR" });
+    const body = failureComment(s, { who: "Something is wrong", action: "Fix it", why: "x", failure: sum } as never);
+    expect(body).toContain("- **Why:** The tests keep failing.");
+    expect(body).toContain("(A model read the output");
+    expect(body).toContain("- Retry — remove the Factory_ERROR label");
+    expect(failureComment({ ...(s as object), failureNote: undefined } as never, { who: "Something is wrong", action: "Fix it", why: "x" } as never)).not.toContain("(A model read");
   });
 
   describe("failure comment", () => {
@@ -525,7 +553,9 @@ describe("watcher", () => {
       const body = bodyOf(4);
       expect(body.split("\n")[2]).toBe(FACTORY_LINE);
       expect(body.split("\n").at(-1)).toBe(`<!-- claude-factory run=${runFor("4").runId} -->`);
-      expect(headOf(body)).not.toContain("- **Why:**");
+      expect(headOf(body)).toContain("- **Why:** The plan had no questions to ask.");
+      expect(headOf(body)).toContain("- **Kind of problem:** A problem with the environment or the Foundry");
+      expect(headOf(body)).toContain("**Your options**");
       issues([4, "factory:failed"]);
       await w.tick();
       expect(w.status.holds).toMatchObject([{ issue: 4, next: { kind: "failed", who: "Something is wrong", cause: "factory" } }]);

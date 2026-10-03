@@ -202,6 +202,11 @@ export const ConfigSchema = z
       })
       .strict()
       .prefault({}),
+    /** The one-sentence reason a model writes for a failed run (a small call; the rules text is the fallback). */
+    failure_summary: z
+      .object({ enabled: z.boolean().default(true), model: z.string().default("haiku") })
+      .strict()
+      .default({ enabled: true, model: "haiku" }),
     /** Commit/comment as a bot instead of you. */
     bot: z
       .object({

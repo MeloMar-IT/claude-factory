@@ -594,3 +594,65 @@ steps:
     await expect(resume(s.runId)).rejects.toThrow("older version of Spaghetti Code Foundry");
   });
 });
+
+describe("the failure note", () => {
+  const FAIL = "name: t\nworkspace: inplace\nsteps:\n  - {id: a, type: shell, run: 'echo boom; exit 1'}\n";
+  let guard: string | undefined;
+  beforeEach(() => {
+    guard = process.env.FACTORY_NO_FAILURE_MODEL;
+    delete process.env.FACTORY_NO_FAILURE_MODEL;
+  });
+  afterEach(() => {
+    if (guard === undefined) delete process.env.FACTORY_NO_FAILURE_MODEL;
+    else process.env.FACTORY_NO_FAILURE_MODEL = guard;
+    delete process.env.FAKE_EXPLAIN;
+  });
+
+  it("is written to a failed run, costs money and is in the live log", async () => {
+    const s = await start(FAIL);
+    expect(s.status).toBe("failed");
+    expect(s.failureNote).toEqual({ kind: "code", why: "the tests still fail after the fixes", by: "claude:anthropic:haiku" });
+    expect(s.totalCostUsd).toBeCloseTo(0.002);
+    expect(JSON.parse(readFileSync(join(s.runDir, "run.json"), "utf8")).failureNote.why).toBe("the tests still fail after the fixes");
+    expect(readFileSync(liveLogFile(s.runDir), "utf8")).toContain("✎ why it failed: the tests still fail after the fixes");
+  });
+
+  it("is followed by the classification when the model says environment", async () => {
+    process.env.FAKE_EXPLAIN = "KIND: environment\nWHY: Java is not installed";
+    const s = await start(FAIL);
+    expect(classifyFailure(s)).toMatchObject({ cause: "factory", what: "Java is not installed" });
+    const n = runNextStep(s);
+    expect(n.cause).toBe("factory");
+    expect(n.failure).toMatchObject({ byModel: true, why: "Java is not installed." });
+  });
+
+  it("saves the failed state before the model call, so a crash in it keeps the failure", async () => {
+    const seen: string[] = [];
+    await runFlow(parseFlow(FAIL), {
+      task: "t", repo, runsDir, claudeBin, config: baseConfig(),
+      onUpdate: (s) => seen.push(`${s.status}:${s.failureNote ? "note" : "plain"}`),
+    });
+    expect(seen.slice(-2)).toEqual(["failed:plain", "failed:note"]);
+  });
+
+  it("is gone when the run is resumed to success", async () => {
+    const flag = join(tmp, "flag");
+    const s = await start(`name: t\nworkspace: inplace\nsteps:\n  - {id: a, type: shell, run: 'test -e ${flag}'}\n`);
+    expect(s.failureNote).toBeDefined();
+    writeFileSync(flag, "");
+    const r = await resume(s.runId);
+    expect(r.status).toBe("succeeded");
+    expect(r.failureNote).toBeUndefined();
+  });
+
+  it("is not asked for when the run succeeds, waits or stops", async () => {
+    const ok = await start("name: t\nworkspace: inplace\nsteps:\n  - {id: a, type: shell, run: 'true'}\n");
+    const wait = await start("name: t\nworkspace: inplace\nsteps:\n  - {id: a, type: approval, message: ok}\n");
+    const stop = await start("name: t\nworkspace: inplace\nsteps:\n  - {id: a, type: shell, run: 'exit 1', on_failure: stop}\n");
+    for (const r of [ok, wait, stop]) {
+      expect(r.failureNote).toBeUndefined();
+      expect(r.totalCostUsd).toBe(0);
+      expect(existsSync(join(r.runDir, "logs", "failure-summary.log"))).toBe(false);
+    }
+  });
+});

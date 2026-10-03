@@ -90,6 +90,8 @@ export interface ClaudeRunOptions {
   noMcp?: boolean;
   /** Skip the user's personal setup: MCP servers, user settings (hooks, plugins, env), skills. */
   isolated?: boolean;
+  /** Give the model no tools at all (`--tools ""`). */
+  noTools?: boolean;
   /** low | medium | high | xhigh | max */
   effort?: string;
   onProgress?: (msg: string) => void;
@@ -126,6 +128,7 @@ export function buildClaudeArgs(o: ClaudeRunOptions): string[] {
   if (o.model) args.push("--model", o.model);
   if (o.effort) args.push("--effort", o.effort);
   if (o.permissionMode) args.push("--permission-mode", o.permissionMode);
+  if (o.noTools) args.push("--tools", "");
   if (o.allowedTools?.length) args.push("--allowedTools", o.allowedTools.join(","));
   const system = [o.isolated ? FACTORY_AGENT_NOTE : "", o.systemPrompt ?? ""].filter(Boolean).join("\n\n");
   if (system) args.push("--append-system-prompt", system);
@@ -158,7 +161,7 @@ export async function runClaude(o: ClaudeRunOptions): Promise<ClaudeRunResult> {
   const bin = o.claudeBin ?? resolveClaudeBin();
   let final: StreamEvent | undefined;
 
-  const res = await runProcess(bin, buildClaudeArgs(o), {
+  const spawned = await runProcess(bin, buildClaudeArgs(o), {
     cwd: o.cwd,
     env: o.env,
     stdin: o.prompt,
@@ -179,7 +182,13 @@ export async function runClaude(o: ClaudeRunOptions): Promise<ClaudeRunResult> {
         }
       }
     },
-  });
+  }).then((r) => ({ res: r }), (e: Error) => ({ err: e }));
+  // A program that is not there is a setup problem with a stable message (the failure rules read it).
+  if ("err" in spawned) {
+    const msg = /ENOENT/.test(spawned.err.message) ? "claude CLI not found — install Claude Code on the computer that runs the Foundry" : spawned.err.message;
+    return { ok: false, output: "", error: msg };
+  }
+  const res = spawned.res;
 
   if (res.aborted) return { ok: false, output: final?.result ?? "", error: "cancelled" };
   if (res.timedOut) return { ok: false, output: final?.result ?? "", error: "timed out" };

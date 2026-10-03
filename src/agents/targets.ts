@@ -145,6 +145,13 @@ export function isLimitError(error: string | undefined, output: string): boolean
   return LIMIT_RE.test(`${error ?? ""}\n${output.length < 400 ? output : ""}`);
 }
 
+const QUOTA_RE = /hit your (?:[\w-]+ )?limit|(?:session|weekly|5-hour|daily) limit|rate.?limit|usage limit|limit reached|too many requests|quota|\b429\b/i;
+
+/** A real limit of the account (quota, rate limit), not an overloaded or unreachable service. */
+export function isQuotaError(error: string | undefined, output: string): boolean {
+  return QUOTA_RE.test(`${error ?? ""}\n${output.length < 400 ? output : ""}`);
+}
+
 const AUTH_RE = /OAuth session expired|Failed to authenticate|not (?:logged|signed) in|run \/login|codex login|invalid api key|authentication_error|\b401\b/i;
 
 /** The agent CLI is signed out (expired login, missing key): nothing a retry or another prompt fixes. */

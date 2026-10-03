@@ -12,6 +12,10 @@ export interface WordFacts {
   user?: boolean;
   /** `failed`: a limit of the administrator stopped the run. */
   limit?: boolean;
+  /** `usage_limit`: the agent is signed out. */
+  signedOut?: boolean;
+  /** `usage_limit`: the AI service could not be reached. */
+  unreachable?: boolean;
 }
 
 interface Words {
@@ -45,7 +49,14 @@ const GLOSSARY: Record<NextKind, Words> = {
   },
   one_at_a_time: { status: "waiting for another run", help: "Only one run at a time works here, and another run is active. Nothing to do — it starts when that run is finished." },
   area_lock: { status: "waiting for another run in the same code", help: "Another run is changing the same part of the code. Nothing to do — it goes on when that run is finished." },
-  usage_limit: { status: "paused — usage limit", help: "The usage limit of the AI account is reached. Nothing to do — the Foundry tries again after the limit resets." },
+  usage_limit: {
+    status: (f) => (f.signedOut ? "paused — signed out" : f.unreachable ? "paused — AI service not reachable" : "paused — usage limit"),
+    help: (f) => (f.signedOut
+      ? "The Foundry is signed out of its AI account. Sign in again — the run then goes on by itself."
+      : f.unreachable
+        ? "The AI service could not be reached. Nothing to do — the Foundry tries again later."
+        : "The usage limit of the AI account is reached. Nothing to do — the Foundry tries again after the limit resets."),
+  },
   daily_budget: {
     status: (f) => (f.user ? "paused — the administrator's limit was reached" : "paused — daily budget"),
     help: (f) => (f.user ? "The administrator's limit for today is reached. Nothing to do — it goes on tomorrow." : "Today's budget is used up. Nothing to do — it goes on tomorrow."),

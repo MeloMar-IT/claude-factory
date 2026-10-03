@@ -54,7 +54,7 @@ export function health(ctx: ApiContext, now = new Date()): Health {
     if (!have || ended(r) > ended(have)) limits.set(agent, r);
   }
   for (const [limitAgent, r] of limits) {
-    const data = { limitAgent, finishedAt: r.finishedAt ?? r.startedAt, now };
+    const data = { limitAgent, finishedAt: r.finishedAt ?? r.startedAt, now, ...(r.history.at(-1)?.unreachable ? { unreachable: true } : {}) };
     const rec = nextStep("usage_limit", {}, { ...data, reason: r.reason });
     // The reset time is quoted from the agent's message: keep it only when it looks like a time.
     problems.push(RESET_TIME.test(rec.until ?? "") ? rec : nextStep("usage_limit", {}, data));

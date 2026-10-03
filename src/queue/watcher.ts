@@ -4,6 +4,7 @@ import { loadRun, saveRun, spentToday, type RunSummary } from "../engine/state.j
 import { errorLine, explainError } from "../errors.js";
 import { loadFlow } from "../flow/load.js";
 import { canWrite, commentsAfter, ensureLabel, gh, ghJson, isBot, isStatusComment, issueComments, setLabels, type Comment, type Issue } from "../github.js";
+import { failedIndex, failureSummary } from "../failure.js";
 import { countQuestions, firstLine, releaseAtFor, runClosedIssue, LIMIT_RETRY_MS, nextStep, runNextStep, type NextData, type BlockerInfo, type NextKind, type NextStep } from "../next-step.js";
 import { LABEL_WORDS } from "../words.js";
 import { dependencies, openDependencies } from "./deps.js";
@@ -39,18 +40,26 @@ export function labelNames(cfg: WatcherConfig): LabelNames {
  * the first line says so and it replaces the What and Why lines.
  */
 export function failureComment(s: RunSummary, next: NextStep): string {
-  const factoryWhat = next.cause === "factory" ? next.why : undefined;
+  const factory = next.cause === "factory";
   const e = explainError(s.reason);
-  const failed = [...s.history].reverse().find((h) => !h.ok);
+  const sum = next.failure ?? failureSummary(s, { watched: true });
+  const hist = Array.isArray(s.history) ? s.history : [];
+  const failed = hist[failedIndex(hist)];
   const tail = (failed?.output || failed?.error || "").trim().slice(-3000);
   const raw = [e.detail, tail].filter(Boolean).join("\n\n");
   return [
     firstLine(next),
     "",
-    factoryWhat ? "🤖 **Spaghetti Code Foundry** itself failed on this issue, not the code." : "🤖 **Spaghetti Code Foundry** could not finish this issue.",
+    factory ? "🤖 **Spaghetti Code Foundry** itself failed on this issue, not the code." : "🤖 **Spaghetti Code Foundry** could not finish this issue.",
     "",
-    `- **What happened:** ${factoryWhat ?? e.what}.`,
-    ...(factoryWhat ? [] : [`- **Why:** ${e.why.charAt(0).toUpperCase()}${e.why.slice(1)}.`]),
+    `- **What happened:** ${sum.what.replace(/[.!?]+$/, "")}.`,
+    `- **Why:** ${sum.why}`,
+    `- **Kind of problem:** ${sum.kind}`,
+    `- **Already tried:** ${sum.tried.replace(/[.!?]+$/, "")}.`,
+    ...(sum.byModel ? ["", "_(A model read the output of the failing step to write the Why line. It can be wrong; the raw text is under Details.)_"] : []),
+    "",
+    "**Your options**",
+    ...sum.options.map((o) => `- ${o}`),
     failed ? `\nLast failing step: \`${failed.id}\`${failed.visit > 1 ? ` (attempt ${failed.visit})` : ""}` : "",
     raw ? `\n<details><summary>Details</summary>\n\n\`\`\`\n${raw.replace(/`{3,}/g, (m) => "ˋ".repeat(m.length))}\n\`\`\`\n</details>` : "",
     `\n<!-- claude-factory run=${s.runId} -->`,
