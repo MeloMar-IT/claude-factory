@@ -212,7 +212,7 @@ describe("removeRepo", () => {
     const a = add(ANN, "acme/app", { method: "github-token", token: TOKEN });
     const b = add(BOB, "acme/web", { method: "github-token", token: TOKEN2 });
     const keyBefore = JSON.parse(readFileSync(credentialsPath(), "utf8")).keyId;
-    expect(removeRepo(ANN, a.id)).toEqual({ oldKeysLeft: 0 });
+    expect(removeRepo(ANN, a.id)).toMatchObject({ oldKeysLeft: 0, removed: { id: a.id, url: "https://github.com/acme/app" } });
     expect(listCredentials(ANN)).toEqual([]);
     expect(JSON.parse(readFileSync(credentialsPath(), "utf8")).keyId).not.toBe(keyBefore);
     expect(readSecret(BOB, b.credentialId!)).toBe(TOKEN2);

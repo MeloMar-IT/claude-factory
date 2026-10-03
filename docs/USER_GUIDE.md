@@ -1254,6 +1254,29 @@ makes no account. Event lines can also hold a short `target` (instead of `userId
 use neither. A sign-in line that cannot be written (for example while another `scf` command holds the lock) does not stop the
 sign-in; the server log says `auth: audit.jsonl cannot-write`.
 
+What people do in the web interface is also logged, with `result` `ok`, `by` set to the account that made the call, and a `target`
+(and sometimes a `detail`):
+
+| `action` | When | `target` | `detail` |
+|---|---|---|---|
+| `run-start` | A run is started | run id | |
+| `run-cancel`, `run-approve`, `run-reject`, `run-resume` | A run is cancelled, approved, rejected or resumed (a cancel that cancelled nothing writes no line) | run id | |
+| `repo-add`, `repo-change`, `repo-remove` | A repository is added, its sign-in is changed, or it is removed | repository id | stored address |
+| `repo-change` (admin) | An admin changes the settings of a repository | repository id | `settings:` and the names of the changed fields |
+| `repo-transfer` (admin) | An admin moves a repository | repository id | id of the new owner |
+| `credential-add`, `credential-remove` | A credential is added or removed | credential id | its type |
+| `flow-publish` | A published flow is saved with a new version | flow name | version |
+| `settings-change` | Settings are saved | `config.yaml` | names of the top-level settings that changed |
+| `turn-answer`, `turn-approve`, `turn-reject`, `turn-retry` | An action on the Your turn page (`defaults` and `answer` are `turn-answer`; `retry` and a retry with a hint are `turn-retry`) | `owner/repo#issue` | |
+
+A line is written when the change is made. A call that is refused or fails before any change writes no line, and neither does a
+call that changes nothing (the same repository settings again, a flow saved without a change, an unpublished flow). If an old key
+is left in the Keychain, the change was made, so its line is written even though the answer is an error. Tokens, passwords, keys,
+notes, task text, credential names and setting values are never written. A line that cannot be written does not stop or undo the
+action, and a line is not written while another `scf` command holds the lock; the server log then says
+`audit: <file> <kind> (<action>)`. Runs that a watcher starts, `scf run`, `scf approve`, `scf reject`, evals, deleting or
+unpublishing a flow, blocks, clean-up and running a watcher now are not logged. A `target` can be up to 255 characters.
+
 **Sign-in and sessions.** The UI and its API need a signed-in account; only the sign-in, sign-out,
 first-admin and set-password calls and the static files are open. A session is kept on the server in
 `sessions.json` (mode `0600`): it holds only a SHA-256 of the session token, never the token. It

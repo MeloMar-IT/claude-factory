@@ -121,7 +121,7 @@ describe("settings in the store", () => {
   it("stores settings; listAllRepos has them, listRepos and the returns of addRepo and setRepoAuth do not", () => {
     const a = add(ANN, "acme/app");
     expect("settings" in a).toBe(false);
-    expect(setRepoSettings(a.id, S).settings).toEqual(S);
+    expect(setRepoSettings(a.id, S).repo.settings).toEqual(S);
     expect(listAllRepos()[0]!.settings).toEqual(S);
     expect(listRepos(ANN).every((r) => !("settings" in r))).toBe(true);
     const changed = setRepoAuth(ANN, a.id, { method: "github-token", token: TOKEN }, OK);
@@ -154,7 +154,7 @@ describe("settings in the store", () => {
     const a = add(ANN, "acme/app");
     setRepoSettings(a.id, S);
     expect(statSync(reposPath()).mode & 0o777).toBe(0o600);
-    expect("settings" in setRepoSettings(a.id, {})).toBe(false);
+    expect("settings" in setRepoSettings(a.id, {}).repo).toBe(false);
     expect("settings" in file().repos[0]!).toBe(false);
     expect(code(() => setRepoSettings("33333333-3333-4333-8333-333333333333", S))).toBe("not-found");
     expect(code(() => setRepoSettings(a.id, { nope: 1 }))).toBe("bad-settings");
@@ -189,6 +189,19 @@ describe("settings in the store", () => {
       expect((e as StoreError).kind).toBe("wrong-format");
     }
     expect(a.id).toBeTruthy();
+  });
+});
+
+describe("what a change reports (for the audit log)", () => {
+  it("setRepoSettings names the fields that differ; setRepoAuth says whether it changed; transferRepo says whether it moved", () => {
+    const a = add(ANN, "acme/app");
+    expect(setRepoSettings(a.id, { testCommand: "npm test", mainBranch: "main" }).changed).toEqual(["mainBranch", "testCommand"]);
+    expect(setRepoSettings(a.id, { testCommand: "npm test", mainBranch: "main" }).changed).toEqual([]);
+    expect(setRepoSettings(a.id, {}).changed).toEqual(["mainBranch", "testCommand"]);
+    expect(setRepoAuth(ANN, a.id, { method: "none" }, { ownerOk: () => true }).changed).toBe(false);
+    expect(setRepoAuth(ANN, a.id, { url: "git@github.com:acme/app.git" }, { ownerOk: () => true }).changed).toBe(true);
+    expect(transferRepo(a.id, "bob@example.com", { findOwner }).moved).toBe(true);
+    expect(transferRepo(a.id, "bob@example.com", { findOwner }).moved).toBe(false);
   });
 });
 

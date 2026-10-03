@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, wri
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { AuditEntrySchema, appendAuditLocked, auditPath, prepareAuditLocked, writeAudit, type AuditEvent } from "../src/auth/audit.js";
+import { AuditEntrySchema, EVENT_ACTIONS, TARGET_MAX, auditAction, changedKeys, appendAuditLocked, auditPath, prepareAuditLocked, writeAudit, type AuditEvent } from "../src/auth/audit.js";
 import { findSession } from "../src/auth/sessions.js";
 import { createUser, setStatus, startSession } from "../src/auth/users.js";
 import { openAppendLocked, StoreError, withAuthLock } from "../src/auth/store.js";
@@ -253,7 +253,7 @@ describe("event lines", () => {
       { detail: "d" },
       { userId: id(), detail: "d" },
       { target: "" },
-      { target: "x".repeat(201) },
+      { target: "x".repeat(TARGET_MAX + 1) },
       { target: "a\nb" },
       { target: " a" },
       { target: "a", detail: "x".repeat(501) },
@@ -306,6 +306,72 @@ describe("event lines", () => {
     writeAudit("anonymous", { action: "sign-in", result: "failed" });
     expect(lines().slice(0, old.length)).toEqual(old);
     expect(lines()).toHaveLength(old.length + 1);
+  });
+});
+
+describe("auditAction", () => {
+  it("writes one line with the expected keys and mode", () => {
+    const by = id();
+    const log: string[] = [];
+    auditAction((m) => log.push(m), by, "repo-add", "r1");
+    auditAction((m) => log.push(m), by, "repo-change", "r1", "settings: a");
+    const [a, b] = lines().map((l) => JSON.parse(l));
+    expect(Object.keys(a).sort()).toEqual(["action", "by", "result", "target", "time"]);
+    expect(Object.keys(b).sort()).toEqual(["action", "by", "detail", "result", "target", "time"]);
+    expect(a.result).toBe("ok");
+    expect(mode(auditPath())).toBe(0o600);
+    expect(log).toEqual([]);
+  });
+
+  it("accepts every event action and not an unknown one", () => {
+    const base = { time: new Date().toISOString(), by: id(), result: "ok" };
+    for (const action of EVENT_ACTIONS) expect(AuditEntrySchema.safeParse({ ...base, action }).success).toBe(true);
+    expect(AuditEntrySchema.safeParse({ ...base, action: "run-stop" }).success).toBe(false);
+  });
+
+  it("limits the target to TARGET_MAX", () => {
+    const by = id();
+    auditAction(undefined, by, "flow-publish", "x".repeat(TARGET_MAX), "1");
+    expect(lines()).toHaveLength(1);
+    const log: string[] = [];
+    auditAction((m) => log.push(m), by, "flow-publish", "x".repeat(TARGET_MAX + 1));
+    expect(lines()).toHaveLength(1);
+    expect(log).toEqual(["audit: audit.jsonl not-valid (flow-publish)"]);
+  });
+
+  it("never throws and names what failed", () => {
+    const log: string[] = [];
+    const l = (m: string) => log.push(m);
+    mkdirSync(auditPath());
+    expect(() => auditAction(l, id(), "repo-add", "r")).not.toThrow();
+    rmSync(auditPath(), { recursive: true });
+    auditAction(l, id(), "repo-add", "a\nb");
+    auditAction(l, "not-a-uuid", "repo-add", "r");
+    expect(existsSync(auditPath())).toBe(false);
+    const lock = join(home, "auth.lock");
+    mkdirSync(lock);
+    writeFileSync(join(lock, "pid"), String(process.pid));
+    const started = Date.now();
+    auditAction(l, id(), "run-start", "r");
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(log).toEqual([
+      "audit: audit.jsonl cannot-write (repo-add)",
+      "audit: audit.jsonl not-valid (repo-add)",
+      "audit: audit.jsonl not-valid (repo-add)",
+      "audit: auth.lock locked (run-start)",
+    ]);
+    expect(() => auditAction(undefined, "x", "repo-add", "r")).not.toThrow();
+  });
+});
+
+describe("changedKeys", () => {
+  it("names the top-level keys that differ, sorted", () => {
+    expect(changedKeys({ a: 1 }, { a: 1 })).toEqual([]);
+    expect(changedKeys({ a: { x: 1 } }, { a: { x: 2 } })).toEqual(["a"]);
+    expect(changedKeys({ a: 1 }, { a: 1, b: 2 })).toEqual(["b"]);
+    expect(changedKeys({ a: 1, b: 2 }, {})).toEqual(["a", "b"]);
+    expect(changedKeys({ a: { x: 1, y: 2 } }, { a: { y: 2, x: 1 } })).toEqual([]);
+    expect(changedKeys({ z: 1, m: 1 }, { z: 2, m: 2, a: 3 })).toEqual(["a", "m", "z"]);
   });
 });
 

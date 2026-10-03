@@ -1,11 +1,13 @@
-import { join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
+import { basename, join } from "node:path";
 import { z } from "zod";
 import { dataHome, openAppendLocked, StoreError, withAuthLock } from "./store.js";
 
 /**
  * The audit log: one JSON line per account change or event (a sign-in), in `audit.jsonl` (not `.json`, so the
  * data-folder move leaves it alone). The file is only appended; a reader skips lines that do not parse. A line never
- * holds a password, hash, token, key, name or e-mail.
+ * holds a password, hash, token, key, name or e-mail. Lines also record actions made in the web interface; they never
+ * hold a note, task text or setting value.
  */
 export const auditPath = () => join(dataHome(), "audit.jsonl");
 
@@ -13,8 +15,28 @@ const Role = z.enum(["admin", "user"]);
 const Base = { time: z.iso.datetime(), by: z.union([z.literal("cli"), z.uuid()]), userId: z.uuid() };
 
 /** Actions of an event line. Later parts add names here. */
-export const EVENT_ACTIONS = ["sign-in"] as const;
-export const TARGET_MAX = 200;
+export const EVENT_ACTIONS = [
+  "sign-in",
+  "run-start",
+  "run-cancel",
+  "run-approve",
+  "run-reject",
+  "run-resume",
+  "repo-add",
+  "repo-change",
+  "repo-remove",
+  "repo-transfer",
+  "credential-add",
+  "credential-remove",
+  "flow-publish",
+  "settings-change",
+  "turn-answer",
+  "turn-approve",
+  "turn-reject",
+  "turn-retry",
+] as const;
+export type EventAction = (typeof EVENT_ACTIONS)[number];
+export const TARGET_MAX = 255;
 export const DETAIL_MAX = 500;
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
 const short = (max: number) => z.string().refine((s) => s.length >= 1 && s.length <= max && s === s.trim() && !CONTROL.test(s));
@@ -120,4 +142,25 @@ export function appendAuditLocked(by: string, event: AuditEvent): void {
  */
 export function writeAudit(by: string, event: AuditEvent, waitMs?: number): void {
   withAuthLock(() => appendAuditLocked(by, event), waitMs);
+}
+
+/**
+ * Adds one `ok` line for an action made in the web interface. Best effort: never throws, never waits for the lock.
+ * A line that cannot be written is named in `log` (fixed words only).
+ */
+export function auditAction(log: ((msg: string) => void) | undefined, by: string, action: EventAction, target: string, detail?: string): void {
+  try {
+    writeAudit(by, { action, result: "ok", target, ...(detail !== undefined ? { detail } : {}) }, 0);
+  } catch (e) {
+    try {
+      log?.(e instanceof StoreError ? `audit: ${basename(e.file)} ${e.kind} (${action})` : `audit: audit.jsonl not-valid (${action})`);
+    } catch {
+      /* the log itself must not fail the action */
+    }
+  }
+}
+
+/** The names of the top-level keys whose values differ, sorted. Names only, never a value. */
+export function changedKeys(before: Readonly<Record<string, unknown>>, after: Readonly<Record<string, unknown>>): string[] {
+  return [...new Set([...Object.keys(before), ...Object.keys(after)])].filter((k) => !isDeepStrictEqual(before[k], after[k])).sort();
 }

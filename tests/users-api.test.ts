@@ -99,7 +99,7 @@ describe("users API", () => {
     if (keep) seen.push(text);
     return { status: r.status, text, json: () => JSON.parse(text) };
   };
-  const auditLines = () => (existsSync(auditPath()) ? readFileSync(auditPath(), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as Record<string, unknown>).filter((l) => l.action !== "sign-in") : []);
+  const auditLines = () => (existsSync(auditPath()) ? readFileSync(auditPath(), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as Record<string, unknown>).filter((l) => !("result" in l)) : []);
 
   async function world(extra: Partial<ServerOptions> = {}) {
     const s = await boot(extra);
