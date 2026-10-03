@@ -81,6 +81,7 @@ export const RULES: Rule[] = [
   r("GET", "repos", "yes", "your repositories"),
   r("POST", "repos", "yes", "add a repository (a URL, and a token or a deploy key for it)"),
   r("PUT", "repos/:id/auth", "yes", "change the method, user name, token or address of your repository, or make a new deploy key"),
+  r("POST", "repos/:id/test", "yes", "test the connection of your repository (an admin: any repository); the result is saved as its connection status"),
   r("DELETE", "repos/:id", "yes", "remove your repository and its stored token or key"),
   r("DELETE", "repos/:owner/:name", "yes", "remove a GitHub repository by name (old form)"),
   r("GET", "admin/repos", "no", "the repositories of all accounts, with their settings"),

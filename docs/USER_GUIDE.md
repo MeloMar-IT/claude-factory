@@ -1438,9 +1438,28 @@ show as "n runs ahead of you", without ids.
 
 ![My repositories](images/repos.png)
 
+**Test connection.** The button on My repositories calls `POST /api/repos/<id>/test` (the owner, or an admin for any
+repository). It runs up to three checks and shows each with a short message: **Read** (a shallow clone), **Write**
+(`git push --dry-run` to a scratch branch name; nothing is pushed and no branch is created) and, for GitHub
+repositories, **GitHub API** (the repository, its issues and its pull requests can be read). The last result is saved
+as the connection status and returned by `GET /api/repos` as `connection`. It is cleared when the token, key, method
+or address changes, when the repository is transferred, and when its stored token or key is deleted. A test stops
+after 60 seconds. A second test of the same repository while one runs, and a repository changed during its test,
+answer 409. The messages tell wrong or expired tokens, a repository not found, read-only access (for a deploy key:
+"added without write access"), an unreachable host, host key problems, timeouts and a token without the Issues or
+Pull requests permission, and say what to do. A deploy key gives git access only, so for a GitHub repository with a
+deploy key the API check is skipped; issue and pull request work needs a token or the GitHub App. The API check only
+reads: the Foundry still needs "Read and write" for Issues and Pull requests, and the test does not prove that. A dry
+run does not check branch rules, so a protected branch can still refuse a real push. In an empty repository the push
+check uses a local commit that is never sent. Only an admin can test a repository with the method "none", whoever
+owns it; for a user the test answers 409. For that method the test uses the server account's git configuration, credential helpers, SSH configuration, keys and `gh`
+sign-in; `GIT_*` variables of the server are not used. SSH host keys: the first key seen is trusted and kept in
+`known_hosts` in the data folder; remove the host's line there after a real key change (for "none", the file is
+`~/.ssh/known_hosts` of the server's account). The server's SSH configuration is not used for a deploy key.
+
 **The My repositories page.** `#/repos` is in the top bar for every account. It lists your repositories
 with the URL, how the Foundry signs in (the authentication method) and the connection status, which is
-"Not tested yet" until the connection test exists. **Add repository** asks for the URL and the method:
+"Not tested yet" until you press **Test connection** (see below). **Add repository** asks for the URL and the method:
 a GitHub fine-grained personal access token (give it these repository permissions, each "Read and write":
 Contents, Issues and Pull requests), an HTTPS user name + token for other git hosts, or an SSH deploy key.
 The token is typed in a password field and is never shown again. **Change authentication** keeps the stored
@@ -1462,8 +1481,7 @@ has no per-repository settings. An admin sets them on the **Repositories** page.
 
 **The Repositories page (admin).** `#/all-repos` is the admin page **Repositories**; a user never gets it.
 It lists the repositories of all accounts with the owner (name and e-mail, and "blocked" for a blocked
-owner), the URL, the authentication method and the connection status ("Not tested yet" until the connection
-test exists). Three calls, all admin only: `GET /api/admin/repos`, `PUT /api/admin/repos/<id>/settings` and
+owner), the URL, the authentication method and the connection status ("Not tested yet" until the owner tests it). Three calls, all admin only: `GET /api/admin/repos`, `PUT /api/admin/repos/<id>/settings` and
 `POST /api/admin/repos/<id>/transfer {"email": …}`.
 
 - **Settings** per repository: the test command (one line, up to 500 characters), the docs to update (up to
@@ -1626,6 +1644,7 @@ Change a role with `scf user role <e-mail> admin|user`, or create an admin with
 | `GET /api/repos` | yes | yes | your repositories |
 | `POST /api/repos` | yes | yes | add a repository (a URL, and a token or a deploy key for it) |
 | `PUT /api/repos/:id/auth` | yes | yes | change the method, user name, token or address of your repository, or make a new deploy key |
+| `POST /api/repos/:id/test` | yes | yes | test the connection of your repository (an admin: any repository); the result is saved as its connection status |
 | `DELETE /api/repos/:id` | yes | yes | remove your repository and its stored token or key |
 | `DELETE /api/repos/:owner/:name` | yes | yes | remove a GitHub repository by name (old form) |
 | `GET /api/admin/repos` | yes | no | the repositories of all accounts, with their settings |
@@ -1638,7 +1657,7 @@ Change a role with `scf user role <e-mail> admin|user`, or create an admin with
 | `POST /api/refinement/:id/drop` | yes | yes | drop your refinement session (an admin: any session); it is removed after 30 days |
 | `POST /api/refinement/:id/restore` | yes | yes | restore your dropped refinement session |
 
-**What comes later.** Runs that use a user's stored credentials or a repository's token, a connection test for repositories, runs that use a deploy key, the GitHub App, and pages for users (starting runs).
+**What comes later.** Runs that use a user's stored credentials or a repository's token, runs that use a deploy key, the GitHub App, and pages for users (starting runs).
 
 ### Access from other computers
 

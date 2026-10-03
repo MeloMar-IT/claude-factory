@@ -21,6 +21,16 @@ let repos: any[];
 let gets: number;
 let sent: { method: string; url: string; body: any }[];
 let answers: Answer[];
+let testResult: any;
+/** A saved connection status; a failed one has a read check that failed and a skipped write check. */
+const connection = (ok: boolean, over: object = {}) => ({
+  at: new Date().toISOString(),
+  ok,
+  checks: ok
+    ? [{ check: "clone", ok: true, code: "ok", message: "The repository can be read." }, { check: "push", ok: true, code: "ok", message: "Write access works. Nothing was pushed." }]
+    : [{ check: "clone", ok: false, code: "bad-token", message: "The host did not accept the token." }, { check: "push", ok: false, skipped: true, code: "skipped", message: "Not checked." }],
+  ...over,
+});
 let hold: { release: (a?: Answer) => void } | undefined;
 let holdNext: boolean;
 let heldGets: (() => void)[][]; // each entry holds one upcoming GET; the test fills it, then calls its functions to release
@@ -36,6 +46,7 @@ beforeEach(() => {
   gets = 0;
   sent = [];
   answers = [];
+  testResult = connection(true);
   hold = undefined;
   holdNext = false;
   heldGets = [];
@@ -66,6 +77,7 @@ beforeEach(() => {
       if (init.method === "DELETE" && answer.status === 500) repos = repos.filter((r) => `/api/repos/${r.id}` !== url);
       return reply({ error: answer.error }, answer.status);
     }
+    if (init.method === "POST" && url.endsWith("/test")) return reply(testResult);
     if (init.method === "POST") {
       const rec = {
         id: `id${nextId++}`,
@@ -145,6 +157,21 @@ describe("pure functions", () => {
     expect(ui.methodLabel({ method: "none" }, true)).toBe("The server's own access");
     expect(ui.methodLabel({ method: "ssh-key" }, false)).toBe("ssh-key");
     expect(ui.connectionStatus({})).toBe("Not tested yet");
+    expect(ui.connectionStatus({ connection: connection(true) })).toBe("Connected");
+    expect(ui.connectionStatus({ connection: connection(false) })).toBe("Failed");
+  });
+
+  it("connectionLines: a failed test shows every check, a good one only the skipped ones", () => {
+    expect(ui.connectionLines({})).toEqual([]);
+    expect(ui.connectionLines({ connection: connection(false) })).toEqual([
+      { ok: false, text: "Read: The host did not accept the token." },
+      { ok: false, text: "Write: Not checked." },
+    ]);
+    expect(ui.connectionLines({ connection: connection(true) })).toEqual([]);
+    const api = { check: "github-api", ok: true, skipped: true, code: "deploy-key", message: "Issues and pull requests are not checked." };
+    const good = connection(true);
+    good.checks.push(api as any);
+    expect(ui.connectionLines({ connection: good })).toEqual([{ ok: true, text: "GitHub API: Issues and pull requests are not checked." }]);
   });
 
   it("repoProblem", () => {
@@ -186,9 +213,76 @@ describe("the page", () => {
     expect(text).toContain("ann");
     expect(text.split("Not tested yet")).toHaveLength(3);
     const rowButtons = walk(main()).filter((e) => e.tag === "button").map((b) => b.textContent);
-    expect(rowButtons.filter((t) => t !== "+ Add repository")).toEqual(["Change authentication", "Remove", "Change authentication", "Remove"]);
+    expect(rowButtons.filter((t) => t !== "+ Add repository")).toEqual(["Test connection", "Change authentication", "Remove", "Test connection", "Change authentication", "Remove"]);
     for (const tag of ["input", "select", "textarea"]) expect(main().all(tag)).toEqual([]);
     expect(errLine(main())).toEqual([]);
+  });
+
+  it("shows the connection status: the pill, the time and the messages", async () => {
+    repos = [rec({ connection: connection(true) }), rec({ connection: connection(false) }), rec()];
+    await show();
+    const cells = walk(main()).filter((e) => e.tag === "td" && e.textContent.includes("Connected") || e.textContent.includes("Failed") || e.textContent === "Not tested yet");
+    expect(cells.length).toBeGreaterThan(0);
+    const pills = byClass(main(), "pill");
+    expect(pills.map((p) => p.textContent)).toEqual(["Connected", "Failed", "Not tested yet"]);
+    expect(pills.map((p) => p.attrs.class)).toEqual(["pill ok", "pill fail", "pill"]);
+    expect(byClass(main(), "muted").filter((e) => e.textContent.startsWith("tested ")).map((e) => e.textContent)).toEqual(["tested just now", "tested just now"]);
+    expect(byClass(main(), "muted").find((e) => e.textContent.startsWith("tested "))!.attrs.title).toBeTruthy();
+    expect(byClass(main(), "status").map((e) => [e.attrs.class, e.textContent])).toEqual([
+      ["status bad", "Read: The host did not accept the token."],
+      ["status bad", "Write: Not checked."],
+    ]);
+  });
+
+  describe("test connection", () => {
+    it("sends the call, disables the button while it runs, then reloads and toasts", async () => {
+      const r = rec();
+      repos = [r];
+      await show();
+      holdNext = true;
+      const btn = button(main(), "Test connection")!;
+      press(btn);
+      await flush();
+      expect(sent).toEqual([{ method: "POST", url: `/api/repos/${r.id}/test`, body: {} }]);
+      expect(btn.disabled).toBe(true);
+      expect(btn.textContent).toBe("Testing…");
+      repos = [{ ...r, connection: connection(true) }];
+      hold!.release();
+      await flush();
+      expect(toastText()).toBe("Connection works");
+      expect(gets).toBe(2);
+      expect(byClass(main(), "pill")[0]!.textContent).toBe("Connected");
+    });
+
+    it("toasts a failed test as an error", async () => {
+      repos = [rec()];
+      await show();
+      testResult = connection(false);
+      press(button(main(), "Test connection"));
+      await flush();
+      expect(toastText()).toBe("Connection failed");
+      expect(gets).toBe(2);
+    });
+
+    it("toasts a 409 and a network failure", async () => {
+      repos = [rec()];
+      await show();
+      answers.push({ status: 409, error: "a test of this repository is running already; wait for it to finish" });
+      press(button(main(), "Test connection"));
+      await flush();
+      expect(toastText()).toBe("a test of this repository is running already; wait for it to finish");
+      expect(gets).toBe(2);
+      answers.push("throw");
+      press(button(main(), "Test connection"));
+      await flush();
+      expect(toastText()).toBe("Could not reach the server.");
+      expect(button(main(), "Test connection")!.disabled).toBeFalsy();
+    });
+
+    it("api.testRepo posts to the escaped address", async () => {
+      await api.testRepo("a b");
+      expect(sent).toEqual([{ method: "POST", url: "/api/repos/a%20b/test", body: {} }]);
+    });
   });
 
   it("shows an empty list", async () => {

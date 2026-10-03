@@ -178,6 +178,7 @@ const EXAMPLES: Record<string, Example> = {
   "GET repos": { path: "repos", user: 200, admin: 200 },
   "POST repos": { path: "repos", body: {}, user: 400, admin: 400 },
   "PUT repos/:id/auth": { path: `repos/${UNKNOWN}/auth`, body: {}, user: 400, admin: 400 },
+  "POST repos/:id/test": { path: `repos/${UNKNOWN}/test`, body: {}, user: 404, admin: 404 },
   "DELETE repos/:id": { path: `repos/${UNKNOWN}`, user: 404, admin: 404 },
   "GET refinement": { path: "refinement", user: 200, admin: 200 },
   "POST refinement": { path: "refinement", body: {}, user: 400, admin: 400 },
@@ -207,6 +208,7 @@ describe("the table", () => {
     expect(findRule("DELETE", ["repos", "a", "b"])?.path).toBe("repos/:owner/:name");
     expect(findRule("DELETE", ["repos", "a"])?.path).toBe("repos/:id");
     expect(findRule("PUT", ["repos", "a", "auth"])?.path).toBe("repos/:id/auth");
+    expect(findRule("POST", ["repos", "a", "test"])?.path).toBe("repos/:id/test");
     expect(findRule("GET", ["admin", "repos"])?.path).toBe("admin/repos");
     expect(findRule("PUT", ["admin", "repos", "a", "settings"])?.path).toBe("admin/repos/:id/settings");
     expect(findRule("GET", ["admin"])).toBeUndefined();

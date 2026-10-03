@@ -2,7 +2,8 @@ import { basename } from "node:path";
 import { auditAction } from "../auth/audit.js";
 import { StoreError } from "../auth/store.js";
 import { KeyError } from "../credentials/keychain.js";
-import { CredentialError, addCredential, listCredentials, removeCredential } from "../credentials/store.js";
+import { removeUserCredential } from "../auth/repos.js";
+import { CredentialError, addCredential, listCredentials } from "../credentials/store.js";
 import { sessionUser } from "./api-auth.js";
 import { HttpError, readJson, send } from "./http.js";
 import type { Route } from "./server.js";
@@ -46,7 +47,7 @@ export const credentialRoutes: Route = async (ctx, req, res, seg, method) => {
 
   if (method !== "DELETE") throw new HttpError(405, "method not allowed");
   const before = guarded(log, () => listCredentials(user.id).find((c) => c.id === seg[1]));
-  const r = guarded(log, () => removeCredential(user.id, seg[1]!));
+  const r = guarded(log, () => removeUserCredential(user.id, seg[1]!));
   if (r.removed && before) auditAction(log, user.id, "credential-remove", before.id, before.type);
   if (r.oldKeysLeft) {
     log?.(`credentials: ${r.oldKeysLeft} old key(s) still in the Keychain; run scf credential rotate-key`);

@@ -1,9 +1,10 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { startServer } from "../src/server/server.js";
 import { PUBLIC_KEY_RE } from "../src/credentials/ssh-keygen.js";
+import { fakeGithub } from "./helpers/fake-github.js";
 import { fakeKeychain, type FakeKeychain } from "./helpers/keychain.js";
 import { signInAs, type TestSession } from "./helpers/session.js";
 import { fakeKeygen, type FakeKeygen } from "./helpers/ssh-keygen.js";
@@ -178,6 +179,177 @@ describe("repositories API", () => {
       expect(all).not.toContain(t);
       expect(all).not.toContain(Buffer.from(t).toString("base64"));
     }
+  });
+});
+
+describe("connection test API", () => {
+  const realEnv = process.env; // fakeGithub().restore() swaps in a copy; os.tmpdir() reads the real one
+  const UNKNOWN = "00000000-0000-4000-8000-000000000000";
+  let fg: ReturnType<typeof fakeGithub>;
+  let snapshot: NodeJS.ProcessEnv;
+  let scratch: string;
+  let n = 0;
+  type Rec = { id: string; credentialId: string; connection?: { ok: boolean; checks: { check: string; ok: boolean; code: string; message: string; skipped?: boolean }[] } };
+
+  beforeAll(() => {
+    snapshot = { ...realEnv };
+    scratch = mkdtempSync(join(tmpdir(), "connect-api-"));
+    fg = fakeGithub();
+    Object.assign(process.env, { TMPDIR: scratch, SCF_CONNECT_REMOTE: fg.remote });
+  });
+  afterAll(async () => {
+    // the later tests expect an account without these repositories and tokens
+    const mine = [...(await list(ann)), ...(await list(bob)), ...(await list(admin))].filter((x) => /\/(conn|admin-none)/.test(x.url) || x.url.includes("conn-"));
+    for (const x of mine) for (const who of [ann, bob, admin]) await call(who, "DELETE", `/api/repos/${x.id}`);
+    fg.restore();
+    process.env = realEnv;
+    for (const k of Object.keys(realEnv)) if (!(k in snapshot)) delete realEnv[k];
+    Object.assign(realEnv, snapshot);
+    rmSync(scratch, { recursive: true, force: true });
+  });
+  afterEach(() => {
+    for (const k of ["FAKE_GH_SLEEP", "FAKE_GH_FAIL", "FAKE_GH_FAIL_TEXT"]) delete process.env[k];
+    process.env.SCF_CONNECT_REMOTE = fg.remote;
+  });
+
+  const add = async (who: TestSession, body: object = {}) => {
+    const r = await call(who, "POST", "/api/repos", { url: `https://github.com/acme/conn${++n}`, method: "github-token", token: TOKEN, ...body });
+    expect(r.status).toBe(201);
+    return r.json() as Rec;
+  };
+  const test = (who: TestSession, id: string) => call(who, "POST", `/api/repos/${id}/test`, {});
+  const find = async (who: TestSession, id: string) => (await list(who)).find((x) => x.id === id) as Rec;
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  /** Starts a test that takes a second, runs `change` while it runs, and answers what the test answered. */
+  const during = async (who: TestSession, r: Rec, change: () => Promise<unknown>) => {
+    process.env.FAKE_GH_SLEEP = "1";
+    const p = test(who, r.id);
+    await sleep(400);
+    await change();
+    return p;
+  };
+
+  it("lets the owner test, and saves the result as the connection status", async () => {
+    const r = await add(ann);
+    const t = await test(ann, r.id);
+    expect(t.status).toBe(200);
+    expect(t.json().ok).toBe(true);
+    expect(t.json().checks.map((c: { check: string }) => c.check)).toEqual(["clone", "push", "github-api"]);
+    const mine = await find(ann, r.id);
+    expect(mine.connection).toEqual({ at: t.json().at, ok: true, checks: t.json().checks });
+    const row = ((await call(admin, "GET", "/api/admin/repos")).json() as Rec[]).find((x) => x.id === r.id)!;
+    expect(row.connection).toEqual(mine.connection);
+  });
+
+  it("answers 404 for another user and an unknown id, and lets an admin test any repository", async () => {
+    const r = await add(ann);
+    expect((await test(bob, r.id)).status).toBe(404);
+    expect((await test(ann, UNKNOWN)).status).toBe(404);
+    expect((await test(admin, r.id)).status).toBe(200);
+  });
+
+  it("answers 409 for a user's repository without a sign-in, and runs for an admin's", async () => {
+    const own = (await call(ann, "POST", "/api/repos", { name: `acme/conn-none${++n}` })).json() as Rec;
+    const t = await test(ann, own.id);
+    expect(t.status).toBe(409);
+    expect(t.error()).toContain("Change authentication");
+    // the caller's role decides: an admin may test a user's repository that uses the server's own access
+    expect((await test(admin, own.id)).status).toBe(200);
+    const mine = (await call(admin, "POST", "/api/repos", { url: `acme/admin-none${++n}`, method: "none" })).json() as Rec;
+    expect((await test(admin, mine.id)).status).toBe(200);
+  });
+
+  it("clears the status when its token is deleted, and then answers 409", async () => {
+    const r = await add(ann);
+    expect((await test(ann, r.id)).status).toBe(200);
+    expect((await call(ann, "DELETE", `/api/credentials/${r.credentialId}`)).status).toBe(200);
+    expect((await find(ann, r.id)).connection).toBeUndefined();
+    expect((await test(ann, r.id)).status).toBe(409);
+  });
+
+  it("saves a failed check and logs it with fixed words", async () => {
+    const r = await add(ann);
+    const issues = `api repos/acme/conn${n}/issues?per_page=1`;
+    process.env.FAKE_GH_FAIL = issues;
+    process.env.FAKE_GH_FAIL_TEXT = "gh: Resource not accessible by personal access token (HTTP 403)";
+    const t = await test(ann, r.id);
+    expect(t.status).toBe(200);
+    expect(t.json().ok).toBe(false);
+    const api = t.json().checks.find((c: { check: string }) => c.check === "github-api");
+    expect(api).toMatchObject({ ok: false, code: "no-issues" });
+    expect((await find(ann, r.id)).connection!.ok).toBe(false);
+    expect(logs).toContain("repos: test github-api no-issues");
+  });
+
+  it("answers 409 to a second test while one runs, and 200 to a later one", async () => {
+    const r = await add(ann);
+    process.env.FAKE_GH_SLEEP = "1";
+    const both = await Promise.all([test(ann, r.id), test(ann, r.id)]);
+    expect(both.map((x) => x.status).sort()).toEqual([200, 409]);
+    delete process.env.FAKE_GH_SLEEP;
+    expect((await test(ann, r.id)).status).toBe(200);
+  });
+
+  it("keeps the guard while the API call runs, also when the clone fails at once", async () => {
+    const r = await add(ann);
+    process.env.SCF_CONNECT_REMOTE = join(fg.tmp, "nope.git");
+    process.env.FAKE_GH_SLEEP = "1";
+    const both = await Promise.all([test(ann, r.id), test(ann, r.id)]);
+    expect(both.map((x) => x.status).sort()).toEqual([200, 409]);
+    expect(both.find((x) => x.status === 200)!.json().checks[0]).toMatchObject({ check: "clone", code: "not-found" });
+  });
+
+  it("answers 409 when the token changes during the test, and saves nothing", async () => {
+    const r = await add(ann);
+    const t = await during(ann, r, () => call(ann, "PUT", `/api/repos/${r.id}/auth`, { token: TOKEN2 }));
+    expect(t.status).toBe(409);
+    expect(t.error()).toContain("changed");
+    expect((await find(ann, r.id)).connection).toBeUndefined();
+  });
+
+  it("answers 409 when the repository is transferred during the test", async () => {
+    const r = await add(ann);
+    const t = await during(ann, r, async () => expect((await call(admin, "POST", `/api/admin/repos/${r.id}/transfer`, { email: "bob@example.com" })).status).toBe(200));
+    expect(t.status).toBe(409);
+    expect((await find(bob, r.id)).connection).toBeUndefined();
+  });
+
+  it("answers 409 when the token is deleted during the test, and saves nothing", async () => {
+    const r = await add(ann);
+    const t = await during(ann, r, async () => expect((await call(ann, "DELETE", `/api/credentials/${r.credentialId}`)).status).toBe(200));
+    expect(t.status).toBe(409);
+    expect((await find(ann, r.id)).connection).toBeUndefined();
+  });
+
+  it("answers 404 when the repository is removed during the test", async () => {
+    const r = await add(ann);
+    const t = await during(ann, r, async () => expect((await call(ann, "DELETE", `/api/repos/${r.id}`)).status).toBe(200));
+    expect(t.status).toBe(404);
+    expect(await find(ann, r.id)).toBeUndefined();
+  });
+
+  it("clears the status when the token changes after a test", async () => {
+    const r = await add(ann);
+    expect((await test(ann, r.id)).status).toBe(200);
+    expect((await find(ann, r.id)).connection).toBeDefined();
+    expect((await call(ann, "PUT", `/api/repos/${r.id}/auth`, { token: TOKEN2 })).status).toBe(200);
+    expect((await find(ann, r.id)).connection).toBeUndefined();
+  });
+
+  it("tests a deploy key: the API check is skipped", async () => {
+    const r = await add(ann, { url: `git@github.com:acme/conn-key${++n}.git`, method: "ssh-deploy-key", token: undefined });
+    const t = await test(ann, r.id);
+    expect(t.status).toBe(200);
+    expect(t.json().checks.find((c: { check: string }) => c.check === "github-api")).toMatchObject({ ok: true, skipped: true });
+  });
+
+  it("never shows a token, and leaves no temporary folder", async () => {
+    const all = [...seen, ...logs, fg.ghLog()].join("\n");
+    for (const secret of [TOKEN, TOKEN2, Buffer.from(TOKEN).toString("base64"), Buffer.from(`x-access-token:${TOKEN}`).toString("base64")]) expect(all).not.toContain(secret);
+    for (const p of kg.pairs()) {
+      for (const line of p.privateKey.split("\n").filter((l) => l.length > 20 && !l.includes("-----"))) expect(all).not.toContain(line);
+    }
+    expect(readdirSync(scratch)).toEqual([]);
   });
 });
 

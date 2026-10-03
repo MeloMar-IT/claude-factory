@@ -1,5 +1,5 @@
 import { api } from "./api.js";
-import { h, modal, mount, toast } from "./dom.js";
+import { h, modal, mount, timeAgo, toast } from "./dom.js";
 
 /**
  * The ways to sign in to a repository. A later method (the GitHub App) is another entry:
@@ -78,8 +78,30 @@ export async function copyText(value) {
   }
 }
 
-/** The connection status. Until the connection test exists, every repository is untested. */
-export const connectionStatus = (_repo) => "Not tested yet";
+/** The connection status in a word: "Not tested yet", "Connected" or "Failed". */
+export const connectionStatus = (repo) => (!repo?.connection ? "Not tested yet" : repo.connection.ok ? "Connected" : "Failed");
+
+const CHECK_LABELS = { clone: "Read", push: "Write", "github-api": "GitHub API" };
+
+/**
+ * The lines of the last test as { ok, text } ("Read: the message"). A failed test shows every check; a good one only
+ * the checks that were skipped (they say why something was not checked).
+ */
+export function connectionLines(repo) {
+  const c = repo?.connection;
+  if (!c) return [];
+  return c.checks
+    .filter((x) => !c.ok || x.skipped)
+    .map((x) => ({ ok: !!x.ok, text: `${CHECK_LABELS[x.check] ?? x.check}: ${x.message}` }));
+}
+
+const connectionCell = (repo) => {
+  const c = repo.connection;
+  return h("td", {},
+    h("span", { class: c ? (c.ok ? "pill ok" : "pill fail") : "pill" }, connectionStatus(repo)),
+    c ? [" ", h("span", { class: "muted", title: new Date(c.at).toLocaleString() }, `tested ${timeAgo(c.at)}`)] : null,
+    connectionLines(repo).map((l) => h("div", { class: l.ok ? "status ok" : "status bad" }, l.text)));
+};
 
 const methodOf = (methods, id) => methods.find((m) => m.id === id) ?? { id, fields: [] };
 
@@ -265,6 +287,22 @@ export async function renderRepos(main, { admin = false, notice } = {}) {
       return reload();
     });
   };
+  const test = (e, repo) => {
+    const btn = e.currentTarget;
+    btn.textContent = "Testing…";
+    return whileBusy(btn, async () => {
+      try {
+        const r = await api.testRepo(repo.id);
+        if (r.ok) toast("Connection works");
+        else toast("Connection failed", "error");
+      } catch (err) {
+        toast(plainError(err), "error");
+      } finally {
+        btn.textContent = "Test connection";
+      }
+      return reload();
+    });
+  };
   const keyBlock = (repo) => h("div", { class: "field", style: { marginTop: "6px", maxWidth: "520px" } },
     h("span", {}, "Public key"),
     h("code", { class: "mono", style: { wordBreak: "break-all", userSelect: "all" } }, repo.publicKey),
@@ -273,8 +311,9 @@ export async function renderRepos(main, { admin = false, notice } = {}) {
   const row = (repo) => h("tr", {},
     h("td", { class: "mono" }, repo.url),
     h("td", {}, methodLabel(repo, admin), repo.method === "ssh-deploy-key" && repo.publicKey ? keyBlock(repo) : null),
-    h("td", {}, h("span", { class: "pill" }, connectionStatus(repo))),
+    connectionCell(repo),
     h("td", {},
+      h("button", { class: "small", onClick: (e) => test(e, repo) }, "Test connection"), " ",
       h("button", { class: "small", onClick: async () => {
         await repoDialog({ admin, repo });
         reload();

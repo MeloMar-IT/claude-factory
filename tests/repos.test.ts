@@ -2,12 +2,12 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync }
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { REPO_LIMIT, RepoError, RepoHalfSaved, addRepo, listRepos, ownsRepo, removeGithubRepo, removeRepo, removeReposLocked, reposPath, setRepoAuth } from "../src/auth/repos.js";
+import { REPO_LIMIT, RepoError, RepoHalfSaved, addRepo, getRepo, listRepos, ownsRepo, readRepoSecret, removeGithubRepo, removeRepo, removeReposLocked, removeUserCredential, reposPath, setRepoAuth, setRepoConnection, setRepoSettings, transferRepo } from "../src/auth/repos.js";
 import { StoreError, withAuthLock } from "../src/auth/store.js";
 import { jsonFiles } from "../src/home-migrate.js";
 import { createUser, deleteUser, hashPassword } from "../src/auth/users.js";
 import { PUBLIC_KEY_RE, KeygenError } from "../src/credentials/ssh-keygen.js";
-import { addCredentialLocked, credentialsPath, listCredentials, readSecret, removeCredential } from "../src/credentials/store.js";
+import { addCredential, addCredentialLocked, credentialsPath, listCredentials, readSecret, removeCredential } from "../src/credentials/store.js";
 import { fakeKeychain, type FakeKeychain } from "./helpers/keychain.js";
 import { fakeKeygen, type FakeKeygen } from "./helpers/ssh-keygen.js";
 
@@ -775,6 +775,178 @@ describe("the SSH deploy key", () => {
     it("reads a good record", () => {
       writeFileSync(reposPath(), JSON.stringify({ version: 2, repos: [dk()] }));
       expect(listRepos(ANN)[0]).toMatchObject({ method: "ssh-deploy-key", publicKey: PUB });
+    });
+  });
+});
+
+describe("the connection status", () => {
+  const SSH_URL = "git@github.com:acme/key.git";
+  const result = (ok = true) => ({
+    at: new Date().toISOString(),
+    ok,
+    checks: [{ check: "clone" as const, ok, code: ok ? "ok" : "failed", message: "A fixed sentence." }],
+  });
+  const tested = (url = "https://github.com/acme/app") => {
+    const r = add(ANN, url, { method: "github-token", token: TOKEN });
+    expect(setRepoConnection(getRepo(r.id)!, result())).toBe("saved");
+    return r;
+  };
+  const connection = (id: string) => getRepo(id)?.connection;
+  const findOwner = () => ({ id: BOB, status: "active" as const });
+
+  it("setRepoConnection saves the result and listRepos shows it", () => {
+    const r = add(ANN, "https://github.com/acme/app", { method: "github-token", token: TOKEN });
+    const res = result(false);
+    expect(setRepoConnection(getRepo(r.id)!, res)).toBe("saved");
+    expect(listRepos(ANN)[0]!.connection).toEqual(res);
+  });
+
+  it("answers gone for a removed record and changed for a changed one, and writes nothing", () => {
+    const r = tested();
+    const rec = getRepo(r.id)!;
+    setRepoAuth(ANN, r.id, { token: TOKEN2 }, OK);
+    const before = readFileSync(reposPath(), "utf8");
+    expect(setRepoConnection(rec, result(false))).toBe("changed");
+    expect(readFileSync(reposPath(), "utf8")).toBe(before);
+    removeRepo(ANN, r.id);
+    const after = readFileSync(reposPath(), "utf8");
+    expect(setRepoConnection(rec, result())).toBe("gone");
+    expect(readFileSync(reposPath(), "utf8")).toBe(after);
+  });
+
+  it("answers changed when the credential is gone, and writes nothing", () => {
+    const r = add(ANN, "https://github.com/acme/app", { method: "github-token", token: TOKEN });
+    const rec = getRepo(r.id)!;
+    removeCredential(ANN, r.credentialId!);
+    const before = readFileSync(reposPath(), "utf8");
+    expect(setRepoConnection(rec, result())).toBe("changed");
+    expect(readFileSync(reposPath(), "utf8")).toBe(before);
+  });
+
+  it("throws on a wrong value and writes nothing", () => {
+    const r = add(ANN, "https://github.com/acme/app", { method: "github-token", token: TOKEN });
+    const before = readFileSync(reposPath(), "utf8");
+    const rec = getRepo(r.id)!;
+    expect(() => setRepoConnection(rec, { ...result(), checks: [] })).toThrow();
+    expect(() => setRepoConnection(rec, { ...result(), at: "yesterday" })).toThrow();
+    expect(() => setRepoConnection(rec, { ...result(), extra: 1 } as never)).toThrow();
+    expect(readFileSync(reposPath(), "utf8")).toBe(before);
+  });
+
+  it("setRepoAuth clears it for a new token, key, method or address form, and keeps it for no change", () => {
+    const r = tested();
+    setRepoAuth(ANN, r.id, { method: "github-token" }, OK);
+    expect(connection(r.id)).toBeDefined();
+    setRepoAuth(ANN, r.id, { url: "https://github.com/acme/app" }, OK);
+    expect(connection(r.id)).toBeDefined();
+    setRepoAuth(ANN, r.id, { token: TOKEN2 }, OK);
+    expect(connection(r.id)).toBeUndefined();
+
+    setRepoConnection(getRepo(r.id)!, result());
+    setRepoAuth(ANN, r.id, { url: "https://github.com/ACME/app" }, OK);
+    expect(connection(r.id)).toBeUndefined();
+
+    setRepoConnection(getRepo(r.id)!, result());
+    setRepoAuth(ANN, r.id, { method: "https-token", username: "ann", token: TOKEN }, OK);
+    expect(connection(r.id)).toBeUndefined();
+
+    const k = add(ANN, SSH_URL, { method: "ssh-deploy-key" });
+    setRepoConnection(getRepo(k.id)!, result());
+    setRepoAuth(ANN, k.id, { method: "ssh-deploy-key" }, OK);
+    expect(connection(k.id)).toBeDefined();
+    setRepoAuth(ANN, k.id, { newKey: true }, OK);
+    expect(connection(k.id)).toBeUndefined();
+
+    setRepoConnection(getRepo(k.id)!, result());
+    setRepoAuth(ANN, k.id, { method: "none" }, OK);
+    expect(connection(k.id)).toBeUndefined();
+  });
+
+  it("transferRepo clears it and setRepoSettings keeps it", () => {
+    const r = tested();
+    setRepoSettings(r.id, { mainBranch: "trunk" });
+    expect(connection(r.id)).toBeDefined();
+    transferRepo(r.id, "bob@example.com", { findOwner });
+    expect(connection(r.id)).toBeUndefined();
+    const k = add(ANN, SSH_URL, { method: "ssh-deploy-key" });
+    setRepoConnection(getRepo(k.id)!, result());
+    transferRepo(k.id, "bob@example.com", { findOwner });
+    expect(connection(k.id)).toBeUndefined();
+  });
+
+  describe("removeUserCredential", () => {
+    it("clears the status when the repository's own credential goes, and only that one", () => {
+      const r = tested();
+      const other = tested("https://github.com/acme/other");
+      expect(removeUserCredential(ANN, r.credentialId!).removed).toBe(1);
+      expect(connection(r.id)).toBeUndefined();
+      expect(connection(other.id)).toBeDefined();
+      expect(listCredentials(ANN).map((c) => c.id)).toEqual([other.credentialId]);
+    });
+
+    it("keeps every status when another credential of the user goes", () => {
+      const r = tested();
+      const c = addCredential({ userId: ANN, type: "token", name: "mine", secret: TOKEN2 }, OK);
+      expect(removeUserCredential(ANN, c.id).removed).toBe(1);
+      expect(connection(r.id)).toBeDefined();
+    });
+
+    it("does nothing for an id that is not the user's", () => {
+      const r = tested();
+      const before = readFileSync(reposPath(), "utf8");
+      expect(removeUserCredential(BOB, r.credentialId!).removed).toBe(0);
+      expect(readFileSync(reposPath(), "utf8")).toBe(before);
+      expect(listCredentials(ANN)).toHaveLength(1);
+    });
+  });
+
+  describe("readRepoSecret", () => {
+    it("returns the token or the key and sets lastUsed", () => {
+      const r = add(ANN, "https://github.com/acme/app", { method: "github-token", token: TOKEN });
+      expect(listCredentials(ANN)[0]!.lastUsed).toBeNull();
+      expect(readRepoSecret(getRepo(r.id)!)).toBe(TOKEN);
+      expect(listCredentials(ANN)[0]!.lastUsed).toBeTruthy();
+      const k = add(ANN, SSH_URL, { method: "ssh-deploy-key" });
+      expect(readRepoSecret(getRepo(k.id)!)).toBeTruthy();
+    });
+
+    it("throws no-credential when the credential is gone or of another type", () => {
+      const r = add(ANN, "https://github.com/acme/app", { method: "github-token", token: TOKEN });
+      const rec = getRepo(r.id)!;
+      expect(code(() => readRepoSecret({ ...rec, method: "ssh-deploy-key" }))).toBe("no-credential");
+      removeCredential(ANN, r.credentialId!);
+      expect(code(() => readRepoSecret(rec))).toBe("no-credential");
+    });
+
+    it("throws no-credential when the read does not find the credential", () => {
+      const r = add(ANN, "https://github.com/acme/app", { method: "github-token", token: TOKEN });
+      const rec = getRepo(r.id)!;
+      // listed for the owner, but the read is for another user: readSecret reports not-found
+      expect(code(() => readRepoSecret({ ...rec, owner: BOB }))).toBe("no-credential");
+    });
+  });
+
+  describe("the file", () => {
+    const base = { id: BOB, owner: ANN, url: "https://github.com/acme/app", method: "none", added: "2026-10-01T10:00:00.000Z" };
+    const good = { at: "2026-10-01T10:00:00.000Z", ok: true, checks: [{ check: "clone", ok: true, code: "ok", message: "Fine." }] };
+    const wrong: [string, unknown][] = [
+      ["no checks", { ...good, checks: [] }],
+      ["an unknown check", { ...good, checks: [{ ...good.checks[0], check: "ping" }] }],
+      ["no time", { ok: true, checks: good.checks }],
+      ["a text instead of an object", "ok"],
+    ];
+    it.each(wrong)("gives wrong-format for %s", (_n, connection) => {
+      writeFileSync(reposPath(), JSON.stringify({ version: 2, repos: [{ ...base, connection }] }));
+      const e = code(() => listRepos(ANN));
+      expect(e).toBeInstanceOf(StoreError);
+      expect((e as StoreError).kind).toBe("wrong-format");
+    });
+
+    it("loads a record with the field and one without", () => {
+      writeFileSync(reposPath(), JSON.stringify({ version: 2, repos: [{ ...base, connection: good }] }));
+      expect(listRepos(ANN)[0]!.connection).toEqual(good);
+      writeFileSync(reposPath(), JSON.stringify({ version: 2, repos: [base] }));
+      expect(listRepos(ANN)[0]!.connection).toBeUndefined();
     });
   });
 });

@@ -47,6 +47,7 @@ export const api = {
   repos: () => req("GET", "/api/repos"),
   addRepo: (body) => req("POST", "/api/repos", body),
   setRepoAuth: (id, body) => req("PUT", `/api/repos/${enc(id)}/auth`, body),
+  testRepo: (id) => req("POST", `/api/repos/${enc(id)}/test`, {}),
   removeRepo: (id) => req("DELETE", `/api/repos/${enc(id)}`),
   users:() => req("GET", "/api/users"),
   addUser: (body) => req("POST", "/api/users", body),
