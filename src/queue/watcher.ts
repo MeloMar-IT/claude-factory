@@ -143,6 +143,13 @@ export interface TrackedIssue { issue: number; title: string; runId?: string; do
 const APPROVE_RE = /^\s*\/(approve|reject)\b[ \t]*(.*)$/im;
 
 /** Stopped for a reason that clears by itself: daily budget, or a `wait_*` step (e.g. waiting for a PR merge). */
+/** Stepped aside for a busy code area (stopped at wait_for_area): the run that holds the area. */
+export function steppedAsideFor(s: RunSummary): string | undefined {
+  if (s.status !== "stopped" || !/stopped at step "(?:[\w-]+\/)*wait_for_area"/.test(s.reason ?? "")) return undefined;
+  const out = [...s.history].reverse().find((h) => h.id === "claim_areas")?.output ?? "";
+  return /^waiting for run (\S+) \(/m.exec(out)?.[1];
+}
+
 function isPaused(s: RunSummary): boolean {
   return /daily budget|usage limit reached|signed out —|stopped at step "(?:[\w-]+\/)*wait_/.test(s.reason ?? "");
 }
@@ -311,6 +318,21 @@ export class Watcher {
   }
 
   /** Latest run per issue/PR number for this repo (newest first in the list). */
+  /**
+   * A run that stepped aside for a code area is resumed only when the run that holds the area no
+   * longer works. Resuming sooner only stops again — and when every stop makes the watchers check
+   * again, that is an endless loop of checks that uses up GitHub's request limit.
+   */
+  private areaMayBeFree(run: RunSummary): boolean {
+    const holder = steppedAsideFor(run);
+    if (!holder) return true;
+    try {
+      return loadRun(this.d.runsDir, holder)?.status !== "running";
+    } catch {
+      return true; // the holder's run is gone: its area is free
+    }
+  }
+
   private latestRuns(key: "issue" | "pr", anyFlow = false): Map<string, RunSummary> {
     const m = new Map<string, RunSummary>();
     for (const s of this.d.scheduler.list(1000)) {
@@ -598,7 +620,7 @@ export class Watcher {
         const resumable = run.status === "cancelled" || /interrupted/.test(run.reason ?? "") ||
           (run.status === "stopped" && /daily budget/.test(run.reason ?? "") && budgetLeft) ||
           (run.status === "stopped" && /usage limit reached|signed out —/.test(run.reason ?? "") && retryLimitAfter(run)) ||
-          (run.status === "stopped" && isPaused(run) && !/daily budget|usage limit reached|signed out —/.test(run.reason ?? "") && !paused);
+          (run.status === "stopped" && isPaused(run) && !/daily budget|usage limit reached|signed out —/.test(run.reason ?? "") && !paused && this.areaMayBeFree(run));
         if (resumable && started < this.cfg.max_per_tick) {
           this.resume(n, run.runId, run.status !== "stopped" ? "was interrupted" : /daily budget/.test(run.reason ?? "") ? "budget available again" : /usage limit/.test(run.reason ?? "") ? "trying again after the usage limit" : "can continue now");
           this.labelWhenDone(n, run.runId);
@@ -608,8 +630,8 @@ export class Watcher {
           this.act(`#${n} label → ${labelFor(run, this.L)}`);
         } else if (!resumable) {
           // Paused on a limit, a code area or an interruption: say why nothing happens.
-          const next = runNextStep(run, { watched: true, failedLabel: this.L.failed, title: issue.title, pr: paused });
-          if (["usage_limit", "daily_budget", "interrupted", "release"].includes(next.kind)) holds.push(toHold(next));
+          const next = runNextStep(run, { watched: true, failedLabel: this.L.failed, title: issue.title, pr: paused, areaWait: this.d.areaWait?.(run) });
+          if (["usage_limit", "daily_budget", "interrupted", "release", "area_lock"].includes(next.kind)) holds.push(toHold(next));
         } else {
           // Resumable, but max_per_tick is used up: only the per-check limit is in the way.
           holds.push(this.held("starting", issue, { maxPerTick: this.cfg.max_per_tick, runId: run.runId }));

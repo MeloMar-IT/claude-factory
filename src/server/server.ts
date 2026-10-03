@@ -7,6 +7,7 @@ import { redactText } from "../credentials/redact.js";
 import { FACTORY_HOME } from "../flow/load.js";
 import { homeMoved } from "../home.js";
 import { Scheduler } from "../queue/scheduler.js";
+import { steppedAsideFor } from "../queue/watcher.js";
 import { WatcherManager } from "../queue/watchers.js";
 import { SESSION_RECHECK_MS, authRoutes, requireSession, sessionAlive } from "./api-auth.js";
 import { adminRoutes } from "./api-admin.js";
@@ -94,7 +95,8 @@ export async function startServer(given: ServerOptions): Promise<{ url: string; 
       // A new succeeded run is a new sample: the next estimate must see it.
       if (s.status === "succeeded") forgetHistory(ctx);
       // When a run ends, the watchers of its repository check at once instead of at the next interval.
-      if (s.vars?.github_repo) watchers.kickRepo(s.vars.github_repo);
+      // (A run that only stepped aside for a busy code area freed nothing: no check for that.)
+      if (s.vars?.github_repo && !steppedAsideFor(s)) watchers.kickRepo(s.vars.github_repo);
     },
   });
   const watchers = new WatcherManager({ scheduler, runsDir: opts.runsDir, repo: opts.repo, config: () => config, areaWait, log });

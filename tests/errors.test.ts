@@ -42,6 +42,7 @@ const rows: Row[] = [
   ["tidying closed issues: Command failed: gh issue list — net/http: TLS handshake timeout", ...CONNECTION],
   ["Command failed: gh issue list — HTTP 404: Not Found", "The watcher cannot reach the repository", "watcher", "a call to GitHub failed"],
   ["Command failed: gh issue list --repo acme/app", "The watcher cannot reach the repository", "watcher", "a call to GitHub failed"],
+  ["Command failed: gh issue list --repo acme/app — GraphQL: API rate limit already exceeded for user ID 1.", "GitHub's request limit is used up", "watcher", "the Foundry asked GitHub too much in the last hour"],
   ["Command failed: gh issue list --repo acme/app", "The run failed", "run", WHY_GENERAL],
   ["tidying closed issues: Command failed: gh issue list", "The watcher cannot reach the repository", "watcher", "a call to GitHub failed"],
   ["the check took longer than 600s and was given up", "The watcher did not finish its check", "watcher", "it took too long and was given up"],
