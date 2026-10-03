@@ -5,6 +5,19 @@ import { join, resolve } from "node:path";
 
 export const claudeBin = resolve("tests/fixtures/fake-claude.mjs");
 
+/** An issue as the fake gh stores it (the REST shape). */
+export interface FakeIssue {
+  number: number;
+  state: "open" | "closed";
+  state_reason: string | null;
+  title: string;
+  body: string;
+  labels: { name: string }[];
+  html_url: string;
+  created_at: string;
+  closed_at: string | null;
+}
+
 /**
  * A temp dir with a bare git remote (one commit on main) and a fake `gh` on PATH that
  * clones that remote and logs every call. Call restore() when done.
@@ -36,6 +49,8 @@ export function fakeGithub() {
   symlinkSync(resolve("tests/fixtures/fake-gh.sh"), join(bin, "gh"));
   const ghLog = join(tmp, "gh.log");
   writeFileSync(ghLog, "");
+  const issuesFile = `${ghLog}.issues.json`;
+  const labelsFile = `${ghLog}.labels`;
   // The status comments the Foundry remembers must not leak from one test into the next.
   rmSync(join(process.env.FACTORY_HOME ?? tmp, "status-comments.json"), { force: true });
   Object.assign(process.env, {
@@ -60,6 +75,16 @@ export function fakeGithub() {
       [...readFileSync(ghLog, "utf8").matchAll(/^--- comment edit (\d+):\n([\s\S]*?<!-- claude-factory status -->)/gm)].map((m) => ({ id: m[1]!, body: m[2]! })),
     /** The ids of the comments that were deleted. */
     statusDeletes: () => [...readFileSync(ghLog, "utf8").matchAll(/^--- comment delete (\d+)$/gm)].map((m) => m[1]!),
+    /** The issues the fake gh made through the REST API (oldest first). */
+    bugIssues: (): FakeIssue[] => (existsSync(issuesFile) ? (JSON.parse(readFileSync(issuesFile, "utf8")) as FakeIssue[]) : []),
+    /** Replaces them (close, reopen, set state_reason and closed_at, remove a label, add an issue). */
+    setBugIssues: (list: FakeIssue[]) => writeFileSync(issuesFile, JSON.stringify(list)),
+    /** The title and text of every issue the fake gh was asked to make through the REST API, as sent on stdin. */
+    createdBodies: (): { title: string; body: string; labels: string[] }[] =>
+      [...readFileSync(ghLog, "utf8").matchAll(/^--- created issue \(api\):\n([\s\S]*?)\n--- end issue$/gm)].map((m) => JSON.parse(m[1]!)),
+    /** The names of the labels that exist in the fake repository. */
+    labels: (): string[] => (existsSync(labelsFile) ? readFileSync(labelsFile, "utf8").split("\n").filter(Boolean) : []),
+    setLabels: (list: string[]) => writeFileSync(labelsFile, list.map((l) => `${l}\n`).join("")),
     remoteGit: (...a: string[]) => git(remote, ...a),
     restore: () => {
       process.env = { ...env };

@@ -1,7 +1,13 @@
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { Config, WatcherConfig } from "../config.js";
+import { flowDir, parseFlow } from "../flow/load.js";
 import { readRateLimit, type RateReading } from "../github.js";
+import { collectNames } from "../monitor/clean.js";
 import type { DetectorInput, LogLine } from "../monitor/detectors.js";
 import { Monitor } from "../monitor/monitor.js";
+import { buildLabelFor, Reporter } from "../monitor/report.js";
+import type { BuiltinSteps } from "../monitor/story.js";
 import type { RunSummary } from "../engine/state.js";
 import type { Scheduler } from "./scheduler.js";
 import { StatusComments, statusFile } from "./status-comment.js";
@@ -104,10 +110,40 @@ export class WatcherManager {
       rateLimit: () => this.rate,
       beforeCheck: () => this.noteRateLimit(),
       log: this.o.log,
+      reporter: new Reporter({
+        config: () => this.o.config().monitor,
+        buildLabel: (r) => buildLabelFor(this.o.config().watchers, r),
+        names: (t) => collectNames(t, this.o.config()),
+        builtinSteps: () => this.builtinSteps(),
+        rateLimit: () => this.rate,
+        log: this.o.log,
+      }),
     });
     this.monitor = { monitor, key: key! };
     monitor.start();
     this.o.log(`[${cfg.id}] monitoring the Foundry every ${cfg.every}`);
+  }
+
+  private steps?: BuiltinSteps;
+
+  /** The step ids of every built-in flow by flow name (read once): bug stories name only these. */
+  private builtinSteps(): BuiltinSteps {
+    if (this.steps) return this.steps;
+    const dir = flowDir("builtin", this.o.repo);
+    const steps: BuiltinSteps = {};
+    try {
+      for (const file of readdirSync(dir).filter((f) => /\.ya?ml$/.test(f))) {
+        try {
+          const flow = parseFlow(readFileSync(join(dir, file), "utf8"), file);
+          steps[flow.name] = flow.steps.map((s) => s.id);
+        } catch {
+          // a file that does not parse is skipped
+        }
+      }
+    } catch {
+      // no built-in flows folder: no step is named
+    }
+    return (this.steps = steps);
   }
 
   /** After a watcher's check, with a monitor on: read GitHub's request limit, at most once a minute. Never throws. */

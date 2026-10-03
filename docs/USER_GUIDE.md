@@ -621,7 +621,8 @@ The monitor is a watcher that looks at the Foundry itself and writes down what i
 do not have to find it. It is **off until you add it**: on the Watchers page choose **Add watcher**
 and the source **The Foundry itself**. It needs only an id and an interval. It has no repository, no
 flow and no label, only one is allowed, and only an admin can add it. It starts nothing and changes
-no run, label or file of a run; it only writes its findings.
+no run, label or file of a run; it writes its findings and, if you set `report_to`, bug stories
+(see [Bug stories](#bug-stories-from-the-monitor)).
 
 Each check runs these detectors. Each one reads the runs, the queue, the watchers and the server
 log; none calls an AI or GitHub.
@@ -688,9 +689,40 @@ Notes:
 Findings are kept in `monitor-findings.json` in the data folder and survive a restart. Each has a
 detector, a fingerprint (the same problem gives the same one), a severity, one sentence, the
 evidence, when it was first and last seen and how often. A finding not seen for 24 hours becomes
-*gone* (kept 30 days; at most 500 findings are kept). A file that cannot be read is kept as
-`monitor-findings.json.broken`. If the monitor's own check fails, the Health line says so.
-Findings are not shown in the app yet.
+*gone* (kept 30 days; at most 500 findings are kept, not counting those with a bug story or an
+owed one). A file that cannot be read is kept as `monitor-findings.json.broken`. If the monitor's
+own check fails, the Health line says so. Findings are not shown in the app yet; the monitor's card
+on the Watchers page shows what waits or is wrong with its bug stories.
+
+#### Bug stories from the monitor
+
+Set `report_to` and the monitor writes a lasting problem up as one GitHub issue, so the normal flow
+can fix it. **Try it on a private repository first**, and read one real story before you point it
+at a public one.
+
+```yaml
+monitor:
+  report_to: your-name/your-foundry-repo
+  report_limits: { per_day: 3, per_check: 1 }   # per_check: at most 3
+```
+
+- **When.** Critical and major findings: after 2 checks in a row. Minor: after 3 different days. A
+  story that is owed is made later even if the problem has gone away.
+- **What.** Labels `bug` and the build label of the repository's issue watcher (with several
+  watchers: the `issue-gitflow` one). With no watcher the story only gets `bug`, and the card says
+  so. The text comes from a fixed template (no AI): what happened, since when, effect, evidence,
+  what should happen, how to see it again, where to look, acceptance criteria.
+- **Cleaning.** Other repositories, people, e-mail addresses, folders, links and keys are removed.
+  In log lines only words of a fixed list stay. If a line cannot be cleaned with certainty, the
+  story says the evidence is left out.
+- **Only once.** A hidden marker in the story tells the monitor it exists. While it is open, a
+  comment "Seen again: N times since …" is added at most every 6 hours.
+- **Came back.** If the story was closed as completed and the problem returns (at least 24 hours
+  after the close, with new proof), a new story links the old one. Closed as *not planned* means
+  muted: reopen the story to unmute it.
+- **Limits.** 3 new stories a day, 1 per check (most severe first). The rest waits and the card
+  says how many. At most 6 GitHub calls per check. If GitHub cannot be reached or its request limit
+  is used up, nothing is lost; the stories are made at a later check.
 
 *Unexplained* is strict: no rule in the Foundry's failure rules matched (an AI's summary does not
 count). An ordinary failing command (`exit code 1`) is explained. The request-limit numbers come

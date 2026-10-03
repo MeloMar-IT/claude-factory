@@ -106,6 +106,10 @@ const MonitorSchema = z
     develop_red: z.object({ failures: z.number().int().min(1).max(100).default(2), within_hours: z.number().int().min(1).max(720).default(24) }).strict().prefault({}),
     /** A step took more than `factor` times its usual time, `times` times within `within_hours`. */
     slow_step: z.object({ factor: z.number().min(1.5).max(100).default(3), times: z.number().int().min(1).max(1000).default(3), within_hours: z.number().int().min(1).max(720).default(24) }).strict().prefault({}),
+    /** The repository (owner/repo) where the monitor writes bug stories. Without it, findings are only shown. */
+    report_to: z.string().regex(/^[\w.-]+\/[\w.-]+$/, "owner/repo").optional(),
+    /** At most `per_day` new bug stories a day and `per_check` in one check (at most 3: it bounds the GitHub calls of a check). */
+    report_limits: z.object({ per_day: z.number().int().min(1).max(50).default(3), per_check: z.number().int().min(1).max(3).default(1) }).strict().prefault({}),
   })
   .strict();
 

@@ -18,6 +18,18 @@ const dep = () => nextStep("dependency", { repo: "o/r", issue: 7, title: "Seven"
 const q = () => nextStep("questions", { repo: "o/r", issue: 5, title: "Five" }, { watched: true, questions: 2 });
 const watcher = (id: string, records: NextStep[], enabled = true) => ({ id, enabled, status: { id, lastActions: [], holds: records.map((next) => ({ reason: next.text, next })) } });
 
+describe("watcherNotes", () => {
+  it("lists the notes of the monitor, and gives null when there are none", async () => {
+    const { watcherNotes } = (await import("../ui/admin.js" as string)) as any;
+    const el = watcherNotes({ notes: ["2 bug stories wait: x.", "No watcher builds bug stories."] }) as FakeElement;
+    expect(el.textContent).toContain("2 bug stories wait");
+    expect(el.textContent).toContain("No watcher builds");
+    expect(watcherNotes({ notes: [] })).toBeNull();
+    expect(watcherNotes({})).toBeNull();
+    expect(watcherNotes(undefined)).toBeNull();
+  });
+});
+
 describe("lastOkText", () => {
   it("says when the last successful check was, or that there is none", async () => {
     const { lastOkText } = (await import("../ui/admin.js" as string)) as any;

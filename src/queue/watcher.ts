@@ -112,6 +112,8 @@ export interface WatcherStatus {
   nextTick?: string;
   lastError?: string;
   lastActions: string[];
+  /** The monitor: what waits or is wrong with its bug stories, in plain sentences (rebuilt every check). */
+  notes?: string[];
   /** Why issues with the trigger label are not being started right now (rebuilt every check). */
   holds?: Hold[];
   /** Since when the checks fail (kept while they keep failing). */

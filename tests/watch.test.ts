@@ -67,6 +67,7 @@ describe("monitor entries in the config", () => {
       restart_overdue: { hours: 2 },
       develop_red: { failures: 2, within_hours: 24 },
       slow_step: { factor: 3, times: 3, within_hours: 24 },
+      report_limits: { per_day: 3, per_check: 1 },
     });
     expect(() => ConfigSchema.parse({ monitor: { same_step_failing: { issues: 1 } } })).toThrow();
     expect(() => ConfigSchema.parse({ monitor: { slow_step: { factor: 1 } } })).toThrow();
@@ -1323,6 +1324,9 @@ describe("watcher", () => {
       try {
         for (let i = 0; i < 100 && manager.statuses().some((s) => !s.status?.lastTick); i++) await new Promise((r) => setTimeout(r, 100));
         await settle();
+        // The comment is written by a shared writer after the checks end: on a busy machine it can come later than `settle` waits.
+        for (let i = 0; i < 100 && !gh.statusComments().some((c) => c.issue === 5); i++) await new Promise((r) => setTimeout(r, 100));
+        await settle(); // and a second, wrong comment would show up by now
         expect(gh.statusComments().filter((c) => c.issue === 5)).toHaveLength(1);
         expect(JSON.parse(readFileSync(join(process.env.FACTORY_HOME!, "status-comments.json"), "utf8"))).toMatchObject({ "acme/app": { a: [5], b: [5] } });
       } finally {

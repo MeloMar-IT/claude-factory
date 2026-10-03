@@ -10,6 +10,7 @@ import { parseInterval, type TrackedIssue, type WatcherStatus } from "../queue/w
 import type { Scheduler } from "../queue/scheduler.js";
 import { runDetectors, type ActiveRun, type AreaLock, type Detector, type DetectorInput, type LogLine } from "./detectors.js";
 import { findingsFile, loadFindings, mergeFindings, saveFindings } from "./findings.js";
+import type { Reporter } from "./report.js";
 import { ALL_DETECTORS } from "./work-detectors.js";
 
 export interface MonitorDeps {
@@ -24,6 +25,8 @@ export interface MonitorDeps {
   /** Runs before the detectors of every check (the manager reads the request limit here). */
   beforeCheck?: () => Promise<void>;
   log: (msg: string) => void;
+  /** Writes bug stories for findings that last (only when `report_to` is set). */
+  reporter?: Pick<Reporter, "report">;
   /** For tests. */
   file?: string;
   detectors?: Detector[];
@@ -117,7 +120,10 @@ export function logRing(max = 2000, keep: RegExp = GITHUB_LIMIT_RE, maxKept = 10
   };
 }
 
-/** Checks the Foundry itself on a schedule and records what is wrong. It only writes its findings file. */
+/**
+ * Checks the Foundry itself on a schedule and records what is wrong in its findings file. With `report_to` set, a
+ * finding that lasts becomes one bug story in that repository (see report.ts); without it, nothing leaves the machine.
+ */
 export class Monitor {
   status: WatcherStatus;
   private timer?: NodeJS.Timeout;
@@ -130,6 +136,8 @@ export class Monitor {
   /** When the server last woke up from a sleep (as far as the monitor saw). */
   private wokeAt?: string;
   private usualCache?: { at: number; hours: number; history: DurationHistory };
+  /** The notes of the last check: one is logged when it first appears. */
+  private noted = new Set<string>();
 
   constructor(public cfg: WatcherConfig, private d: MonitorDeps) {
     this.status = { id: cfg.id, lastActions: [] };
@@ -226,6 +234,13 @@ export class Monitor {
     for (const f of merged.fresh) this.act(`new finding (${f.severity}) ${f.detector}: ${f.summary}`);
     for (const f of merged.gone) this.act(`finding gone: ${f.detector}: ${f.summary}`);
     if (merged.dropped) this.act(`${merged.dropped} findings were dropped to keep the list at its limit`);
+    if (this.d.reporter) {
+      const r = await this.d.reporter.report(merged.findings, start, (f) => saveFindings(f, this.d.file ?? findingsFile()));
+      for (const a of r.actions) this.act(a);
+      for (const n of r.notes) if (!this.noted.has(n)) this.d.log(`[${this.cfg.id}] ${n}`);
+      this.noted = new Set(r.notes);
+      this.status.notes = r.notes.length ? r.notes : undefined;
+    }
   }
 
   /**
