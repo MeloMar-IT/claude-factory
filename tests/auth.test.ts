@@ -1,7 +1,8 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { AuditEntrySchema } from "../src/auth/audit.js";
 import { findSession, readSessions, revokeSession, revokeUserSessions, sessionId } from "../src/auth/sessions.js";
 import { createUser, hasAdmin, listUsers, setPassword, setStatus, startSession } from "../src/auth/users.js";
 import { SESSION_RECHECK_MS, SignInLimiter } from "../src/server/api-auth.js";
@@ -597,6 +598,11 @@ describe("internal errors give a plain 500", () => {
       mkdirSync(lock);
       writeFileSync(join(lock, "pid"), String(process.pid));
       try {
+        const quick = Date.now();
+        expect((await login(s, "ann@example.com", "not-the-password-1")).status).toBe(401);
+        expect(Date.now() - quick).toBeLessThan(1000);
+        expect(s.logs).toContain("auth: audit.jsonl cannot-write");
+        expect(existsSync(join(s.home, "audit.jsonl"))).toBe(false);
         const started = Date.now();
         await expect500(await login(s, "ann@example.com", PW), s);
         expect(Date.now() - started).toBeGreaterThan(1500);
@@ -642,4 +648,116 @@ describe("no secret in a response or a log line", () => {
       }
     });
   });
+});
+
+describe("sign-ins in the audit log", () => {
+  const auditLines = (s: Srv) => {
+    const file = join(s.home, "audit.jsonl");
+    return existsSync(file) ? readFileSync(file, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as Record<string, unknown>) : [];
+  };
+  const signIns = (s: Srv) => auditLines(s).filter((l) => l.action === "sign-in");
+  const ann = { name: "Ann", email: "ann@example.com", password: PW };
+
+  it("writes an ok line with by and userId set to the account id", () =>
+    withServer(async (s) => {
+      const u = await createUser({ ...ann, role: "user" });
+      expect((await login(s, "ANN@example.com", PW)).status).toBe(200);
+      const lines = signIns(s);
+      expect(lines).toHaveLength(1);
+      expect(Object.keys(lines[0]!)).toEqual(["time", "by", "action", "result", "userId"]);
+      expect(lines[0]).toMatchObject({ by: u.id, userId: u.id, action: "sign-in", result: "ok" });
+    }));
+
+  it("writes one failed line for a wrong password (with userId) and one for an unknown e-mail (without)", () =>
+    withServer(async (s) => {
+      const u = await createUser({ ...ann, role: "user" });
+      expect((await login(s, ann.email, "not-the-password-1")).status).toBe(401);
+      expect((await login(s, "nobody@example.com", "not-the-password-1")).status).toBe(401);
+      const [wrong, unknown] = signIns(s);
+      expect(signIns(s)).toHaveLength(2);
+      expect(Object.keys(wrong!)).toEqual(["time", "by", "action", "result", "userId"]);
+      expect(wrong).toMatchObject({ by: "anonymous", result: "failed", userId: u.id });
+      expect(Object.keys(unknown!)).toEqual(["time", "by", "action", "result"]);
+      expect(unknown).toMatchObject({ by: "anonymous", result: "failed" });
+    }));
+
+  it("writes a failed line with userId for a blocked account", () =>
+    withServer(async (s) => {
+      const u = await createUser({ ...ann, role: "user" });
+      await setStatus(u.id, "blocked");
+      expect((await login(s, ann.email, PW)).status).toBe(403);
+      expect((await login(s, ann.email, "not-the-password-1")).status).toBe(401);
+      const lines = signIns(s);
+      expect(lines).toHaveLength(2);
+      for (const l of lines) expect(l).toMatchObject({ by: "anonymous", result: "failed", userId: u.id });
+    }));
+
+  it("writes no line for bad requests, an over-long e-mail or a 429", () =>
+    withServer(async (s) => {
+      await createUser({ ...ann, role: "user" });
+      await post(s, "/api/session", { email: ann.email });
+      await post(s, "/api/session", { email: ann.email, password: 5 });
+      await login(s, "x".repeat(300) + "@example.com", PW);
+      expect(signIns(s)).toHaveLength(0);
+      for (let i = 0; i < 10; i++) await login(s, ann.email, "not-the-password-1");
+      expect(signIns(s)).toHaveLength(10);
+      expect((await login(s, ann.email, "not-the-password-1")).status).toBe(429);
+      expect(signIns(s)).toHaveLength(10);
+    }));
+
+  it("writes a create line at setup, and no sign-in line", () =>
+    withServer(async (s) => {
+      const r = await post(s, "/api/setup", ann);
+      expect(r.status).toBe(201);
+      const body = (await r.json()) as { user: { id: string } };
+      expect(auditLines(s)).toHaveLength(1);
+      const line = auditLines(s)[0]!;
+      expect(Object.keys(line)).toEqual(["time", "by", "action", "userId"]);
+      expect(line).toMatchObject({ action: "create", by: body.user.id, userId: body.user.id });
+      expect((await post(s, "/api/setup", ann)).status).toBe(409);
+      expect(auditLines(s)).toHaveLength(1);
+    }));
+
+  it("lets a sign-in work when audit.jsonl cannot be written, and logs only file and kind", () =>
+    withServer(async (s) => {
+      await createUser({ ...ann, role: "admin" });
+      mkdirSync(join(s.home, "audit.jsonl"));
+      const ok = await login(s, ann.email, PW);
+      expect(ok.status).toBe(200);
+      const cookie = ok.headers.getSetCookie()[0]!.split(";")[0]!;
+      expect((await fetch(s.base + "/api/info", { headers: { cookie } })).status).toBe(200);
+      expect((await login(s, ann.email, "not-the-password-1")).status).toBe(401);
+      expect(s.logs.filter((l) => l === "auth: audit.jsonl cannot-write")).toHaveLength(2);
+      for (const l of s.logs) for (const bad of [s.home, ann.email, PW]) expect(l).not.toContain(bad);
+    }));
+
+  it("stops setup with a 500 when audit.jsonl cannot be opened", () =>
+    withServer(async (s) => {
+      mkdirSync(join(s.home, "audit.jsonl"));
+      expect((await post(s, "/api/setup", ann)).status).toBe(500);
+      expect(listUsers()).toEqual([]);
+    }));
+
+  it("holds no secret in any line", () =>
+    withServer(async (s) => {
+      await post(s, "/api/setup", ann);
+      const u = await createUser({ name: "Bea", email: "bea@example.com", password: PW, role: "user" });
+      await setStatus(u.id, "blocked");
+      const ok = await login(s, ann.email, PW);
+      const token = ok.headers.getSetCookie()[0]!.split(";")[0]!.split("=")[1]!;
+      await login(s, ann.email, "not-the-password-1");
+      await login(s, "nobody@example.com", "not-the-password-1");
+      await login(s, "bea@example.com", PW);
+      const text = readFileSync(join(s.home, "audit.jsonl"), "utf8");
+      const allowed = new Set(["anonymous", "sign-in", "create", "ok", "failed"]);
+      for (const line of text.split("\n").filter(Boolean)) {
+        expect(AuditEntrySchema.safeParse(JSON.parse(line)).success).toBe(true);
+        for (const [k, v] of Object.entries(JSON.parse(line) as Record<string, string>)) {
+          if (k !== "time") expect(allowed.has(v) || /^[0-9a-f-]{36}$/.test(v), `${k}=${v}`).toBe(true);
+        }
+      }
+      for (const bad of [PW, "scrypt$", token, sessionId(token), "ann@example.com", "bea@example.com", "nobody@example.com", "Ann", "Bea"]) {
+        expect(text).not.toContain(bad);
+      }
+    }));
 });

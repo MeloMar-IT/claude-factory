@@ -99,7 +99,7 @@ describe("users API", () => {
     if (keep) seen.push(text);
     return { status: r.status, text, json: () => JSON.parse(text) };
   };
-  const auditLines = () => (existsSync(auditPath()) ? readFileSync(auditPath(), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as Record<string, unknown>) : []);
+  const auditLines = () => (existsSync(auditPath()) ? readFileSync(auditPath(), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as Record<string, unknown>).filter((l) => l.action !== "sign-in") : []);
 
   async function world(extra: Partial<ServerOptions> = {}) {
     const s = await boot(extra);
@@ -366,6 +366,7 @@ describe("users API", () => {
   it("answers a plain 500 when the store fails, without a path or value", async () => {
     const { s, admin, ann, cred } = await world();
     await cred(ann, "ann-cred");
+    rmSync(auditPath(), { force: true });
     mkdirSync(auditPath());
     const before = readFileSync(usersPath());
     const calls: [string, string, unknown?][] = [

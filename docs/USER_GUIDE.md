@@ -1236,13 +1236,23 @@ server log says how many runs it cancelled, with the account id only.
 example `{"time":"2026-10-02T09:46:46.000Z","by":"cli","action":"role","userId":"<id>","oldRole":"user","newRole":"admin"}`.
 `by` is `cli` or the id of the admin. An `edit` line is a name or e-mail change. A password set through a link is a `password` line made by the account itself (`by` is its id).
 Only a role change has `oldRole` and `newRole`. A `block` line has `stopWork` (`true` when
-`--stop-work` was given). No line holds a name, e-mail, password, hash or
-token, and a failed action is not logged. A block or delete that stops with an error may already have
+`--stop-work` was given). No line holds a name, e-mail, password, hash, key or
+token, and a failed account change is not logged. A block or delete that stops with an error may already have
 signed the account out or removed its repositories and stored credentials; the server log names the
 problem, and the same action made again finishes the job and writes the line. If the file cannot be written, the command stops before
 it changes anything. In the rare case that the line cannot be added after the change (for example a
 full disk), the command says so and exits 1. The file is a record, not a protection: anyone who runs
 commands as you can edit it.
+
+Every sign-in is also a line, for example `{"time":"2026-10-02T09:50:00.000Z","by":"<id>","action":"sign-in","result":"ok","userId":"<id>"}`.
+A sign-in that works has `result` `ok`, and `by` and `userId` are the account id. A sign-in that fails (wrong password,
+unknown e-mail, blocked account) has `result` `failed` and `by` `anonymous`; it has `userId` only when the e-mail belongs to an
+account, so a wrong password and an unknown e-mail each write one line. The typed e-mail and password are never written. A try that is
+refused with 429, a bad request and an over-long e-mail write no line. The first admin made on the setup page writes a
+`create` line with `by` set to its own id (no `sign-in` line); if `audit.jsonl` cannot be opened, setup stops with an error and
+makes no account. Event lines can also hold a short `target` (instead of `userId`) and a `detail` (only with a `target`); sign-ins
+use neither. A sign-in line that cannot be written (for example while another `scf` command holds the lock) does not stop the
+sign-in; the server log says `auth: audit.jsonl cannot-write`.
 
 **Sign-in and sessions.** The UI and its API need a signed-in account; only the sign-in, sign-out,
 first-admin and set-password calls and the static files are open. A session is kept on the server in

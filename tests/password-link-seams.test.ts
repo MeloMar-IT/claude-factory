@@ -1,5 +1,5 @@
 // Wraps two built-ins so the tests can count and hold password hashes and fail one audit append. Everything else is real.
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -72,7 +72,7 @@ afterEach(() => {
 
 const newcomer = (email = "new@example.com") => ({ name: "New", email });
 const rejection = async (p: Promise<unknown>) => await p.then(() => undefined, (e: Error) => e);
-const auditLines = () => readFileSync(auditPath(), "utf8").split("\n").filter(Boolean);
+const auditLines = () => (existsSync(auditPath()) ? readFileSync(auditPath(), "utf8").split("\n").filter(Boolean) : []);
 const wrote = { kind: "cannot-write", message: expect.stringMatching(/audit\.jsonl.*change was made/) };
 
 describe("the wrapper reaches the store", () => {
