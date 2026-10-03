@@ -2,61 +2,40 @@ import { timingSafeEqual } from "node:crypto";
 import { basename } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { adoptRuns } from "../auth/run-owner.js";
-import { createUser, checkSignIn, getUser, hasAdmin, redeemPasswordLink, startSession, UserError, type User } from "../auth/users.js";
+import {
+  changePassword, checkPassword, createUser, checkSignIn, findUserByEmail, getUser, hasAdmin, redeemPasswordLink, startSession, UserError, type User,
+} from "../auth/users.js";
 import { SESSION_TTL_MS, csrfToken, findSession, revokeSession, sessionId } from "../auth/sessions.js";
 import { StoreError } from "../auth/store.js";
 import { homeMoved } from "../home.js";
 import { HttpError, readJson, send, str } from "./http.js";
 import { isLoopback, requestAccess } from "./net.js";
-import type { ApiContext } from "./server.js";
+import type { ApiContext, Route } from "./server.js";
+import { Throttle, retryAfter, verdictText, worst, type Verdict } from "./sign-in-throttle.js";
 
 /** How often an open response re-checks its session (it must be gone within 5 seconds). */
 export const SESSION_RECHECK_MS = 4000;
 
-const FAIL_LIMIT = 10;
-const FAIL_WINDOW_MS = 15 * 60 * 1000;
-const FAIL_ENTRIES = 1000;
-
-/** Counts failed sign-ins per e-mail, in memory. At most `cap` entries; the oldest go first. */
-export class SignInLimiter {
-  private entries = new Map<string, { count: number; since: number }>();
-  constructor(
-    private limit = FAIL_LIMIT,
-    private windowMs = FAIL_WINDOW_MS,
-    private cap = FAIL_ENTRIES,
-    private now: () => number = Date.now,
-  ) {}
-  private live(key: string) {
-    const e = this.entries.get(key);
-    if (e && this.now() - e.since >= this.windowMs) {
-      this.entries.delete(key);
-      return undefined;
-    }
-    return e;
-  }
-  blocked(key: string): boolean {
-    return (this.live(key)?.count ?? 0) >= this.limit;
-  }
-  fail(key: string): void {
-    const e = this.live(key);
-    if (e) {
-      e.count++;
-      return;
-    }
-    this.entries.set(key, { count: 1, since: this.now() });
-    while (this.entries.size > this.cap) this.entries.delete(this.entries.keys().next().value as string);
-  }
-  clear(key: string): void {
-    this.entries.delete(key);
-  }
+/** The wait and lock counters of a server: one per e-mail (entries of stored accounts are kept), one per client address. */
+export interface Throttles {
+  accounts: Throttle;
+  clients: Throttle;
 }
-
-const limiters = new WeakMap<ApiContext, SignInLimiter>();
-const limiterOf = (ctx: ApiContext) => limiters.get(ctx) ?? limiters.set(ctx, new SignInLimiter()).get(ctx)!;
-/** A second limit per client address (every try counts), so cycling e-mail addresses does not get around the per-e-mail one. */
-const CLIENT_TRY_LIMIT = 60;
-const clientLimiters = new WeakMap<ApiContext, SignInLimiter>();
-const clientLimiterOf = (ctx: ApiContext) => clientLimiters.get(ctx) ?? clientLimiters.set(ctx, new SignInLimiter(CLIENT_TRY_LIMIT)).get(ctx)!;
+const throttles = new WeakMap<ApiContext, Throttles>();
+export function throttlesOf(ctx: ApiContext): Throttles {
+  let t = throttles.get(ctx);
+  if (!t) {
+    const now = ctx.opts.signInClock;
+    t = { accounts: new Throttle({ lock: true, now }), clients: new Throttle({ lock: false, now }) };
+    throttles.set(ctx, t);
+  }
+  return t;
+}
+/** Throws the 429 for a verdict that refuses. */
+function refuse(v: Verdict): void {
+  if (v.kind !== "open") throw new HttpError(429, verdictText(v), { "retry-after": String(retryAfter(v.waitMs)) });
+}
+const BUSY = "the server is busy; try again in a moment";
 /** At most this many password checks (scrypt) run at the same time. */
 const MAX_CHECKS = 16;
 let checking = 0;
@@ -173,32 +152,42 @@ function notMoved() {
 async function signIn(ctx: ApiContext, req: IncomingMessage, res: ServerResponse) {
   notMoved();
   const body = await readJson(req);
-  const limiter = limiterOf(ctx);
+  const { accounts, clients } = throttlesOf(ctx);
   const email = str(body, "email").trim().toLowerCase();
   const password = passwordOf(body);
-  // Nothing long is kept or hashed: an over-long address is simply a wrong sign-in.
-  if (email.length > MAX_EMAIL) throw new HttpError(401, BAD_LOGIN);
-  const clients = clientLimiterOf(ctx);
   const client = clientKey(req);
-  if (clients.blocked(client)) throw new HttpError(429, "too many tries; wait 15 minutes");
-  if (checking >= MAX_CHECKS) throw new HttpError(429, "the server is busy; try again in a moment");
-  if (limiter.blocked(email)) throw new HttpError(429, "too many wrong tries; wait 15 minutes");
-  // Count the try before the slow password check: requests that run at the same time must not all pass the limit.
-  // A matching password gives the try back (below).
-  limiter.fail(email);
-  clients.fail(client);
+  refuse(clients.check(client));
+  // Nothing long is kept or hashed: an over-long address is a wrong sign-in that counts for the address only.
+  if (email.length > MAX_EMAIL) {
+    clients.count(client);
+    throw new HttpError(401, BAD_LOGIN);
+  }
+  refuse(worst(clients.check(client), accounts.check(email)));
+  if (checking >= MAX_CHECKS) throw new HttpError(429, BUSY);
+  // Count the try before the slow password check (no await between the check and the count): requests that run at the
+  // same time must not all pass the limit. A right password gives the address try back (below).
+  let stored = false;
+  try {
+    stored = findUserByEmail(email) !== undefined;
+  } catch {
+    // the check below reports an unreadable file
+  }
+  const clientTry = clients.count(client);
+  accounts.count(email, { keep: stored });
   checking++;
   await guarded(ctx, async () => {
     const user = await checkSignIn(email, password).finally(() => checking--);
     if (!user) throw new HttpError(401, BAD_LOGIN);
     if (user.status === "blocked") {
-      limiter.clear(email);
+      accounts.clear(email);
+      clientTry.giveBack();
       throw new HttpError(403, "this account is blocked");
     }
     const old = cookieToken(ctx, req);
     const started = startSession(user.id, user.passwordHash, old ? sessionId(old) : undefined);
     if (!started) throw new HttpError(401, BAD_LOGIN);
-    limiter.clear(email);
+    accounts.clear(email);
+    clientTry.giveBack();
     setCookie(ctx, req, res, started.token);
     send(res, 200, sessionBody({ token: started.token, user: started.user }));
   });
@@ -212,22 +201,27 @@ async function setPasswordWithLink(ctx: ApiContext, req: IncomingMessage, res: S
   const body = await readJson(req);
   const password = passwordOf(body);
   const token = typeof body.token === "string" ? body.token : "";
-  const clients = clientLimiterOf(ctx);
+  const { accounts, clients } = throttlesOf(ctx);
   const client = clientKey(req);
-  if (clients.blocked(client)) throw new HttpError(429, "too many tries; wait 15 minutes");
-  if (checking >= MAX_CHECKS) throw new HttpError(429, "the server is busy; try again in a moment");
-  clients.fail(client);
+  refuse(clients.check(client));
+  if (checking >= MAX_CHECKS) throw new HttpError(429, BUSY);
+  const clientTry = clients.count(client);
   checking++;
   await guarded(ctx, async () => {
     let user;
     try {
       user = await redeemPasswordLink(token, password).finally(() => checking--);
     } catch (e) {
-      if (e instanceof UserError) throw new HttpError(400, e.message);
+      // a live link with a refused password is not a guess at a token: the try is given back
+      if (e instanceof UserError) {
+        clientTry.giveBack();
+        throw new HttpError(400, e.message);
+      }
       throw e;
     }
     if (!user) throw new HttpError(400, DEAD_LINK);
-    limiterOf(ctx).clear(user.email); // the wrong tries before the first password must not lock out the first sign-in
+    clientTry.giveBack();
+    accounts.clear(user.email); // the wrong tries before the first password must not lock out the first sign-in
     send(res, 200, { ok: true });
   });
 }
@@ -291,3 +285,43 @@ export async function authRoutes(ctx: ApiContext, req: IncomingMessage, res: Ser
   }
   return false;
 }
+
+/**
+ * POST /api/password: the signed-in account changes its own password. The current password counts as a sign-in try
+ * for the e-mail and the client address (one counter per e-mail, shared with sign-in); a right one gives them back.
+ * The caller's session stays, the account's other sessions end.
+ */
+export const passwordRoutes: Route = async (ctx, req, res, seg, method, user) => {
+  if (seg.length !== 1 || seg[0] !== "password" || method !== "POST") return false;
+  notMoved();
+  const body = await readJson(req);
+  if (typeof body.current !== "string" || body.current === "") throw new HttpError(400, `"current" must be the current password`);
+  const password = passwordOf(body);
+  try {
+    checkPassword(password);
+  } catch (e) {
+    if (e instanceof UserError) throw new HttpError(400, e.message);
+    throw e;
+  }
+  const current = body.current;
+  const { accounts, clients } = throttlesOf(ctx);
+  const client = clientKey(req);
+  refuse(worst(clients.check(client), accounts.check(user.email)));
+  if (checking >= MAX_CHECKS) throw new HttpError(429, BUSY);
+  const clientTry = clients.count(client);
+  accounts.count(user.email, { keep: true });
+  checking++;
+  await guarded(ctx, async () => {
+    const token = cookieToken(ctx, req);
+    try {
+      await changePassword(user.id, current, password, { keepSession: token ? sessionId(token) : undefined }).finally(() => checking--);
+    } catch (e) {
+      if (e instanceof UserError) throw new HttpError(e.code === "wrong-password" ? 403 : 400, e.message);
+      throw e;
+    }
+    accounts.clear(user.email);
+    clientTry.giveBack();
+    send(res, 200, { ok: true });
+  });
+  return true;
+};

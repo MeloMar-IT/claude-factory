@@ -102,6 +102,15 @@ describe("prepareAuditLocked", () => {
     expect(AuditEntrySchema.safeParse(JSON.parse(l[1]!)).success).toBe(true);
   });
 
+  it("writes a `reset` entry with exactly time, by, action and userId", () => {
+    const user = id();
+    add("cli", { action: "reset", userId: user });
+    const entry = JSON.parse(lines()[0]!);
+    expect(Object.keys(entry).sort()).toEqual(["action", "by", "time", "userId"]);
+    expect(entry).toMatchObject({ action: "reset", by: "cli", userId: user });
+    expect(AuditEntrySchema.safeParse(entry).success).toBe(true);
+  });
+
   it("adds no separator after a complete line", () => {
     add("cli", { action: "create", userId: id() });
     add("cli", { action: "create", userId: id() });

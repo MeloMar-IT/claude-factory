@@ -43,8 +43,10 @@ vi.mock("node:fs", async (importOriginal) => {
 });
 
 const { auditPath } = await import("../src/auth/audit.js");
-const { sessionId } = await import("../src/auth/sessions.js");
-const { checkSignIn, createUser, createUserWithLink, getUser, newPasswordLink, redeemPasswordLink, usersPath } = await import("../src/auth/users.js");
+const { addSession, readSessions, sessionId } = await import("../src/auth/sessions.js");
+const { changePassword, checkSignIn, createUser, createUserWithLink, getUser, newPasswordLink, redeemPasswordLink, resetPassword, usersPath } = await import(
+  "../src/auth/users.js"
+);
 const { startServer } = await import("../src/server/server.js");
 
 const PW = "test-password-12345";
@@ -134,13 +136,40 @@ describe("audit line fails after the change", () => {
     expect((await checkSignIn("new@example.com", PW2))?.id).toBe(r.user.id);
     expect(await redeemPasswordLink(r.token, PW2)).toBeUndefined();
   });
+
+  it("resetPassword: no password, a stored link, no sessions; a new link works", async () => {
+    const u = await createUser({ name: "Bob", email: "bob@example.com", password: PW });
+    addSession(u.id);
+    addSession(u.id);
+    probe.failNextWrite = true;
+    expect(await rejection(resetPassword(u.id, { by: "cli" }))).toMatchObject(wrote);
+    const after = getUser(u.id)!;
+    expect(after.passwordHash).toBeUndefined();
+    expect(after.passwordLink).toBeDefined();
+    expect(readSessions().filter((x) => x.userId === u.id)).toHaveLength(0);
+    expect(await checkSignIn("bob@example.com", PW)).toBeUndefined();
+    const n = await newPasswordLink(u.id);
+    expect(await redeemPasswordLink(n.token, PW2)).toBeDefined();
+    expect((await checkSignIn("bob@example.com", PW2))?.id).toBe(u.id);
+  });
+
+  it("changePassword: the new password works, the kept session stays, the others are gone", async () => {
+    const u = await createUser({ name: "Bob", email: "bob@example.com", password: PW });
+    const keep = addSession(u.id);
+    addSession(u.id);
+    probe.failNextWrite = true;
+    expect(await rejection(changePassword(u.id, PW, PW2, { keepSession: sessionId(keep) }))).toMatchObject(wrote);
+    expect((await checkSignIn("bob@example.com", PW2))?.id).toBe(u.id);
+    expect(await checkSignIn("bob@example.com", PW)).toBeUndefined();
+    expect(readSessions().map((x) => x.id)).toEqual([sessionId(keep)]);
+  });
 });
 
 // ---- HTTP ------------------------------------------------------------------------------------------
 
 async function boot() {
   const logs: string[] = [];
-  const opts = { repo: home, runsDir: join(home, "runs"), claudeBin: resolve("tests/fixtures/fake-claude.mjs"), watchers: false, log: (m: string) => void logs.push(m) };
+  const opts = { repo: home, runsDir: join(home, "runs"), claudeBin: resolve("tests/fixtures/fake-claude.mjs"), watchers: false, log: (m: string) => void logs.push(m), signInClock: () => 1_800_000_000_000 };
   for (let i = 0; ; i++) {
     const port = 20000 + Math.floor(Math.random() * 20000);
     try {
@@ -152,8 +181,10 @@ async function boot() {
   }
 }
 type Srv = Awaited<ReturnType<typeof boot>>;
-const post = (s: Srv, path: string, body: unknown) =>
-  fetch(s.base + path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+const post = (s: Srv, path: string, body: unknown, headers: Record<string, string> = {}) =>
+  fetch(s.base + path, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
+/** A client address (the server trusts these headers from loopback). */
+const from = (n: number) => ({ "x-forwarded-proto": "https", "x-forwarded-for": `10.0.0.${n}` });
 const until = async (cond: () => boolean) => {
   for (let i = 0; i < 400 && !cond(); i++) await new Promise((r) => setTimeout(r, 25));
   expect(cond()).toBe(true);
@@ -175,8 +206,8 @@ describe("over HTTP", () => {
     const links = await Promise.all(Array.from({ length: 20 }, (_, i) => createUserWithLink(newcomer(`u${i}@example.com`))));
     probe.hold = true;
     const answers: { status: number; body: unknown; token: string }[] = [];
-    const sends = links.map((l) =>
-      post(s, "/api/set-password", { token: l.token, password: PW2 }).then(async (r) => void answers.push({ status: r.status, body: await r.json(), token: l.token })),
+    const sends = links.map((l, i) =>
+      post(s, "/api/set-password", { token: l.token, password: PW2 }, from(i + 1)).then(async (r) => void answers.push({ status: r.status, body: await r.json(), token: l.token })),
     );
     await until(() => probe.held.length === 16 && answers.length === 4);
     expect(answers.every((a) => a.status === 429 && JSON.stringify(a.body) === JSON.stringify(BUSY))).toBe(true);
@@ -191,6 +222,25 @@ describe("over HTTP", () => {
     expect(answers.filter((a) => a.status === 200)).toHaveLength(16);
     for (const token of refused) expect((await post(s, "/api/set-password", { token, password: PW2 })).status).toBe(200);
     expect(probe.peak).toBe(16);
+  });
+
+  it("holds 5 hashes for 16 live links from one address and refuses 11 with the wait text", async () => {
+    const links = await Promise.all(Array.from({ length: 16 }, (_, i) => createUserWithLink(newcomer(`u${i}@example.com`))));
+    probe.hold = true;
+    const answers: { status: number; body: unknown; token: string }[] = [];
+    const sends = links.map((l) =>
+      post(s, "/api/set-password", { token: l.token, password: PW2 }, from(1)).then(async (r) => void answers.push({ status: r.status, body: await r.json(), token: l.token })),
+    );
+    await until(() => probe.held.length === 5 && answers.length === 11);
+    await new Promise((r) => setTimeout(r, 100));
+    expect(probe.held).toHaveLength(5);
+    expect(answers.every((a) => a.status === 429 && JSON.stringify(a.body) === JSON.stringify({ error: "too many tries; try again in 1 second" }))).toBe(true);
+    const refused = answers.map((a) => a.token);
+    probe.hold = false;
+    for (const run of probe.held.splice(0)) run();
+    await Promise.all(sends);
+    expect(answers.filter((a) => a.status === 200)).toHaveLength(5);
+    for (const token of refused) expect((await post(s, "/api/set-password", { token, password: PW2 }, from(1))).status).toBe(200);
   });
 
   it("answers 500 when the audit line fails, and the chosen password works", async () => {

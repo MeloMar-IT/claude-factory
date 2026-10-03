@@ -16,6 +16,8 @@ afterAll(() => restore());
 const TOKEN = "Ab3_".repeat(10) + "xyz"; // 43 characters
 const ORIGIN = "https://foundry.example";
 const LINK = `${ORIGIN}/#/set-password/${TOKEN}`;
+const FUTURE = new Date(Date.now() + 20 * 60_000).toISOString();
+const PAST = new Date(Date.now() - 60_000).toISOString();
 const ADMIN_ONLY = "this is the only admin that is not blocked; make another admin first";
 
 type Answer = { status: number; error: string; after?: boolean } | "throw";
@@ -32,7 +34,7 @@ const realFetch = globalThis.fetch;
 
 const user = (over: object = {}) => ({
   id: "u1", name: "Ann", email: "ann@example.com", role: "user", status: "active", created: "2026-01-01T00:00:00.000Z",
-  lastSignIn: new Date().toISOString(), runs: 2, hasPassword: true, ...over,
+  lastSignIn: new Date().toISOString(), runs: 2, hasPassword: true, lockedUntil: null, ...over,
 });
 
 beforeEach(() => {
@@ -73,6 +75,8 @@ beforeEach(() => {
       if (init.method === "PUT" && target) Object.assign(target, body);
       if (url.endsWith("/block") && target) target.status = "blocked";
       if (url.endsWith("/unblock") && target) target.status = "active";
+      if (url.endsWith("/unlock") && target) target.lockedUntil = null;
+      if (url.endsWith("/reset") && target) target.hasPassword = false;
       if (init.method === "DELETE") users = users.filter((u) => u.id !== id);
     };
     if (answer) {
@@ -85,7 +89,7 @@ beforeEach(() => {
       users.push(created);
       return reply({ user: created, token: TOKEN, expires: "2026-12-01T00:00:00.000Z" }, 201);
     }
-    if (url.endsWith("/link")) return reply({ user: target, token: TOKEN, expires: "x" });
+    if (url.endsWith("/link") || url.endsWith("/reset")) return reply({ user: target, token: TOKEN, expires: "x" });
     if (url.endsWith("/block")) return reply({ user: target, cancelled: { queued: 1, running: 1, waiting: 1 } });
     if (init.method === "DELETE") return reply({ ok: true, credentials: 0, cancelled: 1 });
     return reply({ user: target });
@@ -124,16 +128,37 @@ describe("pure functions", () => {
     expect(ui.statusText(user({ status: "blocked" }))).toBe("blocked");
     expect(ui.statusText(user({ hasPassword: false }))).toBe("no password yet");
     expect(ui.statusText(user({ hasPassword: false, status: "blocked" }))).toBe("blocked");
+    expect(ui.statusText(user({ lockedUntil: FUTURE }))).toBe("locked");
+    expect(ui.statusText(user({ lockedUntil: FUTURE, status: "blocked" }))).toBe("blocked");
+    expect(ui.statusText(user({ lockedUntil: FUTURE, hasPassword: false }))).toBe("no password yet");
+    expect(ui.statusText(user({ lockedUntil: PAST }))).toBe("active");
+  });
+  it("isLocked", () => {
+    expect(ui.isLocked(user())).toBe(false);
+    expect(ui.isLocked(user({ lockedUntil: FUTURE }))).toBe(true);
+    expect(ui.isLocked(user({ lockedUntil: PAST }))).toBe(false);
+  });
+  it("pillClass", () => {
+    expect(ui.pillClass(user())).toBe("pill ok");
+    expect(ui.pillClass(user({ status: "blocked" }))).toBe("pill fail");
+    expect(ui.pillClass(user({ hasPassword: false }))).toBe("pill");
+    expect(ui.pillClass(user({ lockedUntil: FUTURE }))).toBe("pill locked");
+    expect(ui.pillClass(user({ lockedUntil: FUTURE, status: "blocked" }))).toBe("pill fail");
+    expect(ui.pillClass(user({ lockedUntil: PAST }))).toBe("pill ok");
   });
   it("lastSignInText", () => {
     expect(ui.lastSignInText({ lastSignIn: null })).toBe("never");
     expect(ui.lastSignInText({ lastSignIn: new Date().toISOString() })).toBe("just now");
   });
   it("actionsFor", () => {
-    expect(ui.actionsFor(user())).toEqual(["edit", "block", "delete"]);
-    expect(ui.actionsFor(user({ status: "blocked" }))).toEqual(["edit", "unblock", "delete"]);
+    expect(ui.actionsFor(user())).toEqual(["edit", "reset", "block", "delete"]);
+    expect(ui.actionsFor(user({ status: "blocked" }))).toEqual(["edit", "reset", "unblock", "delete"]);
     expect(ui.actionsFor(user({ hasPassword: false }))).toEqual(["edit", "link", "block", "delete"]);
     expect(ui.actionsFor(user({ hasPassword: false, status: "blocked" }))).toEqual(["edit", "link", "unblock", "delete"]);
+    expect(ui.actionsFor(user({ lockedUntil: FUTURE }))).toEqual(["edit", "reset", "unlock", "block", "delete"]);
+    expect(ui.actionsFor(user({ lockedUntil: FUTURE, status: "blocked" }))).toEqual(["edit", "reset", "unlock", "unblock", "delete"]);
+    expect(ui.actionsFor(user({ lockedUntil: FUTURE, hasPassword: false }))).toEqual(["edit", "link", "block", "delete"]);
+    expect(ui.actionsFor(user({ lockedUntil: PAST }))).toEqual(["edit", "reset", "block", "delete"]);
   });
   it("blockedLinkText", () => {
     expect(ui.blockedLinkText(user())).toBe("");
@@ -189,8 +214,8 @@ describe("the list", () => {
     expect(cells("Bob")[4]).toBe("never");
     expect(cells("Cy")[3]).toBe("no password yet");
     const labels = (n: string) => rowOf(n).all("button").map((b) => b.textContent);
-    expect(labels("Ann")).toEqual(["Edit", "Block", "Delete"]);
-    expect(labels("Bob")).toEqual(["Edit", "Unblock", "Delete"]);
+    expect(labels("Ann")).toEqual(["Edit", "Reset password", "Block", "Delete"]);
+    expect(labels("Bob")).toEqual(["Edit", "Reset password", "Unblock", "Delete"]);
     expect(labels("Cy")).toEqual(["Edit", "New link", "Block", "Delete"]);
     expect(main().all("input")).toHaveLength(0);
   });
@@ -218,7 +243,7 @@ describe("Add user", () => {
     const link = field(root(), "link")!;
     expect(link.value).toBe(LINK);
     expect(link.attrs.readonly).toBeDefined();
-    for (const t of ["works once", "7 days", "Send it to the user yourself"]) expect(root().textContent).toContain(t);
+    for (const t of ["works once", "24 hours", "Send it to the user yourself"]) expect(root().textContent).toContain(t);
     expect(gets).toBe(1);
     press(button(root(), "Copy"));
     await flush();
@@ -294,6 +319,61 @@ describe("New link", () => {
     press(button(root(), "New link"));
     await flush();
     expect(errLine(root())[0]!.textContent).toBe("this account has a password already");
+  });
+});
+
+describe("Reset password", () => {
+  it("names the account, shows the link once for 24 hours and reloads the list", async () => {
+    await show();
+    await open("Ann", "Reset password");
+    expect(root().textContent).toContain("Ann (ann@example.com)");
+    expect(root().textContent).toContain("signed out everywhere");
+    press(button(root(), "Reset password"));
+    await flush();
+    expect(sent).toEqual([{ method: "POST", url: "/api/users/u1/reset", body: {} }]);
+    expect(field(root(), "link")!.value).toBe(LINK);
+    expect(root().textContent).toContain("24 hours");
+    expect(root().textContent).toContain("works once");
+    const g = gets;
+    press(button(root(), "Done"));
+    await flush();
+    expect(gets).toBe(g + 1);
+    expect(rowOf("Ann").all("td")[3]!.textContent).toBe("no password yet");
+    for (const t of [main().textContent, toastText(), root().textContent]) expect(t).not.toContain(TOKEN);
+  });
+
+  it("warns when it is the own account", async () => {
+    users.push(user({ id: "u9", name: "Ed", email: "ed@example.com", role: "admin" }));
+    await show();
+    await open("Root", "Reset password");
+    expect(root().textContent).toContain("signed out at once");
+  });
+});
+
+describe("Unlock", () => {
+  it("sends the call, toasts and reloads; the text does not promise an immediate sign-in", async () => {
+    users[1]!.lockedUntil = FUTURE;
+    await show();
+    expect(rowOf("Ann").all("td")[3]!.textContent).toBe("locked");
+    expect(rowOf("Ann").all("td")[3]!.all("span")[0]!.attrs.class).toBe("pill locked");
+    await open("Ann", "Unlock");
+    expect(root().textContent).toContain("Ann (ann@example.com)");
+    expect(root().textContent).not.toContain("at once");
+    press(button(root(), "Unlock"));
+    await flush();
+    expect(sent).toEqual([{ method: "POST", url: "/api/users/u1/unlock", body: {} }]);
+    expect(toastText()).toBe("Ann is unlocked");
+    expect(rowOf("Ann").all("td")[3]!.textContent).toBe("active");
+  });
+
+  it("shows a refusal in the dialog", async () => {
+    users[1]!.lockedUntil = FUTURE;
+    await show();
+    await open("Ann", "Unlock");
+    answers.push({ status: 404, error: "no such account" });
+    press(button(root(), "Unlock"));
+    await flush();
+    expect(errLine(root())[0]!.textContent).toBe("no such account");
   });
 });
 
@@ -450,6 +530,7 @@ describe("refusals", () => {
       field(root(), "role")!.value = "user";
     }],
     ["Block: last admin", "Block", { status: 409, error: ADMIN_ONLY }, () => open("Root", "Block")],
+    ["Reset: last admin", "Reset password", { status: 409, error: ADMIN_ONLY }, () => open("Root", "Reset password")],
     ["Delete: last admin", "Delete", { status: 409, error: ADMIN_ONLY }, () => open("Root", "Delete")],
     ["Unblock: gone", "Unblock", { status: 404, error: "no such account" }, async () => {
       users[1]!.status = "blocked";
@@ -536,10 +617,13 @@ describe("wiring", () => {
     await api.blockUser("u1", true);
     await api.unblockUser("u1");
     await api.userLink("u1");
+    await api.resetUser("u1");
+    await api.unlockUser("u1");
     await api.deleteUser("u1");
     expect(gets).toBe(1);
     expect(sent.map((s) => `${s.method} ${s.url}`)).toEqual([
-      "POST /api/users", "PUT /api/users/a%20b", "POST /api/users/u1/block", "POST /api/users/u1/unblock", "POST /api/users/u1/link", "DELETE /api/users/u1",
+      "POST /api/users", "PUT /api/users/a%20b", "POST /api/users/u1/block", "POST /api/users/u1/unblock", "POST /api/users/u1/link",
+      "POST /api/users/u1/reset", "POST /api/users/u1/unlock", "DELETE /api/users/u1",
     ]);
     expect(sent[2]!.body).toEqual({ stopWork: true });
   });

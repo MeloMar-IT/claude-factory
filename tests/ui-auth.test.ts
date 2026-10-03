@@ -63,8 +63,10 @@ describe("req() in ui/api.js", () => {
     await apiMod.api.signIn("a@example.com", "pw");
     await apiMod.api.setup("Ann", "a@example.com", "pw");
     await apiMod.api.setPassword("tok", "pw");
-    expect(sent().map((c) => `${c.method} ${c.url}`)).toEqual(["GET /api/session", "POST /api/session", "POST /api/setup", "POST /api/set-password"]);
+    await apiMod.api.changePassword("old", "new");
+    expect(sent().map((c) => `${c.method} ${c.url}`)).toEqual(["GET /api/session", "POST /api/session", "POST /api/setup", "POST /api/set-password", "POST /api/password"]);
     expect(JSON.parse(fetchMock.mock.calls[3]![1].body)).toEqual({ token: "tok", password: "pw" });
+    expect(JSON.parse(fetchMock.mock.calls[4]![1].body)).toEqual({ current: "old", password: "new" });
   });
 });
 
@@ -82,7 +84,7 @@ describe("the sign-in decisions", () => {
     expect(auth.formProblem("signin", { email: "a@example.com", password: "" })).toBe("Fill in your e-mail and password.");
     expect(auth.formProblem("signin", { email: "a@example.com", password: "x" })).toBe("");
     expect(auth.formProblem("setup", { ...NEW_ADMIN, name: " " })).toBe("Fill in your name and e-mail.");
-    expect(auth.formProblem("setup", { ...NEW_ADMIN, password: "short", repeat: "short" })).toBe("The password must be at least 10 characters.");
+    expect(auth.formProblem("setup", { ...NEW_ADMIN, password: "short", repeat: "short" })).toBe("The password must be at least 12 characters.");
     expect(auth.formProblem("setup", { ...NEW_ADMIN, repeat: "other-password-1" })).toBe("The two passwords are not the same.");
     expect(auth.formProblem("setup", NEW_ADMIN)).toBe("");
   });
@@ -98,13 +100,14 @@ describe("the sign-in decisions", () => {
     signOut: vi.fn(async () => ({})),
     setup: vi.fn(async () => ({})),
     setPassword: vi.fn(async () => ({})),
+    changePassword: vi.fn(async (..._a: unknown[]) => ({})),
     ...over,
   });
 
   it("calls no API method while the input has a problem", async () => {
     const a = fakeApi();
     expect(await auth.submitForm(a, "setup", { ...NEW_ADMIN, repeat: "different-password" })).toBe("The two passwords are not the same.");
-    expect(await auth.submitForm(a, "setup", { ...NEW_ADMIN, password: "short", repeat: "short" })).toContain("at least 10");
+    expect(await auth.submitForm(a, "setup", { ...NEW_ADMIN, password: "short", repeat: "short" })).toContain("at least 12");
     expect(await auth.submitForm(a, "signin", { email: "", password: "" })).toContain("Fill in");
     expect(a.setup).not.toHaveBeenCalled();
     expect(a.signIn).not.toHaveBeenCalled();
@@ -133,9 +136,28 @@ describe("the sign-in decisions", () => {
   });
 
   it("checks the new password", () => {
-    expect(auth.formProblem("password", { password: "short", repeat: "short" })).toBe("The password must be at least 10 characters.");
+    expect(auth.formProblem("password", { password: "short", repeat: "short" })).toBe("The password must be at least 12 characters.");
     expect(auth.formProblem("password", { password: "long-enough-password", repeat: "other-password-1" })).toBe("The two passwords are not the same.");
     expect(auth.formProblem("password", { password: "long-enough-password", repeat: "long-enough-password" })).toBe("");
+  });
+
+  it("checks the change form", () => {
+    const ok = "long-enough-password";
+    expect(auth.formProblem("change", { current: "", password: ok, repeat: ok })).toBe("Type your current password.");
+    expect(auth.formProblem("change", { current: "x", password: "short", repeat: "short" })).toBe("The password must be at least 12 characters.");
+    expect(auth.formProblem("change", { current: "x", password: ok, repeat: "other-password-1" })).toBe("The two passwords are not the same.");
+    expect(auth.formProblem("change", { current: "x", password: ok, repeat: ok })).toBe("");
+  });
+
+  it("sends the change form once, and only without a problem", async () => {
+    const a = { ...fakeApi(), changePassword: vi.fn(async () => ({})) };
+    const v = { current: "old-password-here", password: "long-enough-password", repeat: "long-enough-password" };
+    expect(await auth.submitForm(a, "change", { ...v, repeat: "x" })).toBe("The two passwords are not the same.");
+    expect(a.changePassword).not.toHaveBeenCalled();
+    expect(await auth.submitForm(a, "change", v)).toBe("");
+    expect(a.changePassword).toHaveBeenCalledExactlyOnceWith("old-password-here", "long-enough-password");
+    const failing = { ...fakeApi(), changePassword: async () => { throw new Error("the current password is wrong"); } };
+    expect(await auth.submitForm(failing, "change", v)).toBe("the current password is wrong");
   });
 
   it("sends the set-password form once, and only without a problem", async () => {
@@ -180,6 +202,7 @@ describe("ensureSignedIn on the fake DOM", () => {
     signOut: vi.fn(async () => ({})),
     setup: vi.fn(async () => ({})),
     setPassword: vi.fn(async () => ({})),
+    changePassword: vi.fn(async (..._a: unknown[]) => ({})),
     ...over,
   });
   const neverResolves = async (p: Promise<unknown>) => {
@@ -202,7 +225,7 @@ describe("ensureSignedIn on the fake DOM", () => {
     expect(el("user").hidden).toBe(false);
     expect(el("user").textContent).toContain("Ann");
     const buttons = el("user").all("button");
-    expect(buttons.map((b) => b.textContent)).toEqual(["Sign out"]);
+    expect(buttons.map((b) => b.textContent)).toEqual(["Change password", "Sign out"]);
     expect((document.body as unknown as FakeElement).classList.contains("signed-out")).toBe(false);
     await apiMod.api.saveConfig({});
     expect(sent()[0]!.headers["x-csrf-token"]).toBe("csrf-1");
@@ -211,7 +234,7 @@ describe("ensureSignedIn on the fake DOM", () => {
   it("the sign-out button signs out and reloads", async () => {
     const a = fakeApi(SESSION);
     await auth.ensureSignedIn(a, reload);
-    el("user").all("button")[0]!.click();
+    el("user").all("button")[1]!.click();
     await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
     expect(a.signOut).toHaveBeenCalledTimes(1);
   });
@@ -219,9 +242,51 @@ describe("ensureSignedIn on the fake DOM", () => {
   it("a failed sign-out shows the text and does not reload", async () => {
     const a = fakeApi(SESSION, { signOut: vi.fn(async () => { throw new Error("bad CSRF token"); }) });
     await auth.ensureSignedIn(a, reload);
-    el("user").all("button")[0]!.click();
+    el("user").all("button")[1]!.click();
     await vi.waitFor(() => expect(el("toast").textContent).toBe("bad CSRF token"));
     expect(reload).not.toHaveBeenCalled();
+  });
+
+  describe("the Change password dialog", () => {
+    const dialog = () => el("modal-root");
+    const dialogForm = () => dialog().all("form")[0]!;
+    const open = async (changePassword: unknown) => {
+      const a = fakeApi(SESSION, { changePassword });
+      await auth.ensureSignedIn(a, reload);
+      el("user").all("button")[0]!.click();
+      await vi.waitFor(() => expect(dialog().all("form")).toHaveLength(1));
+      return a;
+    };
+    const fillDialog = (values: string[]) => dialog().all("input").forEach((i, n) => (i.value = values[n]!));
+    const GOOD = "long-enough-password";
+
+    it("shows a server error and stays open", async () => {
+      const a = await open(vi.fn(async () => { throw new Error("the current password is wrong"); }));
+      expect(dialog().all("input").map((i) => i.attrs.autocomplete)).toEqual(["current-password", "new-password", "new-password"]);
+      fillDialog(["old-password-here", GOOD, GOOD]);
+      dialogForm().fire("submit", { preventDefault: vi.fn() });
+      await vi.waitFor(() => expect(withClass(dialog(), "p", "bad")[0]!.textContent).toBe("the current password is wrong"));
+      expect(dialog().all("form")).toHaveLength(1);
+      expect(dialog().all("button").find((b) => b.textContent === "Change password")!.disabled).toBe(false);
+      expect(a.changePassword).toHaveBeenCalledExactlyOnceWith("old-password-here", GOOD);
+    });
+
+    it("checks the input before it sends", async () => {
+      const a = await open(vi.fn(async () => ({})));
+      fillDialog(["old-password-here", "short", "short"]);
+      dialogForm().fire("submit", { preventDefault: vi.fn() });
+      await vi.waitFor(() => expect(withClass(dialog(), "p", "bad")[0]!.textContent).toBe("The password must be at least 12 characters."));
+      expect(a.changePassword).not.toHaveBeenCalled();
+    });
+
+    it("closes with a toast on success", async () => {
+      const a = await open(vi.fn(async () => ({})));
+      fillDialog(["old-password-here", GOOD, GOOD]);
+      dialogForm().fire("submit", { preventDefault: vi.fn() });
+      await vi.waitFor(() => expect(dialog().all("form")).toHaveLength(0));
+      expect(el("toast").textContent).toContain("Password changed");
+      expect(a.changePassword).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("signed out: shows the sign-in form and waits", async () => {
@@ -252,6 +317,24 @@ describe("ensureSignedIn on the fake DOM", () => {
     await vi.waitFor(() => expect(line().textContent).toBe("wrong e-mail or password"));
     expect(button.disabled).toBe(false);
     expect(reload).not.toHaveBeenCalled();
+  });
+
+  it("the sign-in form says what to do after a forgotten password; the setup and link forms do not", async () => {
+    void auth.ensureSignedIn(fakeApi({ user: null, setupNeeded: false }), reload);
+    await vi.waitFor(() => expect(form()).toBeDefined());
+    expect(form().textContent).toContain(auth.FORGOT_TEXT);
+    restore();
+    restore = installFakeDom();
+    void auth.ensureSignedIn(fakeApi({ user: null, setupNeeded: true }), reload);
+    await vi.waitFor(() => expect(form()).toBeDefined());
+    expect(form().textContent).not.toContain(auth.FORGOT_TEXT);
+    restore();
+    restore = installFakeDom();
+    const page = { hash: () => "#/set-password/abc", clearHash: vi.fn(), onHashChange: vi.fn() };
+    void auth.ensureSignedIn(fakeApi({ user: null, setupNeeded: false }), reload, page);
+    await vi.waitFor(() => expect(form()).toBeDefined());
+    expect(form().all("h2")[0]!.textContent).toBe("Choose your password");
+    expect(form().textContent).not.toContain(auth.FORGOT_TEXT);
   });
 
   it("setup: asks for the admin account and checks the passwords first", async () => {

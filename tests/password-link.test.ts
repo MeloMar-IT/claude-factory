@@ -30,6 +30,7 @@ const PW = "test-password-12345";
 const PW2 = "test-other-password-678";
 const DEAD = { error: "this link is not valid any more; ask your admin for a new one" };
 const INTERNAL = { error: "sign-in is not working; see the server log" };
+const COMMON = "password1234";
 const BAD_LOGIN = { error: "wrong e-mail or password" };
 
 let home: string;
@@ -83,7 +84,7 @@ describe("createUserWithLink", () => {
   it("returns a token and an end time, and stores only the hash of the token", async () => {
     const before = Date.now();
     const r = await createUserWithLink(newcomer());
-    expect(LINK_TTL_MS).toBe(604800000);
+    expect(LINK_TTL_MS).toBe(86400000);
     expect(r.token).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect(Date.parse(r.expires) - before).toBeGreaterThanOrEqual(LINK_TTL_MS);
     expect(Date.parse(r.expires) - Date.now()).toBeLessThanOrEqual(LINK_TTL_MS);
@@ -347,9 +348,15 @@ interface Srv {
   close: () => void;
 }
 
+/** The clock of the sign-in waits: fixed until a test moves it. */
+let now = 0;
+/** Client addresses for the tests (the server trusts these headers from loopback). */
+const from = (n: number) => ({ "x-forwarded-proto": "https", "x-forwarded-for": `10.0.0.${n}` });
+
 async function boot(): Promise<Srv> {
   const logs: string[] = [];
-  const opts = { repo: home, runsDir: join(home, "runs"), claudeBin: resolve("tests/fixtures/fake-claude.mjs"), watchers: false, log: (m: string) => void logs.push(m) };
+  now = Date.now();
+  const opts = { repo: home, runsDir: join(home, "runs"), claudeBin: resolve("tests/fixtures/fake-claude.mjs"), watchers: false, log: (m: string) => void logs.push(m), signInClock: () => now };
   for (let i = 0; ; i++) {
     const port = 20000 + Math.floor(Math.random() * 20000);
     try {
@@ -378,7 +385,7 @@ const mk = async (...args: Parameters<typeof createUserWithLink>) => {
   return r;
 };
 const setPw = (s: Srv, token: unknown, password: unknown = PW2, headers: Record<string, string> = {}) => post(s, "/api/set-password", { token, password }, headers);
-const signIn = (s: Srv, email: string, password: string) => post(s, "/api/session", { email, password });
+const signIn = (s: Srv, email: string, password: string, headers: Record<string, string> = {}) => post(s, "/api/session", { email, password }, headers);
 /** The status, body and cookies of a response, for comparing two answers. */
 const shape = async (r: Response) => ({ status: r.status, body: await r.json(), cookies: r.headers.getSetCookie() });
 
@@ -425,17 +432,43 @@ describe("POST /api/set-password", () => {
 
   it("clears the wrong tries of the e-mail when the link is used", async () => {
     const r = await mk(newcomer());
-    for (let i = 0; i < 10; i++) expect((await signIn(s, "new@example.com", "wrong-password-123")).status).toBe(401);
-    expect(await shape(await signIn(s, "new@example.com", "wrong-password-123"))).toEqual({
+    for (let i = 0; i < 5; i++) expect((await signIn(s, "new@example.com", "wrong-password-123", from(1))).status).toBe(401);
+    expect(await shape(await signIn(s, "new@example.com", "wrong-password-123", from(2)))).toEqual({
       status: 429,
-      body: { error: "too many wrong tries; wait 15 minutes" },
+      body: { error: "too many tries; try again in 1 second" },
       cookies: [],
     });
     // a dead token does not clear the count
-    expect((await setPw(s, "A".repeat(43))).status).toBe(400);
-    expect((await signIn(s, "new@example.com", PW2)).status).toBe(429);
+    expect((await setPw(s, "A".repeat(43), PW2, from(3))).status).toBe(400);
+    expect((await signIn(s, "new@example.com", PW2, from(4))).status).toBe(429);
+    expect((await setPw(s, r.token, PW2, from(5))).status).toBe(200);
+    expect((await signIn(s, "new@example.com", PW2, from(6))).status).toBe(200);
+  });
+
+  it("refuses a common password and keeps the link; the tries are given back", async () => {
+    const r = await mk(newcomer());
+    for (let i = 0; i < 6; i++) {
+      const res = await setPw(s, r.token, COMMON, from(1));
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toContain("too common");
+    }
+    expect((await setPw(s, r.token, PW2, from(1))).status).toBe(200);
+  });
+
+  it("waits after five dead tokens from one client, and the wait covers sign-in too", async () => {
+    for (let i = 0; i < 5; i++) expect((await setPw(s, "A".repeat(43), PW2, from(1))).status).toBe(400);
+    const res = await setPw(s, "A".repeat(43), PW2, from(1));
+    expect(res.status).toBe(429);
+    expect(await res.json()).toEqual({ error: "too many tries; try again in 1 second" });
+    expect((await signIn(s, "x@example.com", PW, from(1))).status).toBe(429);
+    now += 1000;
+    expect((await setPw(s, "A".repeat(43), PW2, from(1))).status).toBe(400);
+  });
+
+  it("still accepts a link whose stored end is 25 hours ahead (made before the upgrade)", async () => {
+    const r = await mk(newcomer());
+    editLink(r.token, { expires: new Date(Date.now() + 25 * 3600 * 1000).toISOString() });
     expect((await setPw(s, r.token)).status).toBe(200);
-    expect((await signIn(s, "new@example.com", PW2)).status).toBe(200);
   });
 
   it("answers every dead link the same way", async () => {
@@ -451,9 +484,10 @@ describe("POST /api/set-password", () => {
     const gone = await mk(newcomer({ email: "gone@example.com" }));
     deleteUser(gone.user.id);
     const tokens: unknown[] = [undefined, null, 5, "", "   ", r.token.slice(0, 42), "!".repeat(43), "A".repeat(43), used.token, expired.token, replaced.token, blocked.token, gone.token];
+    let n = 10;
     for (const token of tokens) {
       const body = token === undefined ? { password: PW2 } : { token, password: "short" };
-      const res = await post(s, "/api/set-password", body);
+      const res = await post(s, "/api/set-password", body, from(++n));
       expect(res.status, String(token)).toBe(400);
       expect(await res.json(), String(token)).toEqual(DEAD);
     }
@@ -469,7 +503,7 @@ describe("POST /api/set-password", () => {
     }
     const short = await setPw(s, r.token, "short");
     expect(short.status).toBe(400);
-    expect((await short.json()).error).toContain("10 to 200 characters");
+    expect((await short.json()).error).toContain("12 to 200 characters");
     expect((await setPw(s, r.token)).status).toBe(200);
   });
 
@@ -479,14 +513,6 @@ describe("POST /api/set-password", () => {
     expect(plain.status).toBe(415);
     expect((await setPw(s, r.token, PW2, { origin: "http://evil.example" })).status).toBe(403);
     expect((await setPw(s, r.token)).status).toBe(200);
-  });
-
-  it("counts every try per client, shared with sign-in", async () => {
-    for (let i = 0; i < 60; i++) expect((await setPw(s, "A".repeat(43))).status).toBe(400);
-    const res = await setPw(s, "A".repeat(43));
-    expect(res.status).toBe(429);
-    expect(await res.json()).toEqual({ error: "too many tries; wait 15 minutes" });
-    expect((await signIn(s, "x@example.com", PW)).status).toBe(429);
   });
 
   it("answers 500 when users.json cannot be written, and the link is not used up", async () => {

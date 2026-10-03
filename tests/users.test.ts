@@ -5,11 +5,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { StoreError, withAuthLock, writeJsonFile } from "../src/auth/store.js";
+import { COMMON_PASSWORDS } from "../src/auth/common-passwords.js";
 import {
-  createUser, findUserByEmail, getUser, hasAdmin, hashPassword, listUsers, publicUser, setPassword, setStatus, usersPath, verifyPassword, UserError,
+  PASSWORD_MIN, checkPassword, createUser, findUserByEmail, getUser, hasAdmin, hashPassword, listUsers, publicUser, setPassword, setStatus, usersPath, verifyPassword, UserError,
 } from "../src/auth/users.js";
 
 const PW = "test-password-12345";
+const COMMON = "password1234";
 const isRoot = process.getuid?.() === 0;
 let home: string;
 let savedHome: string | undefined;
@@ -91,13 +93,38 @@ describe("password hash", () => {
   });
 });
 
+describe("password rules", () => {
+  it("refuses 11 characters and accepts 12 and 200", () => {
+    expect(PASSWORD_MIN).toBe(12);
+    expect(() => checkPassword("x".repeat(11))).toThrow(/12 to 200 characters/);
+    expect(() => checkPassword("x".repeat(12))).not.toThrow();
+    expect(() => checkPassword("x".repeat(200))).not.toThrow();
+    expect(() => checkPassword("x".repeat(201))).toThrow();
+  });
+
+  it("refuses a common password in any case", () => {
+    expect(() => checkPassword(COMMON)).toThrow(/too common/);
+    expect(() => checkPassword(COMMON.toUpperCase())).toThrow(/too common/);
+    expect(() => checkPassword(`${COMMON}x`)).not.toThrow();
+  });
+
+  it("has a list of lower-case entries of at least 12 characters", () => {
+    expect(COMMON_PASSWORDS.size).toBeGreaterThanOrEqual(80);
+    for (const p of COMMON_PASSWORDS) {
+      expect(p, p).toBe(p.toLowerCase());
+      expect(p.length, p).toBeGreaterThanOrEqual(12);
+    }
+  });
+});
+
 describe("createUser", () => {
   it("rejects bad input and creates nothing", async () => {
     expect(await code(createUser(ann({ name: "" })))).toBe("bad-name");
     expect(await code(createUser(ann({ name: "x".repeat(101) })))).toBe("bad-name");
     expect(await code(createUser(ann({ name: "a\nb" })))).toBe("bad-name");
     for (const email of ["a@b", "a b@c.de", `${"x".repeat(250)}@b.de`]) expect(await code(createUser(ann({ email })))).toBe("bad-email");
-    expect(await code(createUser(ann({ password: "x".repeat(9) })))).toBe("bad-password");
+    expect(await code(createUser(ann({ password: "x".repeat(11) })))).toBe("bad-password");
+    expect(await code(createUser(ann({ password: COMMON })))).toBe("bad-password");
     expect(await code(createUser(ann({ password: "x".repeat(201) })))).toBe("bad-password");
     expect(readdirSync(home)).toEqual([]);
   });

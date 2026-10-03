@@ -9,7 +9,7 @@ import { homeMoved } from "../home.js";
 import { Scheduler } from "../queue/scheduler.js";
 import { steppedAsideFor } from "../queue/watcher.js";
 import { WatcherManager } from "../queue/watchers.js";
-import { SESSION_RECHECK_MS, authRoutes, requireSession, sessionAlive } from "./api-auth.js";
+import { SESSION_RECHECK_MS, authRoutes, passwordRoutes, requireSession, sessionAlive } from "./api-auth.js";
 import { adminRoutes } from "./api-admin.js";
 import { credentialRoutes } from "./api-credentials.js";
 import { flowRoutes } from "./api-flows.js";
@@ -53,6 +53,8 @@ export interface ServerOptions {
   accountSweepMs?: number;
   /** How often dropped refinement sessions past their 30 days are removed, in ms (default 600000). */
   refinementSweepMs?: number;
+  /** The clock of the sign-in waits and locks, in ms (default Date.now). A test moves it. */
+  signInClock?: () => number;
 }
 
 export interface ApiContext {
@@ -75,7 +77,7 @@ export interface ApiContext {
 /** A route handler: returns true when it handled the request. */
 export type Route = (ctx: ApiContext, req: IncomingMessage, res: ServerResponse, seg: string[], method: string, user: User) => Promise<boolean>;
 
-const ROUTES: Route[] = [credentialRoutes, repoRoutes, refinementRoutes, userRoutes, adminRoutes, flowRoutes, runRoutes, nextRoutes, yourTurnRoutes, turnActionRoutes, sinceRoutes, boardRoutes, healthRoutes, clarityRoutes];
+const ROUTES: Route[] = [passwordRoutes, credentialRoutes, repoRoutes, refinementRoutes, userRoutes, adminRoutes, flowRoutes, runRoutes, nextRoutes, yourTurnRoutes, turnActionRoutes, sinceRoutes, boardRoutes, healthRoutes, clarityRoutes];
 
 export async function startServer(given: ServerOptions): Promise<{ url: string; close: () => void; ctx: ApiContext; notifier?: TurnNotifier }> {
   // every free-form server, watcher and notifier log line passes the redaction (fail closed)
@@ -174,7 +176,10 @@ export async function startServer(given: ServerOptions): Promise<{ url: string; 
     if (path.startsWith("/api/")) {
       api(req, res, path).catch((e: Error) => {
         const status = e instanceof HttpError ? e.status : 400;
-        if (!res.headersSent) send(res, status, { error: e.message });
+        if (!res.headersSent) {
+          if (e instanceof HttpError) for (const [k, v] of Object.entries(e.headers ?? {})) res.setHeader(k, v);
+          send(res, status, { error: e.message });
+        }
         else res.end();
       });
       return;

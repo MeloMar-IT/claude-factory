@@ -1,7 +1,10 @@
 import { api, setCsrf } from "./api.js";
-import { h, mount, toast } from "./dom.js";
+import { h, modal, mount, toast } from "./dom.js";
 
-const PASSWORD_MIN = 10;
+const PASSWORD_MIN = 12;
+
+/** The line under the sign-in form. */
+export const FORGOT_TEXT = "Forgot your password? Ask an admin for a new set-password link.";
 
 const LINK_PREFIX = "#/set-password/";
 
@@ -29,6 +32,12 @@ export function formProblem(kind, v) {
     if (v.password !== v.repeat) return "The two passwords are not the same.";
     return "";
   }
+  if (kind === "change") {
+    if (!v.current) return "Type your current password.";
+    if (String(v.password ?? "").length < PASSWORD_MIN) return `The password must be at least ${PASSWORD_MIN} characters.`;
+    if (v.password !== v.repeat) return "The two passwords are not the same.";
+    return "";
+  }
   if (kind === "setup") {
     if (!text(v.name) || !text(v.email)) return "Fill in your name and e-mail.";
     if (String(v.password ?? "").length < PASSWORD_MIN) return `The password must be at least ${PASSWORD_MIN} characters.`;
@@ -50,12 +59,43 @@ export async function submitForm(a, kind, v) {
   if (problem) return problem;
   try {
     if (kind === "password") await a.setPassword(v.token, v.password);
+    else if (kind === "change") await a.changePassword(v.current, v.password);
     else if (kind === "setup") await a.setup(v.name.trim(), v.email.trim(), v.password);
     else await a.signIn(v.email.trim(), v.password);
     return "";
   } catch (e) {
     return errorText(e);
   }
+}
+
+/**
+ * The Change password dialog. A server error shows in the dialog and it stays open; on success it closes with a toast.
+ * Resolves true after a change, else false.
+ */
+export function changePasswordDialog(a = api) {
+  return modal("Change password", (close) => {
+    const input = (name, label, autocomplete) => ({ name, el: h("input", { name, type: "password", autocomplete }), label });
+    const fields = [input("current", "Current password", "current-password"), input("password", "New password", "new-password"), input("repeat", "Repeat new password", "new-password")];
+    const error = h("p", { class: "status bad" });
+    const button = h("button", { type: "submit", class: "primary" }, "Change password");
+    const onSubmit = async (e) => {
+      e.preventDefault();
+      button.disabled = true;
+      const problem = await submitForm(a, "change", Object.fromEntries(fields.map((f) => [f.name, f.el.value])));
+      if (problem) {
+        error.textContent = problem;
+        button.disabled = false;
+        return;
+      }
+      toast("Password changed. Your other sessions are signed out.");
+      close(true);
+    };
+    return h("form", { class: "stack", onSubmit },
+      h("p", { class: "muted" }, `At least ${PASSWORD_MIN} characters. Your other sessions are signed out.`),
+      fields.map((f) => h("div", {}, h("label", {}, f.label), f.el)),
+      error,
+      button);
+  }).then((v) => v === true);
 }
 
 /** Signs out. Returns "" (after calling reload) on success, else the text to show. */
@@ -119,6 +159,7 @@ function renderForm(a, kind, reload, { state, page, token, note } = {}) {
     fields.map((f) => h("div", {}, f.label, f.el)),
     error,
     button,
+    kind === "signin" ? h("p", { class: "muted" }, FORGOT_TEXT) : null,
   );
   mount(document.getElementById("main"), form);
 }
@@ -170,7 +211,8 @@ export async function ensureSignedIn(a = api, reload = () => location.reload(), 
     "Sign out",
   );
   const box = document.getElementById("user");
-  mount(box, h("span", {}, session.user.name), out);
+  const change = h("button", { class: "small", type: "button", onClick: () => changePasswordDialog(a) }, "Change password");
+  mount(box, h("span", {}, session.user.name), change, out);
   box.hidden = false;
   return session.user;
 }

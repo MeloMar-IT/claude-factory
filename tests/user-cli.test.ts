@@ -11,6 +11,7 @@ import { createUserWithLink, listUsers, startSession, verifyPassword } from "../
 const CLI = resolve("dist/cli.js");
 const PW = "test-password-12345";
 const PW2 = "test-other-password-678";
+const COMMON = "password1234";
 let tmp: string;
 let home: string;
 const mode = (p: string) => statSync(p).mode & 0o777;
@@ -73,6 +74,15 @@ describe("scf user (child process)", () => {
     expect(create("b@example.com", [], "short").code).toBe(1);
     expect(run(["user", "create", "--name", "B", "--email", "b@example.com"], "").code).toBe(1);
     expect(run(["user", "create", "--name", "B"], PW + "\n").code).toBe(1);
+    expect(readFileSync(usersFile())).toEqual(before);
+  });
+
+  it("refuses a common password for create and for password, and changes nothing", () => {
+    expect(create("b@example.com", [], COMMON).code).toBe(1);
+    expect(existsSync(usersFile())).toBe(false);
+    expect(create().code).toBe(0);
+    const before = readFileSync(usersFile());
+    expect(run(["user", "password", "ann@example.com"], COMMON + "\n").code).toBe(1);
     expect(readFileSync(usersFile())).toEqual(before);
   });
 
