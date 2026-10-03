@@ -244,6 +244,13 @@ describe("the page", () => {
     expect(sent).toEqual([]);
   });
 
+  it("spaces the dialog like the other dialogs", async () => {
+    await show();
+    press(button(main(), "+ Add repository"));
+    expect(field(root(), "url")!.parent!.parent!.style).toMatchObject({ display: "grid", gap: "12px" });
+    expect(field(root(), "token")!.parent!.parent!.style).toMatchObject({ display: "grid", gap: "12px" });
+  });
+
   it.each([
     [400, "not a repository address: nope"],
     [409, "that repository belongs to another account"],
@@ -502,6 +509,15 @@ describe("late answers", () => {
     gate.forEach((r) => r());
     await loading;
     expect(main().textContent).toBe("Runs page");
+  });
+
+  it.each(["#/repos/x", "#/%72epos/x"])("draws the list on a longer address %s", async (hash) => {
+    (globalThis as any).location = { hash };
+    repos = [rec()];
+    main().textContent = "old page";
+    await show(true);
+    expect(main().textContent).toContain("https://github.com/o/a");
+    expect(main().textContent).not.toContain("old page");
   });
 
   it("drops the answer of a load that a cleanup has cancelled", async () => {

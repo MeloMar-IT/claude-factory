@@ -97,7 +97,7 @@ export function repoDialog({ admin = false, methods = methodsFor(admin), repo } 
     const values = repo ? { ...repo } : {};
     delete values.token;
     let els = {};
-    const area = h("div", {});
+    const area = h("div", { style: { display: "grid", gap: "12px" } });
     const err = h("p", { class: "status bad", style: { margin: 0 } });
     const draw = () => {
       const m = methodOf(methods, select.value);
@@ -154,7 +154,7 @@ export function repoDialog({ admin = false, methods = methodsFor(admin), repo } 
       })();
     };
     const save = h("button", { class: "primary", onClick: run }, repo ? "Save" : "Add repository");
-    return h("div", { class: "modal-body" },
+    return h("div", { style: { display: "grid", gap: "12px" } },
       repo ? h("p", { class: "mono" }, repo.url) : h("label", { class: "field" }, h("span", {}, "Repository URL"), urlInput),
       h("label", { class: "field" }, h("span", {}, "Authentication"), select),
       area, err, h("div", { class: "row" }, h("span", { class: "spacer" }), save));
@@ -174,7 +174,14 @@ async function whileBusy(btn, fn) {
 
 // Each load gets a number; an answer that is not the newest load, or that arrives after the person left the page, is dropped.
 let generation = 0;
-const onPage = () => typeof location === "undefined" || location.hash === "#/repos";
+const onPage = () => {
+  if (typeof location === "undefined") return true;
+  try {
+    return decodeURIComponent(location.hash.split("/")[1] ?? "") === "repos";
+  } catch {
+    return false;
+  }
+};
 
 /** The My repositories page. `notice` ({ text, retryId }) is a message kept from the last removal. Returns a cleanup. */
 export async function renderRepos(main, { admin = false, notice } = {}) {
