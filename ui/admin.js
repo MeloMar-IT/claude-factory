@@ -264,6 +264,8 @@ export async function renderSettings(main) {
   const secrets = check(c.secret_scan !== false, "Block pushes that add secrets (API keys, tokens, private keys, .env files)");
   const hotfix = check(c.hotfix_to_main === true, "Hotfixes: build bug stories on a hotfix branch and merge them into main without a person (only the unchanged built-in issue-gitflow)");
   const sbxImage = input(c.sandbox.docker_image ?? "", { class: "mono", placeholder: "e.g. node:22" });
+  const selfUpdate = check(c.self_update?.enabled === true, "Self-update: when main of the Foundry's own repository has new commits, build and test them and restart on the new version without a person");
+  const selfRepo = input(c.self_update?.repo ?? "", { class: "mono", placeholder: "owner/name" });
   const net = c.server ?? { listen: "127.0.0.1", allowed_hosts: [], allow_insecure_http: false };
   const listenSel = h("select", {}, ["127.0.0.1", "::1", "0.0.0.0", "::"].map((a) => h("option", { value: a }, a)));
   listenSel.value = net.listen;
@@ -281,6 +283,7 @@ export async function renderSettings(main) {
       protected_branches: protectedB.value.split(",").map((s) => s.trim()).filter(Boolean),
       secret_scan: secrets.el.checked,
       hotfix_to_main: hotfix.el.checked,
+      self_update: { enabled: selfUpdate.el.checked, repo: selfRepo.value.trim() || undefined },
       notify: notifyFrom({
         macos: macos.el.checked, slack: slack.value, command: cmd.value, on: on.filter(([, x]) => x.el.checked).map(([s]) => s),
         successes: successes.el.checked, throttle: throttle.value, quietFrom: quietFrom.value, quietTo: quietTo.value, summaryAt: summaryAt.value,
@@ -320,6 +323,8 @@ export async function renderSettings(main) {
       f("Protected branches", protectedB, "Pushes to these are refused during runs (glob patterns, comma-separated). Also enable branch protection on GitHub."),
       secrets.row,
       hotfix.row,
+      selfUpdate.row,
+      f("Repository the Foundry may update from", selfRepo, "owner/name. Updates come only when the checkout's origin is this repository. Needs one stop and start of the Foundry after upgrading."),
       sbxClaude.row,
       f("Docker image for sandboxed shell steps", sbxImage, "Steps marked “Run in Docker” (like tests) run in this image with only the workspace mounted.")),
     section("Notifications",

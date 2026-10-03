@@ -37,6 +37,7 @@ interface Setup {
   config?: Record<string, unknown>;
   runsDir?: string;
   get?: (id: string) => Partial<RunSummary> | undefined;
+  selfUpdate?: ApiContext["selfUpdate"];
 }
 const ctxOf = (s: Setup = {}): ApiContext => {
   const runs = s.runs ?? [];
@@ -44,6 +45,7 @@ const ctxOf = (s: Setup = {}): ApiContext => {
   return {
     opts: { runsDir: s.runsDir ?? "/nonexistent" },
     restart: s.restart,
+    selfUpdate: s.selfUpdate,
     config: () => ConfigSchema.parse({ protected_branches: [], ...s.config }),
     scheduler: {
       list: () => runs,
@@ -57,6 +59,24 @@ const ctxOf = (s: Setup = {}): ApiContext => {
   } as unknown as ApiContext;
 };
 const kinds = (h: ReturnType<typeof health>) => h.problems.map((p) => p.kind);
+
+describe("health(): version and update", () => {
+  it("shows the version and the update line, and they are not problems", () => {
+    const view = { version: { commit: "a".repeat(40), date: "2026-10-01T10:00:00Z" }, update: { waiting: true, commit: "b".repeat(40), text: "An update is waiting (bbbbbbb): the checkout has local changes." } };
+    const h = health(ctxOf({ selfUpdate: { view: () => view } }), NOW);
+    expect(h.ok).toBe(true);
+    expect(h.summary).toBe("All good");
+    expect(h.problems).toEqual([]);
+    expect(h.version).toEqual(view.version);
+    expect(h.update).toEqual(view.update);
+  });
+
+  it("leaves both out when the server has no updater", () => {
+    const h = health(ctxOf(), NOW);
+    expect("version" in h).toBe(false);
+    expect("update" in h).toBe(false);
+  });
+});
 
 describe("health()", () => {
   const dirs: string[] = [];

@@ -17,6 +17,7 @@ import { runRoutes } from "./api-runs.js";
 import { HttpError, send, serveStatic } from "./http.js";
 import { areaWait, forgetHistory, nextRoutes, type RestartState } from "./next.js";
 import { healthRoutes } from "./health.js";
+import type { UpdateView } from "../self-update.js";
 import { boardRoutes } from "./board.js";
 import { TurnNotifier } from "./notifier.js";
 import { ClarityRecorder, clarityRoutes } from "./clarity.js";
@@ -60,6 +61,8 @@ export interface ApiContext {
   reloadConfig: () => void;
   /** Set while the server waits to restart (new version, moved data folder). */
   restart?: RestartState;
+  /** The self-updater of the running server: which version runs and whether an update waits. */
+  selfUpdate?: { view(): UpdateView };
   /** The address the server is bound to (a changed setting applies after a restart). */
   listen: string;
   /**

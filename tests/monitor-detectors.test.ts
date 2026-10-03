@@ -278,3 +278,36 @@ describe("runDetectors", () => {
     expect(JSON.stringify(out[0])).not.toContain("/Users/me");
   });
 });
+
+describe("self-update", () => {
+  const sha = "a".repeat(40);
+  const failed = (over: Record<string, unknown> = {}) => ({ commit: sha, stage: "test", at: "2026-10-01T11:00:00.000Z", lines: ["1 failed"], ...over });
+  const check = (state: Record<string, unknown>, broken = false) => find("self-update", { update: { state: state as never, broken } });
+
+  it("finds nothing without a failed update", () => {
+    expect(find("self-update")).toEqual([]);
+    expect(check({})).toEqual([]);
+    expect(check({ updated: { from: sha, to: sha, at: "x" } })).toEqual([]);
+  });
+
+  it("is major when the old version keeps running", () => {
+    const [f] = check({ failed: failed() });
+    expect(f).toMatchObject({
+      severity: "major", fingerprint: "self-update|test", about: "foundry",
+      summary: "The update to aaaaaaa failed at test; the old version keeps running.",
+      evidence: { counts: { failed: 1 }, times: ["2026-10-01T11:00:00.000Z"], steps: ["test"], lines: ["1 failed"] },
+    });
+  });
+
+  it("is critical when the new version did not start healthy", () => {
+    const [f] = check({ failed: failed({ stage: "start", back: "b".repeat(40), backOk: true }) });
+    expect(f).toMatchObject({ severity: "critical", fingerprint: "self-update|start", summary: "The update to aaaaaaa did not start healthy; the Foundry went back to the version before it." });
+  });
+
+  it("is critical when it could not go back, and when the record is broken", () => {
+    const [f] = check({ failed: failed({ stage: "start", backOk: false }) });
+    expect(f).toMatchObject({ severity: "critical", summary: "The update to aaaaaaa failed and the Foundry could not go back to the version before it; the checkout must be repaired by hand." });
+    const [b] = check({}, true);
+    expect(b).toMatchObject({ severity: "critical", fingerprint: "self-update|state", summary: "The self-update record could not be read; self-update is stopped until a person checks the checkout." });
+  });
+});

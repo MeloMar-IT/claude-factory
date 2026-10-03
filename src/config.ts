@@ -3,6 +3,7 @@ import { isIP } from "node:net";
 import { dirname, join } from "node:path";
 import { parse, stringify } from "yaml";
 import { z } from "zod";
+import { validGithubName } from "./auth/repo-url.js";
 import { FACTORY_HOME } from "./flow/load.js";
 
 const WatcherSchema = z
@@ -185,6 +186,16 @@ const ServerSchema = z
   .strict()
   .prefault({});
 
+const SelfUpdateSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    /** "owner/name": updates come only when the checkout's origin is this GitHub repository. */
+    repo: z.string().refine(validGithubName, "not a GitHub repository name (owner/name)").optional(),
+  })
+  .strict()
+  .refine((u) => !u.enabled || u.repo, { message: "name the repository the Foundry may update from (owner/name)", path: ["repo"] })
+  .prefault({});
+
 export const ConfigSchema = z
   .object({
     /** Where and for whom the web UI is reachable. */
@@ -266,6 +277,8 @@ export const ConfigSchema = z
     watchers: z.array(WatcherSchema).default([]),
     /** Thresholds of the monitor watcher. */
     monitor: MonitorSchema.prefault({}),
+    /** The running Foundry updates itself from main of its own repository after a hotfix. Off by default. */
+    self_update: SelfUpdateSchema,
   })
   .strict()
   .superRefine((c, ctx) => {
@@ -277,6 +290,7 @@ export const ConfigSchema = z
 
 export type Config = z.infer<typeof ConfigSchema>;
 export type ServerConfig = z.infer<typeof ServerSchema>;
+export type SelfUpdateConfig = z.infer<typeof SelfUpdateSchema>;
 export type MonitorConfig = z.infer<typeof MonitorSchema>;
 export type WatcherConfig = z.infer<typeof WatcherSchema>;
 export type ProviderConfig = z.infer<typeof ProviderSchema>;

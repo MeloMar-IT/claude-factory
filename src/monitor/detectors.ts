@@ -5,6 +5,7 @@ import { classifyFailure, failedIndex } from "../failure.js";
 import type { RateReading } from "../github.js";
 import type { Scheduler } from "../queue/scheduler.js";
 import { parseInterval, type WatcherStatus } from "../queue/watcher.js";
+import type { UpdateState } from "../self-update-state.js";
 import type { Evidence, FindingInput, Severity } from "./findings.js";
 
 export interface LogLine { at: string; text: string }
@@ -24,6 +25,8 @@ export interface DetectorInput {
   queue: ReturnType<Scheduler["queue"]>;
   /** The monitor's own id: its log lines are not evidence. */
   monitorId: string;
+  /** The record of the self-update (`broken`: it could not be read). */
+  update?: { state: UpdateState; broken: boolean };
 }
 
 export interface Detector {
@@ -245,7 +248,40 @@ const unexplainedFailure: Detector = {
   },
 };
 
-export const DETECTORS: Detector[] = [restartLoop, watcherError, githubLimit, watcherSilent, unexplainedFailure];
+/** The self-update failed (the old version keeps running), or it could not go back, or its record is broken. */
+const selfUpdate: Detector = {
+  name: "self-update",
+  run({ update }) {
+    if (!update) return [];
+    if (update.broken) {
+      return [{
+        detector: "self-update",
+        fingerprint: "self-update|state",
+        severity: "critical",
+        summary: "The self-update record could not be read; self-update is stopped until a person checks the checkout.",
+        evidence: { counts: { failed: 1 } },
+        about: "foundry",
+      }];
+    }
+    const f = update.state.failed;
+    if (!f) return [];
+    const sha = f.commit.slice(0, 7);
+    const [severity, summary]: [Severity, string] =
+      f.backOk === false ? ["critical", `The update to ${sha} failed and the Foundry could not go back to the version before it; the checkout must be repaired by hand.`]
+      : f.stage === "start" ? ["critical", `The update to ${sha} did not start healthy; the Foundry went back to the version before it.`]
+      : ["major", `The update to ${sha} failed at ${f.stage}; the old version keeps running.`];
+    return [{
+      detector: "self-update",
+      fingerprint: `self-update|${f.stage}`,
+      severity,
+      summary,
+      evidence: { counts: { failed: 1 }, times: [f.at], steps: [f.stage], lines: f.lines ?? [] },
+      about: "foundry",
+    }];
+  },
+};
+
+export const DETECTORS: Detector[] = [restartLoop, watcherError, githubLimit, watcherSilent, unexplainedFailure, selfUpdate];
 
 /** Hides what an error message of a crashed detector may hold: folders and long numbers. */
 const safeMessage = (e: unknown) => cleanLine(String((e as Error)?.message ?? e)).slice(0, 200);

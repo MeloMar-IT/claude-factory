@@ -1,6 +1,7 @@
 import { spentToday, type RunSummary } from "../engine/state.js";
 import { AGENTS } from "../flow/schema.js";
 import { briefFailure, FAILURE_SHOWN_MS, LIMIT_SHOWN_MS, nextStep, type NextStep } from "../next-step.js";
+import type { UpdateView } from "../self-update.js";
 import { supersededRuns } from "../stats.js";
 import { send } from "./http.js";
 import { nextFor, watcherProblem } from "./next.js";
@@ -14,6 +15,10 @@ export interface Health {
   problems: NextStep[];
   /** Per repository of an enabled watcher: the oldest last successful check (none when one watcher never had one). */
   repos: { repo: string; lastOk?: string }[];
+  /** The commit and date of the running version (a checkout only). */
+  version?: UpdateView["version"];
+  /** "An update is waiting" or why self-update does nothing. Not a problem: it does not change `ok`. */
+  update?: UpdateView["update"];
 }
 
 const RUNS = { label: "Runs page", url: "#/runs" };
@@ -116,7 +121,15 @@ export function health(ctx: ApiContext, now = new Date()): Health {
   const repos = [...lastOk].map(([repo, ok]) => (ok ? { repo, lastOk: ok } : { repo }));
 
   const list = problems.map(safe);
-  return { ok: list.length === 0, summary: list.length === 0 ? "All good" : list.length === 1 ? "1 problem" : `${list.length} problems`, problems: list, repos };
+  const self = ctx.selfUpdate?.view();
+  return {
+    ok: list.length === 0,
+    summary: list.length === 0 ? "All good" : list.length === 1 ? "1 problem" : `${list.length} problems`,
+    problems: list,
+    repos,
+    ...(self?.version ? { version: self.version } : {}),
+    ...(self?.update ? { update: self.update } : {}),
+  };
 }
 
 export const healthRoutes: Route = async (ctx, _req, res, seg, method) => {

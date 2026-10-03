@@ -264,6 +264,11 @@ async function setup(ctx: ApiContext, req: IncomingMessage, res: ServerResponse)
 /** The routes that need no session: GET/POST/DELETE /api/session, POST /api/setup and POST /api/set-password. */
 export async function authRoutes(ctx: ApiContext, req: IncomingMessage, res: ServerResponse, seg: string[], method: string): Promise<boolean> {
   if (seg.length !== 1) return false;
+  // Readiness for the supervisor after an update: no session, answered only to a program on this machine, says nothing.
+  if (seg[0] === "ready" && method === "GET") {
+    if (!isLoopback(req.socket.remoteAddress) || req.headers["x-forwarded-for"] !== undefined) throw new HttpError(404, "not found");
+    return send(res, 200, { ok: true }), true;
+  }
   if (seg[0] === "setup" && method === "POST") return await setup(ctx, req, res), true;
   if (seg[0] === "set-password" && method === "POST") return await setPasswordWithLink(ctx, req, res), true;
   if (seg[0] !== "session") return false;

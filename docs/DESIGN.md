@@ -374,6 +374,7 @@ Everything is in the data folder (`~/.spaghetti-code-foundry`):
 | `locks/` | Code-area and run locks |
 | `users.json`, `sessions.json` | Accounts and sign-in sessions |
 | `notifications.json` | What was already notified |
+| `self-update.json` | The self-update record: `pending` (an install not confirmed yet), `tested`, `failed`, `updated` |
 | `flows/` | Your own flows (repository flows live in `<repo>/.claude-factory/flows`) |
 
 Run ids are timestamps, so folders sort by time. Old workspaces are removed by `scf clean`.
@@ -384,7 +385,19 @@ Run ids are timestamps, so folders sort by time. Old workspaces are removed by `
 
 One process serves the web interface, runs the queue and the watchers. A supervisor notices a
 new build and restarts the server — but only when no run is active. Until then it starts no new
-runs and tells the user why. Runs that were interrupted continue after the restart.
+runs and tells the user why (`Scheduler.drain()` stops queued jobs from starting; they stay in
+`queue.json` for the new server). Runs that were interrupted continue after the restart.
+
+**Self-update.** With `self_update` on, the server (`SelfUpdater`) is the one that decides: it
+checks `main` of the named repository, builds and tests the new commit in a git worktree, and when
+the active runs are done installs that exact commit in place (`git merge --ff-only`, `npm ci` if
+the lock file changed, `npm run build`). It writes a journal first (`self-update.json`, `pending`
+with phase `apply`, then `installed` with the build stamp) and exits with the restart code. The
+supervisor guards the first start after an install: it reads the journal, finishes going back
+when an install was cut off, and puts the previous commit back once when the server stops or
+does not confirm in time. The new server confirms with `GET /api/ready` (loopback only) after it
+checked that `HEAD` and its build stamp are those of the install. A failed go-back is a terminal
+state (`failed.backOk = false`) that a person must repair. The monitor reads the same file.
 
 ---
 

@@ -378,7 +378,20 @@ export class Scheduler {
     writeFileSync(this.o.queueFile, JSON.stringify(this.pending, null, 2));
   }
 
+  /** Set while the server waits to restart: queued jobs stay saved and start in the new server. */
+  private paused = false;
+
+  /** From now on nothing starts. Active jobs go on; queued and newly submitted jobs wait in the queue file. */
+  drain(): void {
+    this.paused = true;
+  }
+
+  get draining(): boolean {
+    return this.paused;
+  }
+
   private pump() {
+    if (this.paused) return;
     const limit = this.o.config().concurrency;
     const states = new Map<string, boolean>();
     const held = (q: QueuedJob) => {

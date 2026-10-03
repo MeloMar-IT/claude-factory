@@ -275,3 +275,22 @@ describe("the monitor in the WatcherManager", () => {
     expect(rateCalls()).toBe(0);
   });
 });
+
+describe("monitor: self-update", () => {
+  it("stores a finding for a failed update", async () => {
+    const gh = fakeGithub();
+    try {
+      const file = join(gh.tmp, "monitor-findings.json");
+      const config = ConfigSchema.parse({});
+      const scheduler = new Scheduler({ runsDir: join(gh.tmp, "runs"), config: () => config });
+      const failed = { commit: "a".repeat(40), stage: "build" as const, at: new Date().toISOString() };
+      const m = new Monitor(WatcherSchema.parse({ id: "mon", source: "monitor", every: "5m" }), {
+        scheduler, watchers: () => [], thresholds: () => config.monitor, log: () => {}, file, selfUpdate: () => ({ state: { failed }, broken: false }),
+      });
+      await m.tick();
+      expect(loadFindings(file).findings.map((f) => f.fingerprint)).toEqual(["self-update|build"]);
+    } finally {
+      gh.restore();
+    }
+  });
+});

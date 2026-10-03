@@ -75,6 +75,7 @@ body > * { flex: none; }
 .health.bad { background: var(--fail-soft); }
 .health .holds { margin: 0; flex: 1 1 420px; }
 .health-repos { display: flex; flex-wrap: wrap; gap: 2px 14px; margin-left: auto; }
+.health-version { flex: 1 1 100%; }
 .user { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12.5px; white-space: nowrap; }
 .signed-out .top nav, .signed-out .repo, .signed-out aside, .signed-out .since, .signed-out .health { display: none; }
 .signed-out .layout { grid-template-columns: 1fr; }
