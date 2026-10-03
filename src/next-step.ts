@@ -10,7 +10,7 @@ export type NextKind =
   | "dependency" | "one_at_a_time" | "area_lock" | "usage_limit" | "daily_budget" | "release"
   | "failed" | "restart" | "watcher_error" | "watcher_stale" | "closed_elsewhere"
   | "running" | "queued" | "checking" | "starting" | "interrupted" | "cancelled" | "stopped" | "done"
-  | "superseded";
+  | "superseded" | "bug_first";
 
 export type NextWho = "You" | "Foundry" | "Another story" | "A time limit" | "Something is wrong";
 
@@ -195,6 +195,7 @@ function blockerClause(b: BlockerInfo): string {
     case "running": return "which is being worked on";
     case "queued": case "one_at_a_time": case "starting": case "checking": return "which is queued";
     case "area_lock": return "which waits for a code area";
+    case "bug_first": return "which waits for a bug story";
     case "usage_limit": case "daily_budget": return "which is paused by a limit";
     case "release": return n.until ? `which waits for the ${n.until}` : "which waits for the release pull request";
     case "failed": return "which failed";
@@ -472,6 +473,10 @@ export function nextStep(kind: NextKind, base: NextBase = {}, d: NextData = {}):
       w = runWhere ?? WATCHERS;
       break;
     }
+    case "bug_first":
+      who = "Another story";
+      why = "It waits: a bug story goes first"; say = "nothing to do, it continues by itself";
+      break;
     case "running":
       why = "It is being worked on"; say = "nothing to do, it continues by itself";
       break;
@@ -606,7 +611,7 @@ function stoppedStep(reason: string | undefined): string | undefined {
 
 export interface RunNextOptions extends NextData {
   /** Pending-job info from Scheduler.queue(). */
-  queued?: { waitingFor?: string };
+  queued?: { waitingFor?: string; behindPriority?: boolean };
   title?: string;
 }
 
@@ -620,7 +625,7 @@ export function runNextStep(run: RunSummary, o: RunNextOptions = {}): NextStep {
   const make = (k: NextKind, extra: NextData = {}) => nextStep(k, base, { ...d, ...extra });
   const reason = run.reason ?? "";
 
-  if (o.queued) return o.queued.waitingFor ? make("one_at_a_time", { blockingRun: o.queued.waitingFor }) : make("queued");
+  if (o.queued) return o.queued.waitingFor ? make("one_at_a_time", { blockingRun: o.queued.waitingFor }) : make(o.queued.behindPriority ? "bug_first" : "queued");
   if (o.superseded && run.status !== "running" && run.status !== "succeeded") return make("superseded");
   switch (run.status) {
     case "succeeded": return o.releaseAt ? make("release") : make("done");

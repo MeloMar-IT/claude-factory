@@ -20,6 +20,8 @@ const WatcherSchema = z
     label: z.string().default("claude-factory"),
     every: z.string().default("5m"),
     max_per_tick: z.number().int().positive().default(1),
+    /** issues: stories with one of these labels (not case sensitive) go before all other stories. */
+    priority_labels: z.array(z.string()).default(["bug"]),
     vars: z.record(z.string(), z.string()).default({}),
     /** schedule: what the chore should do (the run's task). */
     task: z.string().max(5000).optional(),

@@ -122,7 +122,7 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent-soft
 .pill { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; padding: 1px 8px; border-radius: 99px; background: var(--panel-2); color: var(--muted); font-weight: 550; white-space: nowrap; }
 .pill.claude { background: var(--accent-soft); color: var(--claude); }
 .pill.ok, .pill.kind-done, .pill.state-active { background: var(--ok-soft); color: var(--ok); }
-.pill.fail, .pill.state-error { background: var(--fail-soft); color: var(--fail); }
+.pill.fail, .pill.state-error, .pill.first { background: var(--fail-soft); color: var(--fail); }
 .pill.kind-running { background: var(--run-soft); color: var(--run); }
 .pill.who-a-time-limit { background: #fef3c7; color: #92400e; }
 

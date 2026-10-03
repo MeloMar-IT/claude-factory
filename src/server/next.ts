@@ -106,7 +106,7 @@ export function nextFor(ctx: ApiContext, runs?: RunSummary[], forUser = false): 
     }
     const title = tracked.flatMap((t) => t.issues.filter(() => t.watcher.github_repo === v.github_repo)).find((i) => String(i.issue) === v.issue)?.title;
     const rec = runNextStep(run, {
-      queued: queued ? { waitingFor: queued.waitingFor } : undefined,
+      queued: queued ? { waitingFor: queued.waitingFor, behindPriority: queued.behindPriority } : undefined,
       superseded,
       watched: !!w,
       failedLabel: w && labelNames(w).failed,
@@ -124,7 +124,9 @@ export function nextFor(ctx: ApiContext, runs?: RunSummary[], forUser = false): 
     // A hold of a limit or a failure carries the administrator's wording: a user keeps the record of the run.
     const hold = forUser && (rec.kind === "daily_budget" || rec.kind === "usage_limit" || rec.kind === "failed")
       ? undefined
-      : tracked.flatMap((t) => t.status.holds ?? []).find((h) => h.next.runId === run.runId && h.next.kind === rec.kind);
+      : tracked.flatMap((t) => t.status.holds ?? []).find((h) => h.next.runId === run.runId && (h.next.kind === rec.kind ||
+        // "A bug story goes first" holds a stopped run that the watcher would resume: only while the run still is stopped.
+        (h.next.kind === "bug_first" && !queued && (run.status === "stopped" || run.status === "cancelled" || rec.kind === "interrupted"))));
     const out = waitLeft(hold?.next ?? rec);
     if (out.kind === "done" || out.kind === "superseded") return out;
     const timing = out.kind === "running" && run.status === "running" ? runTiming(run, historyFor(ctx)) : runProgress(run);
@@ -138,7 +140,7 @@ export type PendingJob = Queue["pending"][number];
 /** The record of a queued job that has no run yet. */
 export function jobNext(p: PendingJob): NextStep {
   const issue = p.issue && /^\d+$/.test(p.issue) ? Number(p.issue) : undefined;
-  return nextStep(p.waitingFor ? "one_at_a_time" : "queued", { repo: p.githubRepo ?? p.repo, issue, title: (p.task ?? "").split("\n")[0], runId: p.runId }, { blockingRun: p.waitingFor });
+  return nextStep(p.waitingFor ? "one_at_a_time" : p.behindPriority ? "bug_first" : "queued", { repo: p.githubRepo ?? p.repo, issue, title: (p.task ?? "").split("\n")[0], runId: p.runId }, { blockingRun: p.waitingFor });
 }
 
 const watcherError = (repo: string, reason: string): NextStep => nextStep("watcher_error", { repo }, { reason });
@@ -197,7 +199,7 @@ export function hideForeign<T>(value: T, mine: (runId: string) => boolean): T {
 }
 
 /** What a user sees of a queued job: not the folder, the source, the locks or how many runs work at once. */
-export interface OwnJob { runId: string; kind: string; enqueuedAt: string; waitingFor?: string; githubRepo?: string; issue?: string; task?: string; next: NextStep; ahead: number }
+export interface OwnJob { runId: string; kind: string; enqueuedAt: string; waitingFor?: string; githubRepo?: string; issue?: string; task?: string; priority?: true; next: NextStep; ahead: number }
 
 /** GET /api/queue for a user: their own queued jobs, each with the number of other accounts' jobs in front of it. */
 export function ownQueue(ctx: ApiContext, userId: string): { pending: OwnJob[]; active: { runId: string }[] } {
@@ -216,6 +218,7 @@ export function ownQueue(ctx: ApiContext, userId: string): { pending: OwnJob[]; 
       ...(p.githubRepo !== undefined ? { githubRepo: p.githubRepo } : {}),
       ...(p.issue !== undefined ? { issue: p.issue } : {}),
       ...(p.task !== undefined ? { task: p.task } : {}),
+      ...(p.priority ? { priority: true as const } : {}),
       next: userRecord(ownRecord(p.next, mine)), ahead,
     });
   }
@@ -279,7 +282,7 @@ export function collectNext(ctx: ApiContext, list: RunSummary[]) {
 
   const byRun = new Map(list.map((r) => [r.runId, r]));
   const live = new Set([...q.active.map((a) => a.runId), ...q.pending.map((p) => p.runId)]);
-  const issues: (Entry & { key: string; rank: number; runId?: string })[] = [];
+  const issues: (Entry & { key: string; rank: number; runId?: string; priority?: boolean })[] = [];
   for (const t of tracked) {
     for (const i of t.issues) {
       const base = { repo: t.watcher.github_repo, issue: i.issue, title: i.title, runId: i.runId };
@@ -294,7 +297,7 @@ export function collectNext(ctx: ApiContext, list: RunSummary[]) {
       else if (rec.source === "queued") e = { next: waitLeft(rec.next) };
       else if (rec.source === "hold") e = holdEntry(t, hold!);
       else e = { next: rec.next };
-      issues.push({ ...e, watcher: t.watcher.id, runId: i.runId, key: `${base.repo}#${i.issue}`, rank: issueRank(isLive, !!i.done) });
+      issues.push({ ...e, watcher: t.watcher.id, runId: i.runId, key: `${base.repo}#${i.issue}`, rank: issueRank(isLive, !!i.done), priority: i.priority });
     }
   }
 

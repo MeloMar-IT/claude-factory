@@ -27,7 +27,17 @@ export interface QueuedJob {
   /** Set for one_per_repo flows: only one active job per repo key. */
   repoLock?: string;
   enqueuedAt: string;
+  /** A bug story: it starts before all other jobs when a slot is free. */
+  priority?: boolean;
+  /** When the story's issue was created: among priority jobs, the oldest goes first. */
+  storyAt?: string;
 }
+
+/** The time a priority job is ordered by: the issue's creation time, else when it was queued. */
+const storyTime = (q: QueuedJob): number => {
+  const t = Date.parse(q.storyAt ?? q.enqueuedAt);
+  return Number.isNaN(t) ? 0 : t;
+};
 
 export type RunEvent = { type: "log"; line: string } | { type: "update"; summary: RunSummary };
 
@@ -117,14 +127,47 @@ export class Scheduler {
     return typeof q?.owner === "string" ? q.owner : undefined;
   }
 
-  submit(job: Job, meta: { lockKey?: string; source?: string; owner?: string; queuedBy?: string } = {}): string {
+  submit(job: Job, meta: { lockKey?: string; source?: string; owner?: string; queuedBy?: string; priority?: boolean; storyAt?: string } = {}): string {
     const runId = job.kind === "run" ? this.freeId() : job.runId;
     if (job.kind === "resume" && (this.isActive(runId) || this.isQueued(runId))) throw new Error(`run ${runId} is already queued or running`);
     const repoLock = this.repoLockFor(job);
-    this.pending.push({ runId, job, ...meta, ...(repoLock ? { repoLock } : {}), enqueuedAt: new Date().toISOString() });
+    const { priority, storyAt, ...rest } = meta;
+    const q: QueuedJob = { runId, job, ...rest, ...(repoLock ? { repoLock } : {}), enqueuedAt: new Date().toISOString(), ...(priority ? { priority: true, ...(storyAt ? { storyAt } : {}) } : {}) };
+    this.enqueue(q);
     this.persist();
     this.pump();
     return runId;
+  }
+
+  /** Priority jobs go in front of the others, the oldest story first; the rest keep the order they were queued in. */
+  private enqueue(q: QueuedJob) {
+    let i = 0;
+    if (q.priority) {
+      while (i < this.pending.length && this.pending[i]!.priority && storyTime(this.pending[i]!) <= storyTime(q)) i++;
+    } else {
+      i = this.pending.filter((p) => p.priority).length;
+      while (i < this.pending.length && Date.parse(this.pending[i]!.enqueuedAt) <= Date.parse(q.enqueuedAt)) i++;
+    }
+    this.pending.splice(i, 0, q);
+  }
+
+  /** Moves a queued job into the priority block, or back out of it. False when nothing changed or the job is not queued. */
+  setPriority(runId: string, priority: boolean, storyAt?: string): boolean {
+    const i = this.pending.findIndex((p) => p.runId === runId);
+    if (i < 0) return false;
+    const q = this.pending[i]!;
+    if (!!q.priority === priority && (!priority || q.storyAt === storyAt)) return false;
+    this.pending.splice(i, 1);
+    delete q.priority;
+    delete q.storyAt;
+    if (priority) {
+      q.priority = true;
+      if (storyAt) q.storyAt = storyAt;
+    }
+    this.enqueue(q);
+    this.persist();
+    this.pump();
+    return true;
   }
 
   /** "code:<owner/repo or local path>" for flows with one_per_repo, else undefined. */
@@ -231,13 +274,15 @@ export class Scheduler {
 
   queue() {
     return {
-      pending: this.pending.map(({ runId, lockKey, repoLock, source, enqueuedAt, job }, i) => {
+      pending: this.pending.map(({ runId, lockKey, repoLock, source, enqueuedAt, job, priority }, i) => {
         const same = (q: QueuedJob) => (repoLock && q.repoLock === repoLock) || (lockKey && q.lockKey === lockKey);
         // The lock owner: an active job, else an earlier job in the queue that holds the same lock.
         const blocker = [...this.active.values()].find((a) => same(a.queued))?.queued ?? this.pending.slice(0, i).find(same);
         const vars = job.kind === "run" ? job.vars : undefined;
         return {
           runId, lockKey, repoLock, source, enqueuedAt, kind: job.kind, waitingFor: blocker?.runId,
+          ...(priority ? { priority: true as const } : {}),
+          ...(!priority && this.priorityAhead(i) ? { behindPriority: true as const } : {}),
           githubRepo: vars?.github_repo, issue: vars?.issue,
           repo: job.kind === "run" ? job.repo : undefined, task: job.kind === "run" ? job.task : undefined,
         };
@@ -245,6 +290,12 @@ export class Scheduler {
       active: [...this.active.values()].map((a) => ({ runId: a.queued.runId, lockKey: a.queued.lockKey, repoLock: a.queued.repoLock, source: a.queued.source })),
       concurrency: this.o.config().concurrency,
     };
+  }
+
+  /** Does a priority job in front of job `i` get the next free slot? One that waits for a busy lock does not hold anyone back. */
+  private priorityAhead(i: number): boolean {
+    const active = [...this.active.values()].map((a) => a.queued);
+    return this.pending.slice(0, i).some((p) => p.priority && !((p.lockKey && active.some((a) => a.lockKey === p.lockKey)) || (p.repoLock && active.some((a) => a.repoLock === p.repoLock))));
   }
 
   /** Wait for a run to finish (resolves immediately if it is not queued or running). */

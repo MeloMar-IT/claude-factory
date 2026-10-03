@@ -63,6 +63,7 @@ export class WatcherManager {
         log: this.o.log,
         statusComments: this.board(cfg.github_repo),
         watchers: () => this.o.config().watchers,
+        peers: () => this.tracked(),
       });
       this.running.set(id, { watcher, key: JSON.stringify(cfg) });
       watcher.start();

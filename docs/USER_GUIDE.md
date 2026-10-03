@@ -176,7 +176,7 @@ The same data is at `GET /api/health`: `ok`, `summary` ("All good", "1 problem",
 
 - **Columns:** *Your turn* (something waits for you; here it also holds a run you stopped yourself, which the Your turn page does not list), *Waiting for another story*, *Queued* (also paused by a limit), *Planning*, *Coding*, *Reviewing*, *Merging* (also finished work that waits for the scheduled release), *Done* (grouped Today and This week) and *Failed*.
 - **Which stories show:** every issue a watcher tracks, at any age. Other runs on an issue show for 7 days after they end. Done shows the last 7 days. Evaluation runs and runs without an issue never show.
-- **The card:** issue number and title, what happens next, the current step ("coding — step 12 of 29"), and the stories it waits for ("after #88"). Click the card to open its run page. A story that has no run yet is not a link; use the issue link on it.
+- **The card:** issue number and title, what happens next, the current step ("coding — step 12 of 29"), and the stories it waits for ("after #88"). A bug story has a "goes first" mark. Click the card to open its run page. A story that has no run yet is not a link; use the issue link on it.
 - **Highlight:** "What is in the way of #89?" marks the whole chain of stories that hold it back and dims the others. The line above the board lists the chain, also stories that have no card. **Show all** clears it.
 - **Updates:** the page asks every 5 seconds, so what the Foundry knows shows within 5 seconds. Changes on GitHub show after the watcher's next check; when you come back from a GitHub link, the watcher checks at once.
 - **Which column running work is in:** the Foundry reads it from the step names. Steps like `plan`, `ask_for_info` and `risk_gate` are Planning; `implement` starts Coding; `review`, `review_1` and `review_2` start Reviewing; `commit`, `push…` and `open_pr` start Merging. Any other step name stays in the phase of the step before. A flow with other names shows its running work under Coding.
@@ -189,7 +189,7 @@ Runs whose next move is yours (the record says **You**) are listed under **Needs
 that wait for a limit, the budget or another run are not. Under each task the table shows the
 "what happens next" sentence, also for finished runs. At most *N* runs execute at the same time
 (Settings → Runs at the same time); the rest queue. Each queue line shows the same sentence
-and a link to what it waits for.
+and a link to what it waits for. A bug story in the queue has a "goes first" mark.
 
 An admin sees every run, with an **Owner** column, and can pick one account in the **Owner**
 filter next to the title (the list shows "All owners" and each account with its number of runs).
@@ -340,6 +340,7 @@ Every status in the app has a **?** that shows the two sentences from this table
 | waiting for #88 | It needs #88 to be done first. Nothing to do — it starts by itself after that. |
 | waiting for another run | Only one run at a time works here, and another run is active. Nothing to do — it starts when that run is finished. |
 | waiting for another run in the same code | Another run is changing the same part of the code. Nothing to do — it goes on when that run is finished. |
+| waiting — a bug story goes first | A story with a bug label is repaired before other work. Nothing to do — it goes on by itself after that. |
 | paused — usage limit | The usage limit of the AI account is reached. Nothing to do — the Foundry tries again after the limit resets. |
 | paused — signed out | The Foundry is signed out of its AI account. Sign in again — the run then goes on by itself. |
 | paused — AI service not reachable | The AI service could not be reached. Nothing to do — the Foundry tries again later. |
@@ -642,7 +643,8 @@ watchers:
     exclude_labels: [wontfix]
     status_labels: {working: Factory_working, done: Factory_done, needs_info: Factory_needs_info, waiting: Factory_waiting, failed: Factory_ERROR}
     remove_on_done: [Factory_go]
-    max_per_tick: 2                # issues on different code areas are coded in parallel
+    max_per_tick: 2                # issues on different code areas are coded in parallel (bug stories are not counted)
+    priority_labels: [bug]         # stories with these labels go first (the default)
     dependency_done_labels: [Factory_done]
     vars:
       test_cmd: ./gradlew test
@@ -680,6 +682,19 @@ project's build and test commands (`./gradlew`, `mvn`, `npm`, `pytest`, `go test
 test fixtures. Pushing is never allowed. If the build needs environment settings (such as
 `JAVA_HOME`), put them in the `agent_env` variable: `KEY=value` pairs separated by `;` or new
 lines. `PATH`, tokens and the Foundry's own variables can't be set this way.
+
+### Bug stories go first
+
+A story with a bug label is repaired before the Foundry builds anything new. The watcher option `priority_labels` lists the labels (default `[bug]`, not case sensitive). Set `priority_labels: []` to turn it off for a watcher.
+
+- **What goes first:** in every check the watcher handles bug stories before all others: questions up front, starting, resuming and answering. When a slot is free, a waiting bug story gets it before any other story, also before stories that were queued earlier and stories of other repositories. Among bug stories the oldest issue goes first.
+- **No per-check limit:** bug stories are not counted against `max_per_tick`. Concurrency, the daily budget and `one_at_a_time` still limit what runs.
+- **Code areas:** when several stories wait for the same code area, a bug story gets it first when it becomes free. The other stories wait up to one check longer.
+- **What a bug story still waits for:** its own "Depends on" stories, the answers to its own questions, a daily budget or usage limit, and an open release pull request (`pause_while_pr_open`). It goes first after that.
+- **Nothing running is stopped.** A bug story only takes the next free slot.
+- **Taking the label off** ends it: the story goes back to its place in the queue.
+- **Where you see it:** a bug story has a "goes first" mark on the board and in the queue. Another story that waits for it says "waits: a bug story goes first".
+- **Runs started by hand** from the Runs page get no priority. Resume, approve and reject on the run page of a bug story do.
 
 ### The status comment
 

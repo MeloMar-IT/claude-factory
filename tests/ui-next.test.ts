@@ -360,6 +360,12 @@ describe("the \"?\" and the status names", () => {
     expect(calls).toEqual([1]);
   });
 
+  it("queueRow marks a bug story as going first", () => {
+    const next = nextStep("queued", { repo: "o/r", runId: "q1" });
+    expect((runs.queueRow({ runId: "q1", kind: "run", next, priority: true }, () => {}) as FakeElement).textContent).toContain("goes first");
+    expect((runs.queueRow({ runId: "q1", kind: "run", next }, () => {}) as FakeElement).textContent).not.toContain("goes first");
+  });
+
   it("stepRow always says what the step is", async () => {
     const { STEP_TYPES } = await import("../ui/step-types.js" as string);
     const dd = (s: unknown) => (runs.stepRow(s) as FakeElement[])[1]!.textContent;

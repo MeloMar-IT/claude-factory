@@ -35,6 +35,8 @@ export interface BoardSource {
   rank?: number;
   /** Id of the issues watcher that tracks it. */
   watcher?: string;
+  /** A bug story: it goes before other stories. */
+  goesFirst?: boolean;
 }
 
 export interface BoardCard {
@@ -54,6 +56,7 @@ export interface BoardCard {
   /** Done only. */
   group?: string;
   watcher?: string;
+  goesFirst?: true;
 }
 
 export interface BoardColumn { id: ColumnId; title: string; cards: BoardCard[] }
@@ -101,7 +104,7 @@ export function ticketTitle(run: BoardRun | undefined): string {
 export function columnOf(next: NextStep, phase?: Phase): ColumnId | undefined {
   switch (next.kind) {
     case "failed": return "failed";
-    case "dependency": case "one_at_a_time": case "area_lock": return "waiting";
+    case "dependency": case "one_at_a_time": case "area_lock": case "bug_first": return "waiting";
     case "usage_limit": case "daily_budget": case "queued": case "checking": case "starting": case "restart": return "queued";
     case "running": return phase ?? "coding";
     case "done": return "done";
@@ -152,6 +155,7 @@ export function buildBoard(sources: BoardSource[], o: { now?: Date; repos?: stri
       since: s.since,
       ...(group ? { group } : {}),
       watcher: s.watcher,
+      ...(s.goesFirst && column !== "done" ? { goesFirst: true as const } : {}),
     });
   }
 

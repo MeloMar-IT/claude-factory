@@ -127,6 +127,7 @@ describe("next-step records, one per kind", () => {
     ["approval", { message: "Deploy now" }, "You", "Approve or reject it on the run page", "#/runs/r1"],
     ["dependency", { ...data, blockers: [{ issue: 3 }] }, "Another story", "Nothing — it continues by itself", ISSUE],
     ["one_at_a_time", { ...data, blockingRun: "r0" }, "Another story", "Nothing — it continues by itself", "#/runs/r0"],
+    ["bug_first", data, "Another story", "Nothing — it continues by itself", ISSUE],
     ["area_lock", { areaWait: { runId: "r0", areas: "src" } }, "Another story", "Nothing — it continues by itself", "#/runs/r0"],
     ["usage_limit", data, "A time limit", "Nothing — it continues by itself", ISSUE],
     ["daily_budget", data, "A time limit", "Nothing — it continues by itself", ISSUE],
@@ -239,7 +240,7 @@ describe("next-step records, one per kind", () => {
   });
 
   it("has a kind in the table for every kind", () => {
-    expect(new Set(cases.map((c) => c[0])).size).toBe(25);
+    expect(new Set(cases.map((c) => c[0])).size).toBe(26);
   });
 
   it("says why a closed issue and a silent watcher need attention", () => {
@@ -548,6 +549,14 @@ describe("runNextStep", () => {
     expect(a.kind).toBe("one_at_a_time");
     expect(a.where.url).toBe("#/runs/r0");
     expect(runNextStep(run({ status: "stopped" }), { queued: {} }).kind).toBe("queued");
+  });
+  it("a queued resume behind a bug story says so, unless it waits for a lock", () => {
+    expect(runNextStep(run({ status: "stopped" }), { queued: { behindPriority: true } }).kind).toBe("bug_first");
+    expect(runNextStep(run({ status: "stopped" }), { queued: { behindPriority: true, waitingFor: "r0" } }).kind).toBe("one_at_a_time");
+  });
+  it("a story that waits for a bug story is named in a dependency record", () => {
+    const n = nextStep("dependency", { repo: "acme/app", issue: 9, title: "T" }, { watched: true, blockers: [{ issue: 4, next: nextStep("bug_first", { repo: "acme/app", issue: 4 }) }] });
+    expect(n.text).toContain("which waits for a bug story");
   });
   it("a superseded stopped run needs nobody; a succeeded one stays done", () => {
     const a = runNextStep(run({ status: "stopped", reason: "stopped at step \"approve\"" }), { superseded: true });

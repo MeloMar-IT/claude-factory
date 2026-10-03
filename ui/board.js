@@ -34,7 +34,7 @@ export function cardView(card, repo, { lit, onChain, onLeave }) {
     Object.assign(props, { role: "link", tabindex: "0", onClick: open, onKeydown: (e) => { if (e?.key === "Enter" && e.target === e.currentTarget) open(); } });
   }
   return h("div", props,
-    h("div", {}, link(card.issue), " ", h("b", {}, card.title)),
+    h("div", {}, link(card.issue), " ", h("b", {}, card.title), card.goesFirst ? " " : null, card.goesFirst ? h("span", { class: "pill first" }, "goes first") : null),
     h("div", { class: "muted" }, n.text),
     card.step ? h("div", { class: "board-step" }, card.step) : null,
     card.after.length
