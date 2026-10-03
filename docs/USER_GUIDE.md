@@ -46,7 +46,7 @@ The UI opens at **http://localhost:4777**. By default it only listens on your ow
 top-right corner is the repository runs work on by default.
 
 **First start.** The first time you open the UI there is no account yet, so it shows
-**Create the admin account**: enter a name, an e-mail and a password (at least 10 characters,
+**Create the admin account**: enter a name, an e-mail and a password (12 to 200 characters, not a common one,
 twice). That signs you in. You can also create the admin in a terminal with
 `scf user create --admin`; `scf ui` and `scf serve` print a hint while there is no admin. After
 an upgrade from a version without sign-in, do this once; nothing else changes. The CLI, the
@@ -60,9 +60,17 @@ change or a block (`scf user password`, `scf user block`) signs that account out
 are blocked, you cannot sign in. If the session ends while a page is open, the next action
 brings you back to the sign-in form.
 
+**Forgot password.** The sign-in form says so: ask an admin for a new set-password link (the admin
+uses **Reset password** on the Users page), or run `scf user password <e-mail>` on the machine.
+
+**Change password.** **Change password** in the top bar asks for your current password and the new
+one (twice). The new password follows the same rules (12 to 200 characters, not a common one).
+Your session stays; every other session of your account is signed out. A wrong current password
+counts like a wrong sign-in (see "Wrong passwords" in [Settings and safety](#7-settings-and-safety)).
+
 **Set-password link.** A new account may get a link instead of a password. Open it in the
 browser's address bar, type the password twice, and press **Set password**. Then sign in with it.
-The link works once and for 7 days. If the page says "this link is not valid any more", ask your
+The link works once and for 24 hours. If the page says "this link is not valid any more", ask your
 admin for a new one.
 
 | Page | What it is for |
@@ -1241,15 +1249,25 @@ as another admin. Change a role with
 ("never" when there is none).
 
 **The Users page.** Admins only: **Users** in the top bar (`#/users`). It lists name, e-mail, role,
-status (active, blocked, no password yet), last sign-in and the number of runs. Your own account is
+status, last sign-in and the number of runs. The status is **blocked**, **no password yet**,
+**locked** (too many wrong tries) or **active**; when more than one is true, the first in this list
+wins, so a blocked account reads "blocked" even if it is also locked. Your own account is
 marked "(you)".
 
 - **Add user** asks for name, e-mail and role. Then the dialog shows the set-password link once. The
-  link works once, for 7 days, and you must send it to the user yourself. **Copy** needs HTTPS or
+  link works once, for 24 hours, and you must send it to the user yourself. **Copy** needs HTTPS or
   localhost; otherwise select the link in the field and copy it. Close the dialog too early and
   the link is gone: use **New link**.
 - **New link** (only for an account without a password) shows a fresh link; the earlier one stops
   working. For a blocked account the link works only after you unblock it.
+- **Reset password** (only for an account with a password) removes the password, signs the account
+  out everywhere and shows a one-time link, like **Add user**. Until the link is used the person
+  cannot sign in. The last admin that can sign in cannot be reset; resetting your own account signs
+  you out (the link is in the dialog). If the dialog shows an error and the account now reads "no
+  password yet", the reset happened but its link was not shown: use **New link**.
+- **Unlock** (only for a locked account) removes the lock and the wrong tries of the account. A wait
+  of up to a minute for the address the wrong tries came from can remain, so the person may need to
+  wait a moment. It leaves no line in the audit log.
 - **Edit** changes name, e-mail and role. After an e-mail change, set a watcher's `owner` again
   (see above).
 - **Block** signs the user out, cancels their queued runs and lets running runs finish. **Also stop
@@ -1264,7 +1282,7 @@ not change. An error from Block or Delete can come after the change was made; cl
 see the list again. Blocking or deleting your own account signs you out, and the page reloads.
 
 **Managing accounts over the API.** Admins only (a user gets `403`). `GET /api/users` lists the
-accounts (`id`, `name`, `email`, `role`, `status`, `created`, `lastSignIn`, `runs`, `hasPassword`).
+accounts (`id`, `name`, `email`, `role`, `status`, `created`, `lastSignIn`, `runs`, `hasPassword`, `lockedUntil`: an ISO time while the account is locked, else `null`; a blocked account can have both).
 `POST /api/users {"name": …, "email": …, "role": "admin"|"user"}` adds an account without a password
 and answers 201 with the account and its one-time token (400 for bad input, 409 for a taken e-mail).
 The token is shown once; the link is `<address>/#/set-password/<token>`.
@@ -1272,6 +1290,11 @@ The token is shown once; the link is `<address>/#/set-password/<token>`.
 accepted (400). `POST /api/users/<id>/block {"stopWork": true}` blocks, signs the account out and
 answers with `cancelled: {queued, running, waiting}`. `POST /api/users/<id>/unblock` unblocks.
 `POST /api/users/<id>/link` gives a new token for an account without a password (409 if it has one).
+`POST /api/users/<id>/reset` removes the password, ends the account's sessions and answers like
+`/link` (`user`, `token`, `expires`); 409 for an account without a password or for the last admin
+that can sign in. `POST /api/users/<id>/unlock` removes the lock and wrong tries of the account and
+answers with the account. Everyone signed in may call `POST /api/password {"current": …, "password": …}`
+to change their own password (400 for bad input, 403 for a wrong current password, 429 when waiting).
 `DELETE /api/users/<id>` deletes as `scf user delete` does. An unknown id is 404, the last admin that
 is not blocked is 409. An admin may act on their own account within the last-admin rule; blocking
 yourself signs you out. If an old key stays in the Keychain, delete answers 500 and the account is
@@ -1292,9 +1315,9 @@ not handled yet. Watchers of the account keep working: disable the watcher or ch
 server log says how many runs it cancelled, with the account id only.
 
 **Audit log.** Every `scf user` action and every users API call that changes something (`create`, `password`, `role`, `edit`,
-`block`, `unblock`, `delete`; also `link`, when a new set-password link replaces the old one) adds one line to `audit.jsonl` in the data folder (mode `0600`), for
+`block`, `unblock`, `delete`, `reset`; also `link`, when a new set-password link replaces the old one) adds one line to `audit.jsonl` in the data folder (mode `0600`), for
 example `{"time":"2026-10-02T09:46:46.000Z","by":"cli","action":"role","userId":"<id>","oldRole":"user","newRole":"admin"}`.
-`by` is `cli` or the id of the admin. An `edit` line is a name or e-mail change. A password set through a link is a `password` line made by the account itself (`by` is its id).
+`by` is `cli` or the id of the admin. An `edit` line is a name or e-mail change. A password set through a link is a `password` line made by the account itself (`by` is its id), and so is a password changed with **Change password**. A `reset` line has the admin's id (or `cli`) in `by`.
 Only a role change has `oldRole` and `newRole`. A `block` line has `stopWork` (`true` when
 `--stop-work` was given). No line holds a name, e-mail, password, hash, key or
 token, and a failed account change is not logged. A block or delete that stops with an error may already have
@@ -1350,14 +1373,23 @@ The cookie gets the `Secure` flag when you reach the UI over HTTPS (through a pr
 - **CSRF.** Every call that changes something must send the header `X-CSRF-Token` with the token
   the server gave at sign-in; otherwise it gets 403. The UI does this for you. Requests from a
   foreign origin or host are refused as before.
-- **Wrong passwords.** After 10 wrong tries for one e-mail in 15 minutes, sign-in answers 429
-  for that e-mail until the 15 minutes are over. A server restart also clears the count. The
-  answer for a wrong password and for an unknown e-mail is the same.
+- **Wrong passwords.** Every try is counted before the password is checked, per e-mail and per
+  client address. From the 5th wrong try, sign-in answers 429 (with `Retry-After`) until a wait is
+  over: 1, 2, 4, 8, 16 and 32 seconds, then 60 seconds. The 20th wrong try for an e-mail locks it
+  for 30 minutes, also against the right password. A try with the right password is given back
+  for the address and clears the count of the e-mail. Counts are forgotten 30 minutes after the
+  last try. **Change password** counts as a sign-in try for the e-mail, and a wrong current
+  password can delay or lock sign-in for that account. **Unlock** removes only the lock and the
+  count of the account; a wait of up to a minute for the address can remain. A server restart
+  clears all waits and locks (the CLI cannot unlock). Anyone can lock an e-mail with 20 wrong
+  tries, so the only admin can be locked out: wait 30 minutes, ask another admin to unlock, or
+  restart the server. The answer for a wrong password and for an unknown e-mail is the same.
 - **Set-password links.** Only a SHA-256 of the link token is stored. The token sits after `#` in
-  the address, so it is in no request line or log. `POST /api/set-password` shares the limits with
-  sign-in (60 tries per client in 15 minutes, 16 password checks at once), and using a link clears
-  the wrong-tries count of that e-mail.
-- **Ending sessions.** Signing out, expiry, `scf user password` and `scf user block` end sessions, and so do block and delete through the API.
+  the address, so it is in no request line or log. A link lasts 24 hours (a link made before the
+  upgrade keeps its stored end time). `POST /api/set-password` shares the per-client wait with
+  sign-in (16 password checks at once); a refused password with a live link does not count, and
+  using a link clears the wrong-tries count of that e-mail.
+- **Ending sessions.** Signing out, expiry, `scf user password` and `scf user block` end sessions, and so do block, delete and **Reset password** through the API. **Change password** ends the other sessions of the account and keeps the one that made the change.
   A run log that is open in the browser stops within 5 seconds. A role change does not end
   sessions; the new role counts from the next call.
 - **Problems with the files.** If `users.json` or `sessions.json` cannot be read or written, or
@@ -1576,6 +1608,7 @@ Change a role with `scf user role <e-mail> admin|user`, or create an admin with
 | `GET /api/your-turn/detail` | yes | no | the questions, plan or split of an item |
 | `POST /api/your-turn/act` | yes | no | answer, approve, reject or retry an item, as a comment on the issue |
 | `GET /api/clarity` | yes | no | how long items waited for you, and what Your turn missed |
+| `POST /api/password` | yes | yes | change your own password (the other sessions of the account end) |
 | `GET /api/credentials` | yes | yes | your stored credentials |
 | `POST /api/credentials` | yes | yes | store a credential |
 | `DELETE /api/credentials/:id` | yes | yes | remove a credential |
@@ -1585,6 +1618,8 @@ Change a role with `scf user role <e-mail> admin|user`, or create an admin with
 | `POST /api/users/:id/block` | yes | no | block an account, end its sessions and cancel its queued jobs |
 | `POST /api/users/:id/unblock` | yes | no | unblock an account |
 | `POST /api/users/:id/link` | yes | no | a new set-password token for an account without a password |
+| `POST /api/users/:id/reset` | yes | no | take the password of an account away, end its sessions and give a one-time set-password token |
+| `POST /api/users/:id/unlock` | yes | no | remove the lock after too many wrong tries (a short wait for the address can remain) |
 | `DELETE /api/users/:id` | yes | no | delete an account with its sessions, repositories, refinement sessions and stored credentials |
 | `GET /api/audit` | yes | no | read the audit log, newest first, with filters |
 | `GET /api/audit/export` | yes | no | download the audit log as CSV, with the same filters |
@@ -1603,8 +1638,7 @@ Change a role with `scf user role <e-mail> admin|user`, or create an admin with
 | `POST /api/refinement/:id/drop` | yes | yes | drop your refinement session (an admin: any session); it is removed after 30 days |
 | `POST /api/refinement/:id/restore` | yes | yes | restore your dropped refinement session |
 
-**What comes later.** Runs that use a user's stored credentials or a repository's token, changing
-your own password in the UI, a connection test for repositories, runs that use a deploy key, the GitHub App, and pages for users (starting runs).
+**What comes later.** Runs that use a user's stored credentials or a repository's token, a connection test for repositories, runs that use a deploy key, the GitHub App, and pages for users (starting runs).
 
 ### Access from other computers
 
@@ -1681,7 +1715,8 @@ then cross the network unencrypted. Use it only on a network you trust.
 - The first admin can only be created on the Mac itself, not through the proxy.
 - Settings cannot be saved if the change would lock out the browser that saves it (its host name
   removed, or a `listen` value that does not cover the address it is connected to).
-- Sign-in and set-password are also limited per client address (60 tries in 15 minutes) and to 16 password checks at
+- Sign-in and set-password also wait per client address (from the 5th wrong try, up to 60 seconds; see
+  "Wrong passwords" in [Settings and safety](#7-settings-and-safety)) and run at most 16 password checks at
   the same time; an e-mail longer than 254 characters is a wrong sign-in.
 
 **Restart** after changing the address: stop and start `scf ui`, or run `scf service install` again.
@@ -1828,7 +1863,8 @@ The command is `scf`. `factory` still works as an alias and prints a short note.
 | `scf credential check` | Check that the macOS Keychain can store, read and remove the key |
 
 The password is asked twice on a terminal, or read from the first line of stdin; it is never an
-option or an environment variable. No command needs a signed-in session; only the web UI does.
+option or an environment variable. A password has 12 to 200 characters and must not be a common
+one; `scf user create` and `scf user password` refuse others and change nothing. No command needs a signed-in session; only the web UI does.
 
 ### Environment variables
 
@@ -1942,7 +1978,16 @@ A protected branch is a setting to change (**Protected branches** in Settings, o
 branch); the run then says the Foundry failed. A secret-scan finding is in the code: the step
 output lists the file, line and kind of secret.
 
-**Forgot the password.** Run `scf user password <e-mail>` on the machine. If no admin is left, run
+**Locked out.** "This account is locked" after many wrong tries: wait 30 minutes, ask an admin to
+press **Unlock** on the Users page, or restart the server on the machine (the lock is in memory).
+
+**Reset password gave an error.** The account may already have lost its password. If the Users
+page now reads "no password yet", use **New link**.
+
+**Change password gave an error.** The password is not changed; your other sessions may be signed
+out. Try again.
+
+**Forgot the password.** Ask an admin to use **Reset password**, or run `scf user password <e-mail>` on the machine. If no admin is left, run
 `scf user create --admin`. A set-password link that ended is replaced the same way. If the page said
 "sign-in is not working" after you sent the form, first try to sign in with the password you chose:
 it may have been set already.

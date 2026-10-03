@@ -328,6 +328,13 @@ say "nothing — it continues by itself" when that is true; use one vocabulary
 ## 11. Accounts, roles and repositories
 
 - **Sign-in is required** for the web interface. The first account is the admin.
+- **Passwords.** A password has 12 to 200 characters and is not on a short list of common ones
+  (`common-passwords.ts`). An admin's **reset** removes the hash, ends the sessions and stores a
+  24-hour one-time link (only its SHA-256 is kept). Wrong tries are throttled in memory
+  (`sign-in-throttle.ts`), not in `users.json`: one counter per e-mail (shared by sign-in and Change
+  password) and one per client address. A try is counted before the slow check, so tries that arrive
+  together cannot pass the limit; it is given back when the password was right. Entries of stored
+  accounts are never dropped for room. A restart clears waits and locks.
 - **Two roles.** An **admin** makes flows, watchers and settings and sees everything. A **user**
   runs the flows an admin published, on their own repositories, and sees only their own runs —
   no costs, no setup.

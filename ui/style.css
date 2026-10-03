@@ -124,6 +124,7 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent-soft
 .pill.claude { background: var(--accent-soft); color: var(--claude); }
 .pill.ok, .pill.kind-done, .pill.state-active { background: var(--ok-soft); color: var(--ok); }
 .pill.fail, .pill.state-error, .pill.first { background: var(--fail-soft); color: var(--fail); }
+.pill.locked { background: #fef3c7; color: #92400e; }
 .pill.kind-running { background: var(--run-soft); color: var(--run); }
 .pill.who-a-time-limit { background: #fef3c7; color: #92400e; }
 

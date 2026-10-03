@@ -11,14 +11,31 @@ const browserPage = {
   reload: () => location.reload(),
 };
 
-/** The account's status in words: blocked wins over "no password yet". */
-export const statusText = (u) => (u.status === "blocked" ? "blocked" : u.hasPassword ? "active" : "no password yet");
+/** True while the account is locked after too many wrong tries (`lockedUntil` is a time in the future). */
+export const isLocked = (u, now = Date.now()) => !!u.lockedUntil && Date.parse(u.lockedUntil) > now;
+
+/** The account's status in words: blocked wins over "no password yet", and that wins over "locked". */
+export const statusText = (u, now = Date.now()) =>
+  u.status === "blocked" ? "blocked" : !u.hasPassword ? "no password yet" : isLocked(u, now) ? "locked" : "active";
+
+/** The classes of the status pill. */
+export const pillClass = (u, now = Date.now()) =>
+  `pill${u.status === "blocked" ? " fail" : !u.hasPassword ? "" : isLocked(u, now) ? " locked" : " ok"}`;
 
 /** When the account last signed in, or "never". */
 export const lastSignInText = (u) => (u.lastSignIn ? timeAgo(u.lastSignIn) : "never");
 
-/** The buttons of a row, in order. A link is offered exactly when the account has no password. */
-export const actionsFor = (u) => ["edit", ...(u.hasPassword ? [] : ["link"]), u.status === "blocked" ? "unblock" : "block", "delete"];
+/**
+ * The buttons of a row, in order. A link is offered exactly when the account has no password, a reset exactly when it
+ * has one. Unlock is offered for a locked account that has a password (also when it is blocked).
+ */
+export const actionsFor = (u, now = Date.now()) => [
+  "edit",
+  u.hasPassword ? "reset" : "link",
+  ...(u.hasPassword && isLocked(u, now) ? ["unlock"] : []),
+  u.status === "blocked" ? "unblock" : "block",
+  "delete",
+];
 
 /** For a blocked account: why its link does not work yet. Empty for any other account. */
 export const blockedLinkText = (u) => (u?.status === "blocked" ? `${u.name} is blocked, so the link works only after you unblock the account.` : "");
@@ -71,7 +88,7 @@ function linkView(link, user, page, onDone) {
   const field = h("input", { name: "link", class: "mono", readonly: true, value: link, onFocus: (e) => e.currentTarget.select?.() });
   const note = h("p", { class: "status", style: { margin: 0 } });
   return stack(
-    para("This link works once, for 7 days. Send it to the user yourself: the Foundry does not send it."),
+    para("This link works once, for 24 hours. Send it to the user yourself: the Foundry does not send it."),
     blockedLinkText(user) ? para(blockedLinkText(user)) : null,
     field,
     note,
@@ -163,6 +180,24 @@ const linkDialog = (u, { page }) => callDialog({
   done: showLink(u, page, "The link was not shown. Use New link again to make one."),
 });
 
+const resetDialog = (u, { me, page }) => callDialog({
+  title: `Reset password of ${u.name}?`,
+  body: [
+    para(`${u.name} (${u.email}) loses the password and is signed out everywhere. The dialog then shows a link to set a new one. Until it is used, ${u.name} cannot sign in.`),
+    ...own(u, me)],
+  label: "Reset password",
+  danger: true,
+  prepare: () => () => api.resetUser(u.id),
+  done: showLink(u, page, "The password was reset, but the link was not shown. Use New link on the account to make one."),
+});
+
+const unlockDialog = (u) => callDialog({
+  title: `Unlock ${u.name}?`,
+  body: [para(`Remove the lock of ${u.name} (${u.email}) and its wrong tries. A short wait for the address the tries came from can remain.`)],
+  label: "Unlock",
+  prepare: () => () => api.unlockUser(u.id),
+});
+
 const editDialog = (u) => {
   const form = userForm(u);
   return callDialog({
@@ -211,8 +246,8 @@ const deleteDialog = (u, { me }) => callDialog({
   prepare: () => () => api.deleteUser(u.id),
 });
 
-const DIALOGS = { edit: editDialog, link: linkDialog, block: blockDialog, unblock: unblockDialog, delete: deleteDialog };
-const LABELS = { edit: "Edit", link: "New link", block: "Block", unblock: "Unblock", delete: "Delete" };
+const DIALOGS = { edit: editDialog, link: linkDialog, reset: resetDialog, unlock: unlockDialog, block: blockDialog, unblock: unblockDialog, delete: deleteDialog };
+const LABELS = { edit: "Edit", link: "New link", reset: "Reset password", unlock: "Unlock", block: "Block", unblock: "Unblock", delete: "Delete" };
 
 // Each load gets a number; an answer that is not the newest load, or that arrives after the person left the page, is dropped.
 let generation = 0;
@@ -238,6 +273,7 @@ export async function renderUsers(main, { me = "", notice, page = browserPage } 
     let next;
     if (answer && kind === "block") next = { text: cancelledText(u.name, cancelledTotal(answer.cancelled)) };
     else if (answer && kind === "edit") toast("Saved");
+    else if (answer && kind === "unlock") toast(`${u.name} is unlocked`);
     else if (answer && kind === "unblock") toast(`${u.name} is unblocked`);
     else if (answer && kind === "delete") toast(`${u.name} was deleted`);
     return reload(next);
@@ -250,7 +286,7 @@ export async function renderUsers(main, { me = "", notice, page = browserPage } 
     h("td", {}, u.name, u.id === me ? h("span", { class: "muted" }, " (you)") : null),
     h("td", { class: "mono" }, u.email),
     h("td", {}, u.role),
-    h("td", {}, h("span", { class: `pill${u.status === "blocked" ? " fail" : u.hasPassword ? " ok" : ""}` }, statusText(u))),
+    h("td", {}, h("span", { class: pillClass(u) }, statusText(u))),
     h("td", { class: "muted" }, lastSignInText(u)),
     h("td", { class: "mono" }, u.runs),
     h("td", {}, actionsFor(u).map((k) => [h("button", { class: k === "delete" ? "small danger" : "small", onClick: () => act(u, k) }, LABELS[k]), " "])));

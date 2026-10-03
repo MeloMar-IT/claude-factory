@@ -17,6 +17,8 @@ export class HttpError extends Error {
   constructor(
     public status: number,
     message: string,
+    /** Extra response headers, e.g. `Retry-After`. */
+    public headers?: Record<string, string>,
   ) {
     super(message);
   }

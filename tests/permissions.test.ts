@@ -167,6 +167,9 @@ const EXAMPLES: Record<string, Example> = {
   "POST users/:id/block": no(`users/${UNKNOWN}/block`, 404, {}),
   "POST users/:id/unblock": no(`users/${UNKNOWN}/unblock`, 404, {}),
   "POST users/:id/link": no(`users/${UNKNOWN}/link`, 404, {}),
+  "POST users/:id/reset": no(`users/${UNKNOWN}/reset`, 404, {}),
+  "POST users/:id/unlock": no(`users/${UNKNOWN}/unlock`, 404, {}),
+  "POST password": { path: "password", body: {}, user: 400, admin: 400 },
   "DELETE users/:id": no(`users/${UNKNOWN}`, 404),
   "GET audit": no("audit", 200),
   // the walk reads every answer as JSON; a good export is CSV and is covered in audit-api.test.ts

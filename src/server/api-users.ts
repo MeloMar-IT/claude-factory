@@ -1,10 +1,11 @@
 import { basename } from "node:path";
 import { StoreError } from "../auth/store.js";
 import {
-  UserError, checkEmail, checkName, createUserWithLink, deleteUser, listUsers, newPasswordLink, setStatus, updateUser, type PublicUser, type UserErrorCode,
+  UserError, checkEmail, checkName, createUserWithLink, deleteUser, listUsers, getUser, newPasswordLink, resetPassword, setStatus, updateUser, type PublicUser, type UserErrorCode,
 } from "../auth/users.js";
 import { KeyError } from "../credentials/keychain.js";
 import { cancelAccountNow } from "./account-work.js";
+import { throttlesOf } from "./api-auth.js";
 import { OLD_KEY_LEFT } from "./api-credentials.js";
 import { HttpError, readJson, send } from "./http.js";
 import type { ApiContext, Route } from "./server.js";
@@ -12,6 +13,7 @@ import type { ApiContext, Route } from "./server.js";
 const INTERNAL = "the account list is not working; see the server log";
 const STATUS: Record<UserErrorCode, number> = {
   "bad-name": 400, "bad-email": 400, "bad-password": 400, "bad-role": 400, "email-taken": 409, "admin-exists": 409, "not-found": 404, "last-admin": 409, "has-password": 409,
+  "wrong-password": 403, "no-password": 409,
 };
 
 /** Turns an error into a 4xx for input problems; anything else is logged (file and kind, never a path or value) and answered with a plain 500. */
@@ -56,9 +58,11 @@ function runCounts(ctx: ApiContext): Map<string, number> {
   return counts;
 }
 
-/** The account as the API shows it: nine fields picked one by one, never a hash or a token. */
-function view(u: PublicUser, runs: number, hasPassword: boolean) {
-  return { id: u.id, name: u.name, email: u.email, role: u.role, status: u.status, created: u.created, lastSignIn: u.lastSignIn, runs, hasPassword };
+/** The account as the API shows it: ten fields picked one by one, never a hash or a token. */
+function view(ctx: ApiContext, u: PublicUser, runs: number, hasPassword: boolean) {
+  const until = throttlesOf(ctx).accounts.lockedUntilOf(u.email);
+  const lockedUntil = until === undefined ? null : new Date(until).toISOString();
+  return { id: u.id, name: u.name, email: u.email, role: u.role, status: u.status, created: u.created, lastSignIn: u.lastSignIn, runs, hasPassword, lockedUntil };
 }
 
 /** Cancels the account's work at once; a queue.json that cannot be written is logged in fixed words only. */
@@ -83,7 +87,7 @@ export const userRoutes: Route = async (ctx, req, res, seg, method, caller) => {
 
   if (seg.length === 1 && method === "GET") {
     const runs = runCounts(ctx);
-    return send(res, 200, guardedUsers(ctx, () => listUsers()).map((u) => view(u, runs.get(u.id) ?? 0, hasPassword(u)))), true;
+    return send(res, 200, guardedUsers(ctx, () => listUsers()).map((u) => view(ctx, u, runs.get(u.id) ?? 0, hasPassword(u)))), true;
   }
 
   if (seg.length === 1 && method === "POST") {
@@ -94,7 +98,7 @@ export const userRoutes: Route = async (ctx, req, res, seg, method, caller) => {
       if (body.role !== "admin" && body.role !== "user") throw new UserError("bad-role", "the role must be admin or user");
       return createUserWithLink({ name, email, role: body.role }, { by });
     });
-    return send(res, 201, { user: view(r.user, 0, false), token: r.token, expires: r.expires }), true;
+    return send(res, 201, { user: view(ctx, r.user, 0, false), token: r.token, expires: r.expires }), true;
   }
 
   const id = seg[1];
@@ -103,7 +107,7 @@ export const userRoutes: Route = async (ctx, req, res, seg, method, caller) => {
   if (seg.length === 2 && method === "PUT") {
     const body = await readJson(req);
     const u = await guardedUsersAsync(ctx, () => updateUser(id, { name: body.name as string, email: body.email as string, role: body.role as "admin" }, { by }));
-    return send(res, 200, { user: view(u, runsOf(id), hasPassword(u)) }), true;
+    return send(res, 200, { user: view(ctx, u, runsOf(id), hasPassword(u)) }), true;
   }
 
   if (seg.length === 3 && seg[2] === "block" && method === "POST") {
@@ -112,17 +116,33 @@ export const userRoutes: Route = async (ctx, req, res, seg, method, caller) => {
     const stopWork = body.stopWork === true;
     const u = await guardedUsersAsync(ctx, () => setStatus(id, "blocked", { by, stopWork }));
     const cancelled = cancelNow(ctx, id, "blocked", stopWork);
-    return send(res, 200, { user: view(u, runsOf(id), hasPassword(u)), cancelled }), true;
+    return send(res, 200, { user: view(ctx, u, runsOf(id), hasPassword(u)), cancelled }), true;
   }
 
   if (seg.length === 3 && seg[2] === "unblock" && method === "POST") {
     const u = await guardedUsersAsync(ctx, () => setStatus(id, "active", { by }));
-    return send(res, 200, { user: view(u, runsOf(id), hasPassword(u)) }), true;
+    return send(res, 200, { user: view(ctx, u, runsOf(id), hasPassword(u)) }), true;
+  }
+
+  if (seg.length === 3 && seg[2] === "unlock" && method === "POST") {
+    // Removes the account's wrong tries and its lock. A wait for the client address is not touched.
+    const u = guardedUsers(ctx, () => {
+      const found = getUser(id);
+      if (!found) throw new UserError("not-found", "no such account");
+      return found;
+    });
+    throttlesOf(ctx).accounts.clear(u.email);
+    return send(res, 200, { user: view(ctx, u, runsOf(id), hasPassword(u)) }), true;
   }
 
   if (seg.length === 3 && seg[2] === "link" && method === "POST") {
     const r = await guardedUsersAsync(ctx, () => newPasswordLink(id, { by }));
-    return send(res, 200, { user: view(r.user, runsOf(id), false), token: r.token, expires: r.expires }), true;
+    return send(res, 200, { user: view(ctx, r.user, runsOf(id), false), token: r.token, expires: r.expires }), true;
+  }
+
+  if (seg.length === 3 && seg[2] === "reset" && method === "POST") {
+    const r = await guardedUsersAsync(ctx, () => resetPassword(id, { by }));
+    return send(res, 200, { user: view(ctx, r.user, runsOf(id), false), token: r.token, expires: r.expires }), true;
   }
 
   if (seg.length === 2 && method === "DELETE") {

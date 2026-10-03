@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { AuditEntrySchema } from "../src/auth/audit.js";
 import { findSession, readSessions, revokeSession, revokeUserSessions, sessionId } from "../src/auth/sessions.js";
 import { createUser, hasAdmin, listUsers, setPassword, setStatus, startSession } from "../src/auth/users.js";
-import { SESSION_RECHECK_MS, SignInLimiter } from "../src/server/api-auth.js";
+import { SESSION_RECHECK_MS, throttlesOf } from "../src/server/api-auth.js";
 import { startServer, type ServerOptions } from "../src/server/server.js";
 import { TEST_PASSWORD, signInAs, type TestSession } from "./helpers/session.js";
 
@@ -110,7 +110,7 @@ describe("every route needs a session", () => {
   const GETS = ["/api/credentials", "/api/repos", "/api/info", "/api/config", "/api/watchers", "/api/providers", "/api/evals", "/api/stats", "/api/flows", "/api/flows/x", "/api/blocks", "/api/queue", "/api/runs", "/api/runs/x", "/api/runs/x/events", "/api/runs/x/diff", "/api/runs/x/transcript/0", "/api/next", "/api/your-turn", "/api/since", "/api/board", "/api/nope", "/api/setup", "/api/set-password"];
   const PUTS = ["/api/config", "/api/flows/x", "/api/blocks/x", "/api/session", "/api/repos/x/auth", "/api/set-password"];
   const DELETES = ["/api/credentials/x", "/api/repos/a/b", "/api/repos/x", "/api/flows/x", "/api/blocks/x", "/api/set-password"];
-  const POSTS = ["/api/credentials", "/api/repos", "/api/watchers/x/tick", "/api/clean", "/api/providers/test", "/api/validate", "/api/generate", "/api/runs", "/api/runs/x/cancel", "/api/runs/x/resume", "/api/runs/x/approve", "/api/runs/x/reject", "/api/your-turn/dismiss", "/api/your-turn/restore", "/api/nope"];
+  const POSTS = ["/api/credentials", "/api/repos", "/api/watchers/x/tick", "/api/clean", "/api/providers/test", "/api/validate", "/api/generate", "/api/runs", "/api/runs/x/cancel", "/api/runs/x/resume", "/api/runs/x/approve", "/api/runs/x/reject", "/api/your-turn/dismiss", "/api/your-turn/restore", "/api/password", "/api/nope"];
   const table = [...GETS.map((p) => ["GET", p]), ...PUTS.map((p) => ["PUT", p]), ...DELETES.map((p) => ["DELETE", p]), ...POSTS.map((p) => ["POST", p])] as [string, string][];
 
   const cases: [string, Record<string, string>][] = [
@@ -194,8 +194,8 @@ describe("setup", () => {
 describe("setup with a password of only spaces", () => {
   it("creates the admin, who can then sign in", async () => {
     await withServer(async (s) => {
-      const spaces = " ".repeat(10);
-      expect((await post(s, "/api/setup", { name: "Ann", email: "ann@example.com", password: " ".repeat(9) })).status).toBe(400);
+      const spaces = " ".repeat(12);
+      expect((await post(s, "/api/setup", { name: "Ann", email: "ann@example.com", password: " ".repeat(11) })).status).toBe(400);
       expect((await post(s, "/api/setup", { name: "Ann", email: "ann@example.com", password: spaces })).status).toBe(201);
       expect((await login(s, "ann@example.com", spaces)).status).toBe(200);
     });
@@ -236,10 +236,10 @@ describe("sign-in", () => {
   });
 
   it("signs in with a password of only spaces, as `scf user` allows", async () => {
-    const spaces = " ".repeat(10);
+    const spaces = " ".repeat(12);
     await createUser({ name: "Space", email: "space@example.com", password: spaces, role: "user" });
     expect((await login(s, "space@example.com", spaces)).status).toBe(200);
-    expect((await login(s, "space@example.com", " ".repeat(11))).status).toBe(401);
+    expect((await login(s, "space@example.com", " ".repeat(13))).status).toBe(401);
     expect((await post(s, "/api/session", { email: "space@example.com" })).status).toBe(400);
     expect((await post(s, "/api/session", { email: "space@example.com", password: 5 })).status).toBe(400);
   });
@@ -464,61 +464,118 @@ describe("an open stream", () => {
 });
 
 describe("the sign-in limit", () => {
-  it("answers 429 after 10 wrong tries for one e-mail, not for another", async () => {
-    await withServer(async (s) => {
+  const from = (n: number) => ({ "x-forwarded-proto": "https", "x-forwarded-for": `10.0.0.${n}` });
+  const WRONG = "wrong-password-123";
+  const WAIT_1S = "too many tries; try again in 1 second";
+  let now = 0;
+  const clock = () => now;
+  const timed = (fn: (s: Srv) => Promise<void>) => {
+    now = Date.now();
+    return withServer(fn, { signInClock: clock });
+  };
+
+  it("waits from the fifth wrong try: 429 with Retry-After, and it is checked again after the wait", async () => {
+    await timed(async (s) => {
+      const a = await newUser(s);
+      for (let i = 0; i < 5; i++) expect((await login(s, a.user.email, WRONG, from(1))).status).toBe(401);
+      const r = await login(s, a.user.email, WRONG, from(1));
+      expect(r.status).toBe(429);
+      expect(r.headers.get("retry-after")).toBe("1");
+      expect(await r.json()).toEqual({ error: WAIT_1S });
+      now += 1000;
+      expect((await login(s, a.user.email, WRONG, from(1))).status).toBe(401);
+    });
+  });
+
+  it("lets only 5 tries through when they arrive together for one e-mail from different addresses", async () => {
+    await timed(async (s) => {
+      const a = await newUser(s);
+      const answers = await Promise.all(Array.from({ length: 16 }, (_, i) => login(s, a.user.email, WRONG, from(i + 1))));
+      const codes = answers.map((r) => r.status);
+      expect(codes.filter((c) => c === 401)).toHaveLength(5);
+      expect(codes.filter((c) => c === 429)).toHaveLength(11);
+    });
+  });
+
+  it("lets only 5 tries through when they arrive together from one address for other e-mails", async () => {
+    await timed(async (s) => {
+      const answers = await Promise.all(Array.from({ length: 16 }, (_, i) => login(s, `nobody-${i}@example.com`, WRONG, from(1))));
+      const codes = answers.map((r) => r.status);
+      expect(codes.filter((c) => c === 401)).toHaveLength(5);
+      expect(codes.filter((c) => c === 429)).toHaveLength(11);
+    });
+  });
+
+  it("locks the account for 30 minutes at the 20th wrong try, also against the right password", async () => {
+    await timed(async (s) => {
       const a = await newUser(s);
       const b = await newUser(s);
-      for (let i = 0; i < 10; i++) expect((await login(s, a.user.email, "wrong-password-123")).status).toBe(401);
-      expect((await login(s, a.user.email, PW)).status).toBe(429);
-      expect((await login(s, b.user.email, PW)).status).toBe(200);
+      for (let i = 0; i < 20; i++) {
+        expect((await login(s, a.user.email, WRONG, from(1))).status).toBe(401);
+        now += 61_000;
+      }
+      const r = await login(s, a.user.email, PW, from(2));
+      expect(r.status).toBe(429);
+      expect(((await r.json()) as { error: string }).error).toMatch(/locked for \d+ minutes?$/);
+      expect((await login(s, b.user.email, PW, from(3))).status).toBe(200);
+      now += 30 * 60 * 1000;
+      expect((await login(s, a.user.email, PW, from(2))).status).toBe(200);
     });
   });
 
-  it("lets only 10 tries through when they arrive at the same time", async () => {
-    await withServer(async (s) => {
+  it("answers an unknown e-mail like a real one", async () => {
+    await timed(async (s) => {
       const a = await newUser(s);
-      const answers = await Promise.all(Array.from({ length: 16 }, () => login(s, a.user.email, "wrong-password-123")));
-      const codes = answers.map((r) => r.status);
-      expect(codes.filter((c) => c === 401)).toHaveLength(10);
-      expect(codes.filter((c) => c === 429)).toHaveLength(6);
-      expect((await login(s, a.user.email, PW)).status).toBe(429);
+      const run = async (email: string, n: number) => {
+        const out: [number, string | null, unknown][] = [];
+        for (let i = 0; i < 7; i++) {
+          const r = await login(s, email, WRONG, from(n));
+          out.push([r.status, r.headers.get("retry-after"), await r.json()]);
+        }
+        return out;
+      };
+      const real = await run(a.user.email, 1);
+      const unknown = await run("nobody@example.com", 2);
+      expect(unknown).toEqual(real);
+      expect(real.map((x) => x[0])).toEqual([401, 401, 401, 401, 401, 429, 429]);
     });
   });
 
-  it("limits one client that cycles e-mail addresses, and refuses over-long ones", async () => {
-    await withServer(async (s) => {
-      expect((await login(s, `${"a".repeat(300)}@example.com`, "x")).status).toBe(401);
-      for (let i = 0; i < 60; i++) expect((await login(s, `nobody-${i}@example.com`, "wrong-password-123")).status).toBe(401);
-      expect((await login(s, "nobody-last@example.com", "wrong-password-123")).status).toBe(429);
-    });
-  });
-
-  it("a right password clears the count", async () => {
-    await withServer(async (s) => {
+  it("a right password clears the count of the account", async () => {
+    await timed(async (s) => {
       const a = await newUser(s);
-      for (let i = 0; i < 9; i++) await login(s, a.user.email, "wrong-password-123");
-      expect((await login(s, a.user.email, PW)).status).toBe(200);
-      for (let i = 0; i < 9; i++) expect((await login(s, a.user.email, "wrong-password-123")).status).toBe(401);
+      for (let i = 0; i < 4; i++) await login(s, a.user.email, WRONG, from(1));
+      expect((await login(s, a.user.email, PW, from(1))).status).toBe(200);
+      for (let i = 0; i < 5; i++) expect((await login(s, a.user.email, WRONG, from(2))).status).toBe(401);
+      expect((await login(s, a.user.email, WRONG, from(2))).status).toBe(429);
     });
   });
 
-  it("SignInLimiter: the window ends, clear works, and the cap evicts the oldest", () => {
-    let now = 1000;
-    const l = new SignInLimiter(2, 100, 3, () => now);
-    l.fail("a");
-    expect(l.blocked("a")).toBe(false);
-    l.fail("a");
-    expect(l.blocked("a")).toBe(true);
-    now += 100;
-    expect(l.blocked("a")).toBe(false);
-    l.fail("a");
-    l.fail("a");
-    l.clear("a");
-    expect(l.blocked("a")).toBe(false);
+  it("a right password gives back only its own address try", async () => {
+    await timed(async (s) => {
+      const a = await newUser(s);
+      for (let i = 0; i < 4; i++) await login(s, a.user.email, WRONG, from(1));
+      expect((await login(s, a.user.email, PW, from(1))).status).toBe(200);
+      expect((await login(s, a.user.email, WRONG, from(1))).status).toBe(401);
+      expect((await login(s, a.user.email, WRONG, from(1))).status).toBe(429);
+    });
+  });
 
-    const small = new SignInLimiter(1, 1000, 3, () => now);
-    for (const k of ["a", "b", "c", "d"]) small.fail(k);
-    expect(["a", "b", "c", "d"].map((k) => small.blocked(k))).toEqual([false, true, true, true]);
+  it("limits one client that cycles e-mail addresses", async () => {
+    await timed(async (s) => {
+      for (let i = 0; i < 5; i++) expect((await login(s, `nobody-${i}@example.com`, WRONG, from(1))).status).toBe(401);
+      expect((await login(s, "nobody-last@example.com", WRONG, from(1))).status).toBe(429);
+    });
+  });
+
+  it("counts over-long e-mails for the address only", async () => {
+    await timed(async (s) => {
+      const a = await newUser(s);
+      for (let i = 0; i < 5; i++) expect((await login(s, `${"a".repeat(300 + i)}@example.com`, WRONG, from(1))).status).toBe(401);
+      expect((await login(s, `${"a".repeat(310)}@example.com`, WRONG, from(1))).status).toBe(429);
+      expect((await login(s, a.user.email, PW, from(1))).status).toBe(429);
+      expect(throttlesOf(s.ctx).accounts.size).toBe(0);
+    });
   });
 });
 

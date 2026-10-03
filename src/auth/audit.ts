@@ -56,7 +56,7 @@ const EventSchema = z
   .refine((e) => (e.userId === undefined || e.target === undefined) && (e.detail === undefined || e.target !== undefined));
 
 export const AuditEntrySchema = z.discriminatedUnion("action", [
-  z.object({ ...Base, action: z.enum(["create", "password", "link", "edit", "unblock", "delete"]) }).strict(),
+  z.object({ ...Base, action: z.enum(["create", "password", "link", "edit", "unblock", "delete", "reset"]) }).strict(),
   z.object({ ...Base, action: z.literal("block"), stopWork: z.boolean().optional() }).strict(),
   z.object({ ...Base, action: z.literal("role"), oldRole: Role, newRole: Role }).strict(),
   EventSchema,
@@ -66,7 +66,7 @@ export type AuditEntry = z.infer<typeof AuditEntrySchema>;
 
 /** What a store call tells the log: the entry without the time and the actor. */
 export type AccountAuditEvent =
-  | { action: "create" | "password" | "link" | "edit" | "unblock" | "delete"; userId: string }
+  | { action: "create" | "password" | "link" | "edit" | "unblock" | "delete" | "reset"; userId: string }
   | { action: "block"; userId: string; stopWork?: boolean }
   | { action: "role"; userId: string; oldRole: "admin" | "user"; newRole: "admin" | "user" };
 export interface ActionAuditEvent {

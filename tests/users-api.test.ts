@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -95,8 +96,10 @@ describe("users API", () => {
       body: body === undefined ? undefined : JSON.stringify(body),
     });
     const text = await r.text();
-    const keep = !(method === "POST" && (path === "/api/users" || path.endsWith("/link")) && r.status < 300);
-    if (keep) seen.push(text);
+    // A successful create, link or reset holds the one token of the answer; it is replaced by a fixed word, so the rest is still scanned.
+    const shown = method === "POST" && (path === "/api/users" || path.endsWith("/link") || path.endsWith("/reset")) && r.status < 300;
+    const token = shown ? (JSON.parse(text) as { token?: string }).token : undefined;
+    seen.push(token ? text.split(token).join("TOKEN") : text);
     return { status: r.status, text, json: () => JSON.parse(text) };
   };
   const auditLines = () => (existsSync(auditPath()) ? readFileSync(auditPath(), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as Record<string, unknown>).filter((l) => !("result" in l)) : []);
@@ -129,7 +132,7 @@ describe("users API", () => {
   const runStatus = (s: Srv, id: string) => JSON.parse(readFileSync(join(s.runsDir, id, "run.json"), "utf8")).status;
   const zeros = { queued: 0, running: 0, waiting: 0 };
 
-  it("lists accounts with nine keys and never a secret", async () => {
+  it("lists accounts with ten keys and never a secret", async () => {
     const { s, admin, ann, walk } = await world();
     await walk(ann);
     const made = await call(s, admin, "POST", "/api/users", { name: "Cy", email: "cy@example.com", role: "user" });
@@ -139,7 +142,8 @@ describe("users API", () => {
     expect(r.status).toBe(200);
     const list = r.json() as Record<string, unknown>[];
     expect(list).toHaveLength(4);
-    for (const u of list) expect(Object.keys(u).sort()).toEqual(["created", "email", "hasPassword", "id", "lastSignIn", "name", "role", "runs", "status"]);
+    for (const u of list) expect(Object.keys(u).sort()).toEqual(["created", "email", "hasPassword", "id", "lastSignIn", "lockedUntil", "name", "role", "runs", "status"]);
+    for (const u of list) expect(u.lockedUntil).toBeNull();
     const by = (email: string) => list.find((u) => u.email === email)!;
     expect(by("cy@example.com")).toMatchObject({ hasPassword: false, lastSignIn: null, runs: 0 });
     expect(by("ann@example.com")).toMatchObject({ hasPassword: true, runs: 1, status: "blocked" });
@@ -373,6 +377,7 @@ describe("users API", () => {
       ["POST", "/api/users", { name: "Cy", email: "cy@example.com", role: "user" }],
       ["PUT", `/api/users/${ann.user.id}`, { name: "Z" }],
       ["POST", `/api/users/${ann.user.id}/block`, {}],
+      ["POST", `/api/users/${ann.user.id}/reset`, {}],
       ["DELETE", `/api/users/${ann.user.id}`],
     ];
     const answers: string[] = [];
@@ -381,7 +386,7 @@ describe("users API", () => {
       expect([m, p, r.status, r.json().error]).toEqual([m, p, 500, INTERNAL]);
       answers.push(r.text);
     }
-    expect(s.logs.filter((l) => l === "users: audit.jsonl cannot-write")).toHaveLength(4);
+    expect(s.logs.filter((l) => l === "users: audit.jsonl cannot-write")).toHaveLength(5);
     expect(readFileSync(usersPath())).toEqual(before);
     expect((await call(s, ann, "GET", "/api/credentials")).json()).toHaveLength(1);
     expect(s.logs.join("\n") + answers.join("\n")).not.toContain(s.tmp);
@@ -450,6 +455,94 @@ describe("users API", () => {
     expect(s.logs).toContain("users: queue.json cannot-write");
     expect(r.text).not.toContain(s.tmp);
     expect(s.logs.join("\n")).not.toContain(s.tmp);
+    rmSync(join(s.home, "queue.json"), { recursive: true, force: true }); // the running job ends later and saves the queue
+  });
+
+  describe("locks and resets", () => {
+    const UNKNOWN = "00000000-0000-4000-8000-000000000000";
+    const from = (n: number) => ({ "x-forwarded-proto": "https", "x-forwarded-for": `10.0.0.${n}` });
+    let now = 0;
+    const world2 = async () => {
+      now = Date.now();
+      return world({ signInClock: () => now });
+    };
+    const signIn = (s: Srv, email: string, password: string, n: number) =>
+      fetch(s.base + "/api/session", { method: "POST", headers: { "content-type": "application/json", ...from(n) }, body: JSON.stringify({ email, password }) });
+    /** 20 wrong tries from one address; the clock moves between them, and the last wait is still running. */
+    const lockOut = async (s: Srv, email: string) => {
+      for (let i = 0; i < 20; i++) {
+        expect((await signIn(s, email, "wrong-password-123", 1)).status).toBe(401);
+        if (i < 19) now += 61_000;
+      }
+    };
+    const rowOf = async (s: Srv, admin: TestSession, email: string) => ((await call(s, admin, "GET", "/api/users")).json() as Record<string, unknown>[]).find((u) => u.email === email)!;
+
+    it("shows lockedUntil after 20 wrong tries, also for a blocked account, and unblocking keeps it", async () => {
+      const { s, admin, ann, bob } = await world2();
+      await lockOut(s, ann.user.email);
+      const row = await rowOf(s, admin, ann.user.email);
+      expect(row.lockedUntil).toMatch(/^\d{4}-\d\d-\d\dT.*Z$/);
+      expect(Date.parse(row.lockedUntil as string) - now).toBeGreaterThan(29 * 60_000);
+      expect((await rowOf(s, admin, bob.user.email)).lockedUntil).toBeNull();
+      expect((await call(s, admin, "POST", `/api/users/${ann.user.id}/block`, {})).status).toBe(200);
+      const blocked = await rowOf(s, admin, ann.user.email);
+      expect(blocked).toMatchObject({ status: "blocked", lockedUntil: row.lockedUntil });
+      expect((await call(s, admin, "POST", `/api/users/${ann.user.id}/unblock`, {})).json().user.lockedUntil).toBe(row.lockedUntil);
+    });
+
+    it("a blocked account without wrong tries has no lock", async () => {
+      const { s, admin, ann } = await world2();
+      await call(s, admin, "POST", `/api/users/${ann.user.id}/block`, {});
+      expect(await rowOf(s, admin, ann.user.email)).toMatchObject({ status: "blocked", lockedUntil: null });
+    });
+
+    it("unlock removes the lock; a wait for the address can remain", async () => {
+      const { s, admin, ann } = await world2();
+      await lockOut(s, ann.user.email);
+      const r = await call(s, admin, "POST", `/api/users/${ann.user.id}/unlock`, {});
+      expect(r.status).toBe(200);
+      expect(r.json().user.lockedUntil).toBeNull();
+      const same = await signIn(s, ann.user.email, PW, 1);
+      expect(same.status).toBe(429);
+      expect(await same.json()).toEqual({ error: "too many tries; try again in 1 minute" });
+      expect((await signIn(s, ann.user.email, PW, 2)).status).toBe(200);
+      now += 61_000;
+      expect((await signIn(s, ann.user.email, PW, 1)).status).toBe(200);
+    });
+
+    it("unlock answers 404 for an unknown account and 200 when nothing is locked", async () => {
+      const { s, admin, ann } = await world2();
+      expect((await call(s, admin, "POST", `/api/users/${UNKNOWN}/unlock`, {})).status).toBe(404);
+      const r = await call(s, admin, "POST", `/api/users/${ann.user.id}/unlock`, {});
+      expect(r.status).toBe(200);
+      expect(r.json().user.lockedUntil).toBeNull();
+    });
+
+    it("reset removes the password, ends the sessions and answers with a one-time token", async () => {
+      const { s, admin, ann } = await world2();
+      const r = await call(s, admin, "POST", `/api/users/${ann.user.id}/reset`, {});
+      expect(r.status).toBe(200);
+      const body = r.json();
+      expect(Object.keys(body).sort()).toEqual(["expires", "token", "user"]);
+      expect(Object.keys(body.user).sort()).toEqual(["created", "email", "hasPassword", "id", "lastSignIn", "lockedUntil", "name", "role", "runs", "status"]);
+      expect(body.user.hasPassword).toBe(false);
+      for (const bad of ["passwordHash", "passwordLink", "scrypt$", createHash("sha256").update(body.token).digest("hex")]) expect(r.text).not.toContain(bad);
+      expect((await call(s, ann, "GET", "/api/runs")).status).toBe(401);
+      expect((await signIn(s, ann.user.email, PW, 3)).status).toBe(401);
+      const set = await fetch(s.base + "/api/set-password", { method: "POST", headers: { "content-type": "application/json", ...from(4) }, body: JSON.stringify({ token: body.token, password: NEW_PW }) });
+      expect(set.status).toBe(200);
+      expect((await signIn(s, ann.user.email, NEW_PW, 5)).status).toBe(200);
+      expect(auditLines().filter((l) => l.action === "reset")).toEqual([expect.objectContaining({ by: admin.user.id, userId: ann.user.id })]);
+    });
+
+    it("reset is refused without a password, for the only admin, and for an unknown account", async () => {
+      const { s, admin } = await world2();
+      const made = await call(s, admin, "POST", "/api/users", { name: "Cy", email: "cy@example.com", role: "user" });
+      expect((await call(s, admin, "POST", `/api/users/${made.json().user.id}/reset`, {})).status).toBe(409);
+      expect((await call(s, admin, "POST", `/api/users/${admin.user.id}/reset`, {})).status).toBe(409);
+      expect((await call(s, admin, "POST", `/api/users/${UNKNOWN}/reset`, {})).status).toBe(404);
+      expect((await call(s, admin, "GET", "/api/users")).status).toBe(200);
+    });
   });
 
   it("leaks no token or hash in any kept answer", () => {

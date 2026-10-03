@@ -38,6 +38,18 @@ Changes that are merged but not yet in a release go under **Unreleased**. Newest
   - **Format.** New action names in `EVENT_ACTIONS`; a `target` may now be 255 characters (was 200). Old lines are unchanged.
   - **Code.** `auditAction`, `changedKeys` and `EventAction` in `src/auth/audit.ts`; `setRepoAuth` returns `changed`, `setRepoSettings` returns `{ repo, changed }`, `transferRepo` returns `moved`, `removeRepo` and `removeGithubRepo` return `removed`.
   - **Not included.** Runs a watcher starts, `scf run`, `scf approve` and `scf reject`, evals, deleting or unpublishing a flow, blocks, clean-up, running a watcher now, the audit page (#96).
+- Passwords (#8).
+  - **Behaviour.** Everyone can change their own password (**Change password** in the top bar; the other sessions of the account end). An admin can **Reset password** (removes the password, ends the sessions, shows a one-time link) and **Unlock** an account. The sign-in form says what to do after a forgotten password. The Users page shows a "locked" status.
+  - **Calls.** New `POST /api/password`, `POST /api/users/:id/reset` and `POST /api/users/:id/unlock`. Sign-in and set-password answers 429 carry `Retry-After`.
+  - **Code.** `resetPassword()` and `changePassword()` in `src/auth/users.ts`; `src/auth/common-passwords.ts`; `src/server/sign-in-throttle.ts` (in-memory waits and locks; the tries are counted before the check, given back on success, and kept for stored accounts); `signInClock` server option; `HttpError` can carry headers.
+  - **Changed.**
+    - New passwords need 12 characters (was 10) and must not be common.
+    - Links last 24 hours (was 7 days); earlier links keep their end time.
+    - Limits are waits from the 5th wrong try and a 30-minute lock at 20 (was 429 after 10 per e-mail and 60 per client in 15 minutes); a right password no longer counts for the address.
+    - `GET /api/users` has `lockedUntil`.
+    - New audit action `reset`.
+    - The export `SignInLimiter` is gone.
+
 - Self-repair 2 — more monitor detectors (#86).
   - **New detectors** (each has a threshold under `monitor:` in `config.yaml`): **stuck run** (nothing written to the log for longer than the step's timeout plus 10 minutes; a step without a timeout counts 120 minutes), **same step keeps failing** (the same step of a flow ended runs as failed for 3 different issues in 24 hours), **label and run disagree** (more than 3 checks), **lock without owner** (a code-area lock or a run lock held by a run that is not running, more than 10 minutes), **queue not moving** (jobs queued, slots free, nothing started for 15 minutes), **restart overdue** (a new version waits more than 2 hours), **develop is red** (the tests after a merge into develop failed 2 times in a row, looking back 24 hours) and **slow step** (more than 3 times the usual time, 3 times in 24 hours).
   - **Normal is never a finding.** A run that waits for a person, a usage limit that resets by itself, a sign-out, a story that waits for a dependency or a release, and a `done` label are left out. Interrupted runs, rejected approvals and the run budget do not count as a failing step. A run inside a sub-flow step is not judged as stuck.

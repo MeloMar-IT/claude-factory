@@ -3,12 +3,13 @@ import { join } from "node:path";
 import { z } from "zod";
 import { removeCredentialsLocked } from "../credentials/store.js";
 import { appendAuditLocked, prepareAuditLocked, type AccountAuditEvent, type AuditEvent } from "./audit.js";
+import { COMMON_PASSWORDS } from "./common-passwords.js";
 import { checkRefinements, removeRefinementsLocked } from "../refinement/store.js";
 import { removeReposLocked } from "./repos.js";
 import { addSessionLocked, removeSessionsLocked, sessionId } from "./sessions.js";
 import { dataHome, readJsonFile, withAuthLock, writeJsonFile } from "./store.js";
 
-export type UserErrorCode = "bad-name" | "bad-email" | "bad-password" | "email-taken" | "admin-exists" | "not-found" | "last-admin" | "bad-role" | "has-password";
+export type UserErrorCode = "bad-name" | "bad-email" | "bad-password" | "email-taken" | "admin-exists" | "not-found" | "last-admin" | "bad-role" | "has-password" | "wrong-password" | "no-password";
 
 /** A problem with what the caller asked for (not with the file). The message is safe to show. */
 export class UserError extends Error {
@@ -32,7 +33,7 @@ const KEY_BYTES = 64;
 const SALT_BYTES = 16;
 const MAXMEM = 64 * 1024 * 1024; // Node's default of 32 MiB is too small for these parameters
 const PARAMS = `N=${N},r=${R},p=${P}`;
-export const PASSWORD_MIN = 10;
+export const PASSWORD_MIN = 12;
 export const PASSWORD_MAX = 200;
 
 /** The salt and key of a hash in exactly our form, or undefined. Base64 must be canonical and padded. */
@@ -55,6 +56,7 @@ export function checkPassword(password: string): void {
   if (typeof password !== "string" || password.length < PASSWORD_MIN || password.length > PASSWORD_MAX) {
     throw new UserError("bad-password", `the password must be ${PASSWORD_MIN} to ${PASSWORD_MAX} characters`);
   }
+  if (COMMON_PASSWORDS.has(password.toLowerCase())) throw new UserError("bad-password", "that password is too common; choose another");
 }
 
 export async function hashPassword(password: string): Promise<string> {
@@ -228,7 +230,7 @@ function audited<T>(by: string | undefined, event: AuditEvent | undefined, mutat
 function change(
   id: string,
   apply: (u: User, all: User[]) => { next: User; event?: Audited } | undefined,
-  opts: { endSessions?: boolean; by?: string } = {},
+  opts: { endSessions?: boolean; keepSession?: string; by?: string } = {},
 ): User {
   return withAuthLock(() => {
     const file = read();
@@ -240,7 +242,7 @@ function change(
     const event = r.event && ({ ...r.event, userId: id } as AccountAuditEvent);
     return audited(opts.by, event, () => {
       // sessions first: if the user file cannot be written, the account is only signed out too early
-      if (opts.endSessions) removeSessionsLocked((s) => s.userId === id);
+      if (opts.endSessions) removeSessionsLocked((s) => s.userId === id && s.id !== opts.keepSession);
       writeJsonFile(usersPath(), { ...file, users: file.users.map((u, j) => (j === i ? r.next : u)) });
       return r.next;
     });
@@ -259,9 +261,33 @@ export async function setPassword(id: string, password: string, opts: ChangeOpti
   );
 }
 
+/**
+ * Changes the password of the signed-in account. The current password must fit (one scrypt), the new one is hashed
+ * before the lock, and the stored hash is compared again under the lock. The session `keepSession` stays; the others end.
+ */
+export async function changePassword(id: string, current: string, password: string, opts: ChangeOptions & { keepSession?: string } = {}): Promise<User> {
+  checkPassword(password);
+  const u = getUser(id);
+  if (!u) throw new UserError("not-found", "no such account");
+  const stored = u.passwordHash;
+  const fits = typeof current === "string" && current.length <= PASSWORD_MAX;
+  const ok = stored !== undefined && fits && (await verifyPassword(current, stored));
+  if (!ok) throw new UserError("wrong-password", "the current password is wrong");
+  const passwordHash = await hashPassword(password);
+  return change(
+    id,
+    (cur) => {
+      if (cur.passwordHash !== stored) throw new UserError("wrong-password", "the current password is wrong");
+      const { passwordLink: _link, ...rest } = cur;
+      return { next: { ...rest, passwordHash }, event: { action: "password" } };
+    },
+    { endSessions: true, keepSession: opts.keepSession, by: opts.by ?? id },
+  );
+}
+
 // ---- set-password link -----------------------------------------------------------------------------
 
-export const LINK_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+export const LINK_TTL_MS = 24 * 60 * 60 * 1000;
 const LINK_TOKEN_RE = /^[A-Za-z0-9_-]{43}$/;
 
 export interface LinkResult {
@@ -303,6 +329,25 @@ export async function newPasswordLink(id: string, opts: ChangeOptions = {}): Pro
       return { next: { ...u, passwordLink: link }, event: { action: "link" } };
     },
     { by: opts.by },
+  );
+  return { user: publicUser(user), token, expires: link.expires };
+}
+
+/**
+ * Takes the password away, ends all sessions of the account and stores a new one-time link. The last admin that can
+ * sign in cannot be reset. Order: sessions, then the user file, then the audit line.
+ */
+export async function resetPassword(id: string, opts: ChangeOptions = {}): Promise<LinkResult> {
+  const { token, link } = makeLink();
+  const user = change(
+    id,
+    (u, all) => {
+      if (u.passwordHash === undefined) throw new UserError("no-password", "this account has no password; make a new link instead");
+      if (isLastAdmin(all, u)) throw new UserError("last-admin", LAST_ADMIN);
+      const { passwordHash: _hash, ...rest } = u;
+      return { next: { ...rest, passwordLink: link }, event: { action: "reset" } };
+    },
+    { endSessions: true, by: opts.by },
   );
   return { user: publicUser(user), token, expires: link.expires };
 }
