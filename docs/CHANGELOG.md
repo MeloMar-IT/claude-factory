@@ -4,7 +4,7 @@ Changes that are merged but not yet in a release go under **Unreleased**. Newest
 
 ## Unreleased
 
-- Docs: new `docs/DESIGN.md` (how the Foundry is built, with diagrams) and `docs/LESSONS_LEARNED.md`; the user guide and README have pictures of the current interface (Your turn, Board, sign-in, My repositories, the user display) and every older picture was retaken.
+- Docs: new `docs/DESIGN.md` (how the Foundry is built, with diagrams) and `docs/LESSONS_LEARNED.md`; the user guide and README have pictures of the current interface (Your turn, Board, sign-in, My repositories, the user display) and every older picture was retaken. The README is rewritten around the current way of working (one label, Your turn, gitflow, accounts) and its quick start no longer uses a flow that is not shipped.
 - Users page (#65).
   - **The page.** Admins get **Users** in the top bar (`#/users`). It lists name, e-mail, role, status (active, blocked, no password yet), last sign-in and the number of runs; your own row says "(you)". Buttons: **Add user**, **Edit**, **New link**, **Block**, **Unblock**, **Delete**. An account with the role `user` never sees the page or the link; `#/users` goes back to `#/runs`.
   - **Links.** **Add user** (name, e-mail, role) and **New link** show the set-password link once, with **Copy** and a read-only field to select (Copy needs HTTPS or localhost). The dialog says the link works once, for 7 days, and that the admin must send it. The link is built from the address in the admin's browser. **New link** is also offered for a blocked account without a password; the dialog says the link works only after an unblock.

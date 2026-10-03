@@ -1,41 +1,56 @@
 # Spaghetti Code Foundry
 
-Formerly **claude-factory**. The command is now `scf` (`factory` still works), the repository is [MeloMar-IT/spaghetti-code-foundry](https://github.com/MeloMar-IT/spaghetti-code-foundry) and the data folder is `~/.spaghetti-code-foundry`. The `<repo>/.claude-factory` folder, the labels (`claude-factory`, `factory:*`) and `factory/…` branches keep the old name.
+An AI coding factory that runs on your own machine. Put one label on a GitHub issue, and the
+Foundry asks the open questions, plans, codes, tests, reviews and merges the story — and asks
+you only when it has to.
 
-An AI coding factory that runs on your own machine. You describe work as **flows** — YAML
-pipelines of agent steps (Claude Code or OpenAI's Codex CLI), shell steps, approvals and
-branches — and the Foundry runs them headlessly: from a task you type, a GitHub issue that gets
-a label, a red CI build, or a schedule.
+Formerly **claude-factory**. The command is now `scf` (`factory` still works), the repository is [MeloMar-IT/spaghetti-code-foundry](https://github.com/MeloMar-IT/spaghetti-code-foundry) and the data folder is `~/.spaghetti-code-foundry`. The `<repo>/.claude-factory` folder, the labels (`claude-factory`, `factory:*`) and `factory/…` branches keep the old name.
 
 ![Your turn: only what waits for you](docs/images/your-turn.png)
 
-![The board: where every story is](docs/images/board.png)
+Work is described as **flows**: YAML pipelines of agent steps (Claude Code or OpenAI's Codex
+CLI), shell steps, approvals and branches. The Foundry runs them headlessly — from a GitHub
+issue that gets a label, a task you type, a red CI build, or a schedule.
 
-**What it does**
+## What it does
 
-- **Your own flows.** Plan → code → test → review → commit → PR, or anything else. Edit them
-  visually or as YAML, reuse steps from a block library, or have Claude draft a flow for you.
-- **Two agents, any model.** Steps run on Claude Code or Codex (with your ChatGPT login), on
-  Anthropic, OpenAI or local models (Ollama, LM Studio). Routing rules pick the model per step,
-  with fallbacks when a model hits a limit.
-- **Hands-off from GitHub.** Put one label on an issue — or a whole epic — and the Foundry asks
-  its open questions up front, then plans (Opus, checked by Codex) and codes (Sonnet, two Codex
-  reviews) each issue in dependency order, into one pull request you merge when you like. Plans
-  get a 0–100 risk score; above 75 a human approves first. Watchers also answer review comments,
-  fix a red main branch, and run recurring chores.
-- **Safe by default.** Every run gets its own git worktree or clone. Pushes to protected
-  branches and pushes that contain secrets are blocked. Budgets per run and per day, approval
-  steps, sandboxing (Claude Code's sandbox or Docker).
-- **See everything.** A web UI with live logs, readable transcripts of every agent step, diffs,
-  a dashboard, resume / retry / approve buttons, and evals to compare flows and models.
+- **From issue to merged code, hands-off.** One label (`Factory_go`) on an issue or a whole
+  epic. The Foundry asks its questions up front, then builds each story in dependency order:
+  plan, review of the plan, code, tests, code review, docs, merge.
+- **A person only where a person is needed.** Every plan gets a risk score from 0 to 100; above
+  75 you approve it first. Stories that are too big are split into smaller ones.
+- **Always clear what happens next.** *Your turn* lists only what waits for you, one button
+  each. The *Board* shows where every story is and why. A health line says when something is
+  wrong with the Foundry itself.
+- **Several stories at once.** Runs lock the parts of the code they change, so stories in
+  different areas are built in parallel without merge conflicts.
+- **Gitflow.** Each story on its own feature branch, merged into `develop` when it is done;
+  one pull request a day from `develop` to `main` for you to merge.
+- **Two agents, any model.** Steps run on Claude Code or Codex, on Anthropic, OpenAI or local
+  models (Ollama, LM Studio). One vendor's model reviews the other's work. Routing rules pick
+  the model per step, with fallbacks when a model hits a limit.
+- **Your own flows.** Edit them visually or as YAML, reuse steps from a block library, or have
+  any AI assistant write one.
+- **Accounts and roles.** An admin makes flows, watchers and settings. Users run the flows the
+  admin published, on their own repositories, and see only their own runs.
+- **Safe by default.** Every run works in its own copy of the code. Pushes to protected
+  branches and pushes that contain secrets are blocked. Approval steps, optional budgets,
+  optional sandboxing (Claude Code's sandbox or Docker).
+- **See everything.** Live logs, readable transcripts of every agent step, diffs, a dashboard,
+  and resume, retry and approve buttons.
+
+![The board: where every story is, and why](docs/images/board.png)
 
 ## Requirements
 
 - Node.js 20 or newer and git
 - [Claude Code](https://docs.claude.com/en/docs/claude-code) (`claude`), logged in
-- Optional: [GitHub CLI](https://cli.github.com) (`gh`) for GitHub flows,
-  [Codex CLI](https://developers.openai.com/codex) for Codex steps, [Ollama](https://ollama.com)
-  or LM Studio for local models, Docker for sandboxed test runs
+- [GitHub CLI](https://cli.github.com) (`gh`), logged in, for the GitHub flows
+- Optional: [Codex CLI](https://developers.openai.com/codex) for Codex steps (the shipped flows
+  use it for reviews), [Ollama](https://ollama.com) or LM Studio for local models, Docker for
+  sandboxed test runs
+
+Built and used on macOS.
 
 ## Install
 
@@ -64,29 +79,35 @@ The folder of your clone can keep its name.
 
 ## Quick start
 
+**1. Start it.**
+
+```bash
+scf ui      # web UI at http://localhost:4777
+```
+
+The first visit asks you to create the admin account. After that you sign in.
+
+**2. Let it build your GitHub issues.** In the UI, open **Watchers** → **Add watcher**: your
+repository (`owner/repo`), the flow `issue-gitflow` and the label `Factory_go`. Your repository
+needs a `develop` branch; the Foundry creates it from `main` when it is missing.
+
+**3. Put the label `Factory_go` on an issue.** Then watch **Your turn**: questions and risky
+plans show up there. Everything else continues by itself, and once a day you get one pull
+request from `develop` to `main`.
+
+**Or run one flow by hand**, on a local repository:
+
 ```bash
 cd ~/code/my-project
-scf ui                          # web UI at http://localhost:4777; the first visit asks you to create the admin account
-
-# or from the terminal:
-scf run quick --task "Add a --json flag to the export command" --var test_cmd="npm test"
+scf new my-flow                 # a small flow: implement, test, fix
+scf run my-flow --task "Add a --json flag to the export command" --var test_cmd="npm test"
 ```
 
 The run happens in a fresh worktree on a `factory/<run-id>` branch — your checkout is not
 touched. Look at the result in the UI (Runs → the run → Changes) and merge the branch if you
 like it.
 
-## Documentation
-
-How it is built: **[docs/DESIGN.md](docs/DESIGN.md)**. What we learned building it: **[docs/LESSONS_LEARNED.md](docs/LESSONS_LEARNED.md)**.
-
-The **[user guide](docs/USER_GUIDE.md)** covers everything with screenshots: writing flows,
-running and resuming them, the GitHub watchers, models and routing, safety settings, costs,
-evals and the CLI.
-
-To have **any AI assistant write a flow** for you, give it
-**[docs/FLOW_AUTHORING.md](docs/FLOW_AUTHORING.md)** (or the output of `scf flow-guide`) and
-describe the flow you want; check the result with `scf validate`.
+To keep it running after you close the terminal: `scf service install`.
 
 ## Built-in flows
 
@@ -97,16 +118,32 @@ describe the flow you want; check the result with `scf validate`.
 
 Write your own flows in the editor or with any AI assistant ([FLOW_AUTHORING.md](docs/FLOW_AUTHORING.md)); `scf new <name>` starts from a small template. A flow that a watcher uses (also a disabled one) can't be deleted.
 
+![The flow editor](docs/images/flows.png)
+
+## Documentation
+
+| Document | What it is |
+|---|---|
+| **[User guide](docs/USER_GUIDE.md)** | Everything, with screenshots: Your turn and the board, running and resuming flows, writing flows, watchers and labels, models and routing, accounts, safety, costs, the command line, troubleshooting |
+| **[Design](docs/DESIGN.md)** | How the Foundry is built and why, with diagrams |
+| **[Lessons learned](docs/LESSONS_LEARNED.md)** | What building and running it taught us, including the incidents |
+| **[Flow authoring](docs/FLOW_AUTHORING.md)** | The complete flow format. Give it to any AI assistant (or use `scf flow-guide`), describe the flow you want, and check the result with `scf validate` |
+| **[Changelog](docs/CHANGELOG.md)** | What changed |
+
 ## Development
+
+The Foundry builds itself: its stories are GitHub issues in this repository, built with the
+gitflow pipeline. `develop` holds the newest work; `main` is released once a day.
 
 ```bash
 npm run build     # compile TypeScript to dist/
 npm test          # vitest; uses fake claude, codex and gh CLIs — no network, no cost
-npm run dev -- run quick --task "…"   # run the CLI from source
+npm run dev -- run my-flow --task "…"   # run the CLI from source
 ```
 
-GitHub flows are generated from the blocks: edit `blocks/*.yaml` or `scripts/build-flows.mjs`,
-then run `node scripts/build-flows.mjs`.
+The shipped flows are generated: edit `blocks/*.yaml` or `scripts/build-flows.mjs`, then run
+`node scripts/build-flows.mjs`. Never edit `flows/*.yaml` by hand. See [CLAUDE.md](CLAUDE.md)
+for the rules coding agents follow in this repository.
 
 ## License
 
