@@ -173,6 +173,12 @@ const EXAMPLES: Record<string, Example> = {
   "POST repos": { path: "repos", body: {}, user: 400, admin: 400 },
   "PUT repos/:id/auth": { path: `repos/${UNKNOWN}/auth`, body: {}, user: 400, admin: 400 },
   "DELETE repos/:id": { path: `repos/${UNKNOWN}`, user: 404, admin: 404 },
+  "GET refinement": { path: "refinement", user: 200, admin: 200 },
+  "POST refinement": { path: "refinement", body: {}, user: 400, admin: 400 },
+  "GET refinement/:id": { path: `refinement/${UNKNOWN}`, user: 404, admin: 404 },
+  "PUT refinement/:id": { path: `refinement/${UNKNOWN}`, body: {}, user: 404, admin: 404 },
+  "POST refinement/:id/drop": { path: `refinement/${UNKNOWN}/drop`, body: {}, user: 404, admin: 404 },
+  "POST refinement/:id/restore": { path: `refinement/${UNKNOWN}/restore`, body: {}, user: 404, admin: 404 },
   "DELETE repos/:owner/:name": { path: "repos/nope/nope", user: 404, admin: 404 },
   "GET admin/repos": no("admin/repos", 200),
   "PUT admin/repos/:id/settings": no(`admin/repos/${UNKNOWN}/settings`, 404, {}),
@@ -198,6 +204,7 @@ describe("the table", () => {
     expect(findRule("GET", ["admin", "repos"])?.path).toBe("admin/repos");
     expect(findRule("PUT", ["admin", "repos", "a", "settings"])?.path).toBe("admin/repos/:id/settings");
     expect(findRule("GET", ["admin"])).toBeUndefined();
+    expect(findRule("POST", ["refinement", "a", "drop"])?.path).toBe("refinement/:id/drop");
   });
 
   it("has an example for every rule and a rule for every example", () => {

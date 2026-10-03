@@ -27,6 +27,7 @@ Formerly **claude-factory**. The command is now `scf` (`factory` still works), t
 - [9. Command line](#9-command-line)
 - [10. Troubleshooting](#10-troubleshooting)
 - [11. Upgrading from claude-factory](#11-upgrading-from-claude-factory)
+- [12. Refinement](#12-refinement)
 
 ---
 
@@ -70,6 +71,7 @@ admin for a new one.
 | **Board** | Where every story is, in columns per repository |
 | **Flows** | Your flows and the built-in ones: edit, create, run |
 | **Library** | Reusable blocks of steps to drop into flows |
+| **Refinement** | Where a rough idea grows into a story before it goes to the backlog |
 | **Runs** | Everything that ran or is running; the ones that need you on top |
 | **My repositories** | The repositories you work in, and how the Foundry signs in to them |
 | **Repositories** | Admin: the repositories of all accounts, their settings, and transfer to another account |
@@ -79,7 +81,7 @@ admin for a new one.
 | **Users** | The accounts: add, edit, block and delete them (admins only) |
 | **Settings** | Budget, safety, notifications, bot identity, disk clean-up |
 
-An account with the role `user` sees only **Runs** and **My repositories**:
+An account with the role `user` sees only **Refinement**, **Runs** and **My repositories**:
 
 ![What a user sees: Runs and My repositories](images/user-home.png)
 
@@ -1239,9 +1241,9 @@ Every account has a role, `admin` or `user`. The server checks it on every call.
 not in the table below answers 404, also for an admin.
 
 - **An admin** may make every call and sees every page.
-- **A user** sees only the **Runs** and **My repositories** pages and may use the calls marked `yes` or `own runs` in the
+- **A user** sees only the **Refinement**, **Runs** and **My repositories** pages and may use the calls marked `yes` or `own runs` in the
   table. Every other call answers `403 {"error":"not allowed for your role"}`. Pages other than
-  Runs and My repositories are not drawn; the address bar goes back to `#/runs`.
+  Refinement, Runs and My repositories are not drawn; the address bar goes back to `#/runs`.
 
 **What a user does not see.** The server cuts these from every answer a user gets, so the page
 cannot show them: costs, tokens, budgets and prices; the model, provider and agent; step output
@@ -1372,7 +1374,7 @@ start a run can run commands as your Mac user (through the task and variables su
 account only to people you would give an admin account. To switch user runs off, change the rule
 `POST runs` to `no` in `src/server/permissions.ts`.
 
-**After an upgrade.** Existing accounts with the role `user` lose access to everything but Runs and My repositories.
+**After an upgrade.** Existing accounts with the role `user` lose access to everything but Refinement, Runs and My repositories.
 Change a role with `scf user role <e-mail> admin|user`, or create an admin with
 `scf user create --admin` under another e-mail.
 
@@ -1430,7 +1432,7 @@ Change a role with `scf user role <e-mail> admin|user`, or create an admin with
 | `POST /api/users/:id/block` | yes | no | block an account, end its sessions and cancel its queued jobs |
 | `POST /api/users/:id/unblock` | yes | no | unblock an account |
 | `POST /api/users/:id/link` | yes | no | a new set-password token for an account without a password |
-| `DELETE /api/users/:id` | yes | no | delete an account with its sessions, repositories and stored credentials |
+| `DELETE /api/users/:id` | yes | no | delete an account with its sessions, repositories, refinement sessions and stored credentials |
 | `GET /api/repos` | yes | yes | your repositories |
 | `POST /api/repos` | yes | yes | add a repository (a URL, and a token for it) |
 | `PUT /api/repos/:id/auth` | yes | yes | change the method, user name, token or address of your repository |
@@ -1439,6 +1441,12 @@ Change a role with `scf user role <e-mail> admin|user`, or create an admin with
 | `GET /api/admin/repos` | yes | no | the repositories of all accounts, with their settings |
 | `PUT /api/admin/repos/:id/settings` | yes | no | set the test command, docs, protected branches and branch names of a repository |
 | `POST /api/admin/repos/:id/transfer` | yes | no | move a repository to another account, by e-mail |
+| `GET /api/refinement` | yes | yes | your refinement sessions and the repositories a new one can use (an admin: the sessions of all accounts, with the owner) |
+| `POST /api/refinement` | yes | yes | start a refinement session on one of your GitHub repositories |
+| `GET /api/refinement/:id` | yes | yes | read your refinement session (an admin: any session) |
+| `PUT /api/refinement/:id` | yes | yes | rename your refinement session |
+| `POST /api/refinement/:id/drop` | yes | yes | drop your refinement session (an admin: any session); it is removed after 30 days |
+| `POST /api/refinement/:id/restore` | yes | yes | restore your dropped refinement session |
 
 **What comes later.** Runs that use a user's stored credentials or a repository's token, changing
 your own password in the UI, a connection test for repositories, SSH deploy keys, the GitHub App, and pages for users (starting runs).
@@ -1803,7 +1811,7 @@ learnings, queue, locks and evals. The copy is made next to the new folder and r
 in one step, so you never see a half-done move. Paths that point into the old folder (in run state,
 lock files, `queue.json` and `config.yaml`) are rewritten. If `config.yaml` can't be rewritten
 safely, it is kept as it was and a warning lists the values that still point to the old folder.
-`users.json`, `sessions.json` and `credentials.json` are copied unchanged, with their mode.
+`users.json`, `sessions.json`, `credentials.json` and `refinements.json` are copied unchanged, with their mode.
 
 **The backup.** `~/.claude-factory` is never changed or deleted, except for a note file
 `MOVED-TO-SPAGHETTI-CODE-FOUNDRY.txt`. Nothing there is used anymore: your settings now live in
@@ -1842,3 +1850,25 @@ the folder, set `SCF_HOME` to the folder you want, or delete the note file to co
 address. In an existing clone, run
 `git remote set-url origin https://github.com/MeloMar-IT/spaghetti-code-foundry.git`.
 The folder of your clone can keep its name.
+
+---
+
+## 12. Refinement
+
+**Refinement** is where a rough idea grows into a story before it goes to the backlog. For now the page keeps the idea, its state and a log. Nothing on this page calls an AI agent or GitHub yet.
+
+**Start a session.** Click **New session**. Choose a repository, write your idea in your own words (required, up to 10,000 characters) and, if you like, a title (up to 120 characters). When the title is empty, the first line of the idea is used. Only GitHub repositories from **My repositories** are offered. If you have none, the dialog links to that page.
+
+**States.** A session is *exploring*, *drafting*, *ready*, *published* or *dropped*. It starts as *exploring*. The state changes only by what you do. For now only **Drop** and **Restore** change it; later steps add the others.
+
+**The session page.** It shows the idea, the story drafts ("No story drafts yet." for now) and the log: who did what, and when. The list shows title, repository, state and last change; an admin also sees the owner.
+
+**Rename, drop, restore.** **Rename** changes the title. **Drop** (after a confirmation) takes the session out of **Open sessions**. Find it again under **Dropped**: **Restore** brings it back in the state it had. A dropped session is removed after 30 days.
+
+**Who may do what.** You see and change only your own sessions. An admin sees all sessions and who owns them, and may drop one, but cannot rename or restore it. In the log, you see an admin's action as "an administrator".
+
+**When something goes away.** If you remove the repository from My repositories, the session stays readable; the page says so, and it works again when you add the repository back. If an admin deletes your account, your refinement sessions are deleted with it.
+
+**Limits.** 200 sessions per account; dropped sessions count until they are removed. 1,000 log entries per session; after that the session can only be dropped. Nothing is removed to make room.
+
+**Where it is kept.** In `refinements.json` in the data folder (mode 0600). It survives a restart and is copied unchanged when the data folder moves. If the file cannot be read, the calls answer "the refinement sessions are not working; see the server log", and an account cannot be deleted until the file is repaired.

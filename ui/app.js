@@ -10,6 +10,7 @@ import { refreshModelLists, renderModels } from "./models.js";
 import { renderDashboard } from "./dashboard.js";
 import { renderRunDetail, renderRunsList } from "./runs.js";
 import { renderAllRepos } from "./admin-repos.js";
+import { renderRefinement } from "./refinement.js";
 import { renderRepos } from "./repos.js";
 import { renderUsers } from "./users.js";
 import { renderBoard } from "./board.js";
@@ -391,6 +392,7 @@ async function route() {
     else if (section === "settings") await renderSettings(main);
     else if (section === "models") await renderModels(main);
     else if (section === "all-repos") S.cleanup = await renderAllRepos(main);
+    else if (section === "refinement") S.cleanup = await renderRefinement(main, { admin: S.admin, id: arg });
     else if (section === "repos") S.cleanup = await renderRepos(main, { admin: S.admin });
     else if (section === "users") S.cleanup = await renderUsers(main, { me: S.me });
     else if (section === "runs" && arg) S.cleanup = renderRunDetail(main, arg, { admin: S.admin });
