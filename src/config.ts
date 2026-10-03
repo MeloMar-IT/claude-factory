@@ -13,13 +13,16 @@ const WatcherSchema = z
      * issues: labelled issues → flow. pr-feedback: new review comments on factory PRs → flow.
      * ci-failures: CI red on the default branch → ci-fix. schedule: run a chore every `every`.
      */
-    source: z.enum(["issues", "pr-feedback", "ci-failures", "schedule"]).default("issues"),
+    source: z.enum(["issues", "pr-feedback", "ci-failures", "schedule", "monitor"]).default("issues"),
     /** "default": the flow for the source (issues → issue-gitflow, schedule → release-daily). */
     flow: z.string().default("default"),
-    github_repo: z.string().regex(/^[\w.-]+\/[\w.-]+$/, "owner/repo"),
+    /** Empty for a monitor (source "monitor": checks the Foundry itself, only one allowed). */
+    github_repo: z.string().default(""),
     label: z.string().default("claude-factory"),
     every: z.string().default("5m"),
     max_per_tick: z.number().int().positive().default(1),
+    /** issues: stories with one of these labels (not case sensitive) go before all other stories. */
+    priority_labels: z.array(z.string()).default(["bug"]),
     vars: z.record(z.string(), z.string()).default({}),
     /** schedule: what the chore should do (the run's task). */
     task: z.string().max(5000).optional(),
@@ -46,6 +49,8 @@ const WatcherSchema = z
     remove_on_done: z.array(z.string()).default([]),
     /** issues: post the failure reason and the failing step's output on the issue. */
     comment_on_failure: z.boolean().default(true),
+    /** issues: keep one status comment on every issue the watcher follows (edited, never a second one). */
+    status_comment: z.boolean().default(true),
     /** Start nothing while an open PR's head branch starts with this (e.g. factory/daily-). */
     pause_while_pr_open: z.string().optional(),
     /** Never run two of this watcher's runs at the same time (they share a branch). */
@@ -59,7 +64,50 @@ const WatcherSchema = z
   })
   .strict()
   .refine((w) => w.source !== "schedule" || !!w.task?.trim(), { message: "a schedule watcher needs a task", path: ["task"] })
-  .refine((w) => !w.timezone || validTimeZone(w.timezone), { message: "unknown time zone (use e.g. Europe/Berlin)", path: ["timezone"] });
+  .refine((w) => !w.timezone || validTimeZone(w.timezone), { message: "unknown time zone (use e.g. Europe/Berlin)", path: ["timezone"] })
+  .superRefine((w, ctx) => {
+    if (w.source !== "monitor") {
+      if (!/^[\w.-]+\/[\w.-]+$/.test(w.github_repo)) ctx.addIssue({ code: "custom", message: "owner/repo", path: ["github_repo"] });
+      return;
+    }
+    const no = (path: string, set: boolean) => set && ctx.addIssue({ code: "custom", message: "a monitor does not use this", path: [path] });
+    no("github_repo", w.github_repo !== "");
+    no("flow", w.flow !== "default");
+    no("precheck_flow", w.precheck_flow !== undefined);
+    no("owner", w.owner !== undefined);
+  });
+
+/** Thresholds of the monitor watcher. */
+const MonitorSchema = z
+  .object({
+    /** The same run resumed more than `resumes` times within `within_minutes` (at most 49: run.json keeps the last 50 resumes). */
+    restart_loop: z.object({ resumes: z.number().int().min(1).max(49).default(5), within_minutes: z.number().int().min(1).max(1440).default(10) }).strict().prefault({}),
+    /** A watcher's check failed for more than `checks` checks in a row. */
+    watcher_error: z.object({ checks: z.number().int().min(1).max(1000).default(3) }).strict().prefault({}),
+    /** More than `percent` of GitHub's hourly request limit used. */
+    github_limit: z.object({ percent: z.number().min(1).max(100).default(80) }).strict().prefault({}),
+    /** An enabled watcher finished no check for `intervals` times its interval. */
+    watcher_silent: z.object({ intervals: z.number().min(1).max(1000).default(5) }).strict().prefault({}),
+    /** At least `runs` failed runs with an error the Foundry cannot explain, within `within_hours`. */
+    unexplained_failure: z.object({ runs: z.number().int().min(1).max(1000).default(1), within_hours: z.number().int().min(1).max(720).default(24) }).strict().prefault({}),
+    /** A running run wrote nothing to its log for longer than its step's timeout plus `extra_minutes`; a step without a timeout counts `no_timeout_minutes`. */
+    stuck_run: z.object({ extra_minutes: z.number().int().min(1).max(1440).default(10), no_timeout_minutes: z.number().int().min(1).max(10080).default(120) }).strict().prefault({}),
+    /** The same step of the same flow ended a run as failed for `issues` different issues within `within_hours`. */
+    same_step_failing: z.object({ issues: z.number().int().min(2).max(1000).default(3), within_hours: z.number().int().min(1).max(168).default(24) }).strict().prefault({}),
+    /** An issue's status label did not match its newest run for more than `checks` checks. */
+    label_mismatch: z.object({ checks: z.number().int().min(1).max(1000).default(3) }).strict().prefault({}),
+    /** A lock is held by a run that is not running for more than `minutes`. */
+    orphan_lock: z.object({ minutes: z.number().int().min(1).max(1440).default(10) }).strict().prefault({}),
+    /** Jobs are queued, slots are free and nothing started for `minutes`. */
+    queue_stalled: z.object({ minutes: z.number().int().min(1).max(1440).default(15) }).strict().prefault({}),
+    /** A new version is installed and the server waited more than `hours` to restart. */
+    restart_overdue: z.object({ hours: z.number().min(0.1).max(168).default(2) }).strict().prefault({}),
+    /** The tests after a merge into develop failed `failures` times in a row; looks back `within_hours`. */
+    develop_red: z.object({ failures: z.number().int().min(1).max(100).default(2), within_hours: z.number().int().min(1).max(720).default(24) }).strict().prefault({}),
+    /** A step took more than `factor` times its usual time, `times` times within `within_hours`. */
+    slow_step: z.object({ factor: z.number().min(1.5).max(100).default(3), times: z.number().int().min(1).max(1000).default(3), within_hours: z.number().int().min(1).max(720).default(24) }).strict().prefault({}),
+  })
+  .strict();
 
 const clock = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "HH:MM");
 
@@ -175,6 +223,11 @@ export const ConfigSchema = z
     /** Pushes to these branches are refused (glob patterns). */
     protected_branches: z.array(z.string()).default(["main", "master", "develop", "release/*"]),
     /**
+     * Build bug stories of the built-in issue-gitflow as hotfixes: after the reviews and a green test run
+     * they are merged into main (and develop) without a person. Off: bug stories are built as features.
+     */
+    hotfix_to_main: z.boolean().default(false),
+    /**
      * Run agent steps without your personal Claude Code setup (MCP servers, plugins, skills,
      * hooks, user settings). Smaller context every turn and no off-task detours.
      */
@@ -200,6 +253,11 @@ export const ConfigSchema = z
       })
       .strict()
       .prefault({}),
+    /** The one-sentence reason a model writes for a failed run (a small call; the rules text is the fallback). */
+    failure_summary: z
+      .object({ enabled: z.boolean().default(true), model: z.string().default("haiku") })
+      .strict()
+      .default({ enabled: true, model: "haiku" }),
     /** Commit/comment as a bot instead of you. */
     bot: z
       .object({
@@ -222,11 +280,20 @@ export const ConfigSchema = z
     /** Defaults for flows that don't set their own sandbox. */
     sandbox: z.object({ claude: z.boolean().optional(), docker_image: z.string().optional() }).strict().default({}),
     watchers: z.array(WatcherSchema).default([]),
+    /** Thresholds of the monitor watcher. */
+    monitor: MonitorSchema.prefault({}),
   })
-  .strict();
+  .strict()
+  .superRefine((c, ctx) => {
+    const monitors = c.watchers.filter((w) => w.source === "monitor");
+    if (monitors.length > 1) ctx.addIssue({ code: "custom", message: "only one monitor watcher is allowed", path: ["watchers"] });
+    const m = monitors[0];
+    if (m && c.watchers.some((w) => w !== m && w.id === m.id)) ctx.addIssue({ code: "custom", message: `the id "${m.id}" of the monitor is used by another watcher`, path: ["watchers"] });
+  });
 
 export type Config = z.infer<typeof ConfigSchema>;
 export type ServerConfig = z.infer<typeof ServerSchema>;
+export type MonitorConfig = z.infer<typeof MonitorSchema>;
 export type WatcherConfig = z.infer<typeof WatcherSchema>;
 export type ProviderConfig = z.infer<typeof ProviderSchema>;
 export type RouterConfig = z.infer<typeof RouterSchema>;

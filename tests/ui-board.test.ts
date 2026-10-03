@@ -61,6 +61,11 @@ describe("boardView", () => {
     expect(text).toContain(card().next.text);
   });
 
+  it("marks a bug story as going first", () => {
+    expect(cardEl(view(board([card({ goesFirst: true })])))[0]!.textContent).toContain("goes first");
+    expect(cardEl(view(board()))[0]!.textContent).not.toContain("goes first");
+  });
+
   it("shows the step line", () => {
     expect(cardEl(view(board([card({ step: "coding — step 12 of 29", column: "coding" })])))[0]!.textContent).toContain("coding — step 12 of 29");
   });

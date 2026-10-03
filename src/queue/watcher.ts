@@ -3,11 +3,13 @@ import type { WatcherConfig } from "../config.js";
 import { loadRun, saveRun, spentToday, type RunSummary } from "../engine/state.js";
 import { errorLine, explainError } from "../errors.js";
 import { loadFlow } from "../flow/load.js";
-import { canWrite, commentsAfter, ensureLabel, gh, ghJson, isBot, issueComments, setLabels, type Comment, type Issue } from "../github.js";
-import { countQuestions, firstLine, runClosedIssue, LIMIT_RETRY_MS, nextStep, runNextStep, type NextData, type BlockerInfo, type NextKind, type NextStep } from "../next-step.js";
+import { canWrite, commentsAfter, ensureLabel, gh, ghJson, isBot, isStatusComment, issueComments, setLabels, type Comment, type Issue } from "../github.js";
+import { failedIndex, failureSummary } from "../failure.js";
+import { countQuestions, firstLine, releaseAtFor, runClosedIssue, LIMIT_RETRY_MS, nextStep, runNextStep, type NextData, type BlockerInfo, type NextKind, type NextStep } from "../next-step.js";
 import { LABEL_WORDS } from "../words.js";
 import { dependencies, openDependencies } from "./deps.js";
 import type { Scheduler } from "./scheduler.js";
+import { StatusComments } from "./status-comment.js";
 
 /** Status labels the watcher puts on issues. Remove one to have the issue picked up again. */
 export const STATUS_LABELS = {
@@ -38,18 +40,26 @@ export function labelNames(cfg: WatcherConfig): LabelNames {
  * the first line says so and it replaces the What and Why lines.
  */
 export function failureComment(s: RunSummary, next: NextStep): string {
-  const factoryWhat = next.cause === "factory" ? next.why : undefined;
+  const factory = next.cause === "factory";
   const e = explainError(s.reason);
-  const failed = [...s.history].reverse().find((h) => !h.ok);
+  const sum = next.failure ?? failureSummary(s, { watched: true });
+  const hist = Array.isArray(s.history) ? s.history : [];
+  const failed = hist[failedIndex(hist)];
   const tail = (failed?.output || failed?.error || "").trim().slice(-3000);
   const raw = [e.detail, tail].filter(Boolean).join("\n\n");
   return [
     firstLine(next),
     "",
-    factoryWhat ? "🤖 **Spaghetti Code Foundry** itself failed on this issue, not the code." : "🤖 **Spaghetti Code Foundry** could not finish this issue.",
+    factory ? "🤖 **Spaghetti Code Foundry** itself failed on this issue, not the code." : "🤖 **Spaghetti Code Foundry** could not finish this issue.",
     "",
-    `- **What happened:** ${factoryWhat ?? e.what}.`,
-    ...(factoryWhat ? [] : [`- **Why:** ${e.why.charAt(0).toUpperCase()}${e.why.slice(1)}.`]),
+    `- **What happened:** ${sum.what.replace(/[.!?]+$/, "")}.`,
+    `- **Why:** ${sum.why}`,
+    `- **Kind of problem:** ${sum.kind}`,
+    `- **Already tried:** ${sum.tried.replace(/[.!?]+$/, "")}.`,
+    ...(sum.byModel ? ["", "_(A model read the output of the failing step to write the Why line. It can be wrong; the raw text is under Details.)_"] : []),
+    "",
+    "**Your options**",
+    ...sum.options.map((o) => `- ${o}`),
     failed ? `\nLast failing step: \`${failed.id}\`${failed.visit > 1 ? ` (attempt ${failed.visit})` : ""}` : "",
     raw ? `\n<details><summary>Details</summary>\n\n\`\`\`\n${raw.replace(/`{3,}/g, (m) => "ˋ".repeat(m.length))}\n\`\`\`\n</details>` : "",
     `\n<!-- claude-factory run=${s.runId} -->`,
@@ -82,6 +92,14 @@ export interface WatcherDeps {
   /** Is this running run waiting for a code area? (reads the step log) */
   areaWait?: (run: RunSummary) => { runId: string; areas: string } | undefined;
   log: (msg: string) => void;
+  /** Shared by the watchers of one repository (the manager sets it). */
+  statusComments?: StatusComments;
+  /** Every watcher's config, to find the scheduled release of a finished run. */
+  watchers?: () => WatcherConfig[];
+  /** The other watchers and what their last check saw (the manager sets it). */
+  peers?: () => { watcher: WatcherConfig; status: WatcherStatus; issues: TrackedIssue[] }[];
+  /** Called after every check, good or failed (the monitor's request-limit reading). A rejection is ignored. */
+  afterCheck?: () => Promise<void> | void;
 }
 
 export interface WatcherStatus {
@@ -98,6 +116,8 @@ export interface WatcherStatus {
   holds?: Hold[];
   /** Since when the checks fail (kept while they keep failing). */
   errorSince?: string;
+  /** How many checks in a row failed (kept while they keep failing). */
+  errorCount?: number;
   /** The pull request that pauses new work (pause_while_pr_open). */
   pausedBy?: { number: number; url?: string; title?: string; createdAt?: string };
 }
@@ -124,7 +144,25 @@ export function toHold(next: NextStep): Hold {
 }
 
 /** Every non-excluded issue a tick saw. */
-export interface TrackedIssue { issue: number; title: string; runId?: string; done?: boolean }
+export interface TrackedIssue {
+  issue: number; title: string; runId?: string; done?: boolean;
+  /** A bug story: it goes before other stories. */
+  priority?: boolean;
+  /** When the issue was created (GitHub). */
+  createdAt?: string;
+  /** Priority only: the run that holds the code area this story waits for. */
+  claims?: string;
+  /** The status label has not fitted the newest run for `checks` checks in a row (for the monitor). `label` is the key, e.g. "working". */
+  labelOff?: { checks: number; label: string; run: string };
+}
+
+/** Does the issue carry one of the priority labels? GitHub label names ignore case. */
+export function goesFirst(issue: { labels: { name: string }[] }, labels: string[]): boolean {
+  const want = new Set(labels.map((l) => l.trim().toLowerCase()).filter(Boolean));
+  return want.size > 0 && issue.labels.some((l) => want.has(l.name.trim().toLowerCase()));
+}
+
+const firstMeta = (first?: { storyAt?: string }) => (first ? { priority: true, ...(first.storyAt ? { storyAt: first.storyAt } : {}) } : {});
 
 const APPROVE_RE = /^\s*\/(approve|reject)\b[ \t]*(.*)$/im;
 
@@ -156,6 +194,21 @@ function labelFor(s: RunSummary, L: LabelNames): string {
   }
 }
 
+/**
+ * Does the issue's status label disagree with its newest run? Returns the label (its key) and what the run says, or
+ * undefined when they fit. A done label is left alone, as the watcher does; an issue without a run or a label fits.
+ * A job that is queued or active counts as working. A cancelled run fits working too (the watcher resumes it).
+ */
+export function labelLies(status: string | undefined, busy: boolean, run: RunSummary | undefined, L: LabelNames): { label: string; run: string } | undefined {
+  if (!status || status === L.done) return undefined;
+  const key = (Object.keys(L) as LabelKey[]).find((k) => L[k] === status);
+  if (!key) return undefined;
+  if (busy) return status === L.working ? undefined : { label: key, run: "working" };
+  if (!run) return undefined;
+  if (status === labelFor(run, L) || (run.status === "cancelled" && status === L.working)) return undefined;
+  return { label: key, run: run.status };
+}
+
 /** Minutes since midnight in a time zone (default: this machine's). */
 export function minutesNow(timeZone?: string, now = new Date()): { day: string; minutes: number } {
   const parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
@@ -169,6 +222,8 @@ export class Watcher {
   status: WatcherStatus;
   /** Issues the last tick saw (for the next-step records). */
   tracked: TrackedIssue[] = [];
+  /** Per issue: in how many checks in a row its label did not fit its newest run. */
+  private labelOff = new Map<number, number>();
   private timer?: NodeJS.Timeout;
   private ticking = false;
   private tickToken = 0;
@@ -182,11 +237,14 @@ export class Watcher {
 
   private L: LabelNames;
   private allStatus: string[];
+  private statusComments: StatusComments;
 
   constructor(public cfg: WatcherConfig, private d: WatcherDeps) {
     this.status = { id: cfg.id, lastActions: [] };
     this.L = labelNames(cfg);
     this.allStatus = Object.values(this.L);
+    this.statusComments = d.statusComments ?? new StatusComments(cfg.github_repo, (m) => d.log(`[${cfg.id}] ${m}`));
+    if (cfg.source === "issues" && cfg.status_comment) this.statusComments.expect(cfg.id);
   }
 
   private get repo() {
@@ -273,15 +331,22 @@ export class Watcher {
       if (token === this.tickToken) {
         this.status.lastError = undefined;
         this.status.errorSince = undefined;
+        this.status.errorCount = undefined;
         this.status.lastOk = new Date().toISOString();
       }
     } catch (e) {
       this.status.lastError = errorLine((e as Error).message);
       this.status.errorSince ??= new Date().toISOString();
+      this.status.errorCount = (this.status.errorCount ?? 0) + 1;
       this.d.log(`[${this.cfg.id}] ! ${this.status.lastError}`);
     } finally {
       clearTimeout(timer);
       this.status.lastTick = new Date().toISOString();
+      try {
+        await this.d.afterCheck?.();
+      } catch {
+        // the hook must not change the outcome of a check
+      }
       this.ticking = false;
       if (this.kickAgain && !this.stopped) {
         this.kickAgain = false;
@@ -389,12 +454,22 @@ export class Watcher {
   }
 
   /** Every run a watcher starts goes through here: a new run belongs to the watcher's owner; a resume keeps the run's own. */
-  private queue(job: Parameters<Scheduler["submit"]>[0], meta: { lockKey?: string; source?: string }): string {
+  private queue(job: Parameters<Scheduler["submit"]>[0], meta: { lockKey?: string; source?: string; priority?: boolean; storyAt?: string }): string {
     return this.d.scheduler.submit(job, { ...meta, ...(job.kind === "run" ? { owner: watcherOwner(this.cfg.owner) } : {}) });
   }
 
-  private submit(n: number, kind: "issue" | "pr", job: Parameters<Scheduler["submit"]>[0]): string {
-    return this.queue(job, { lockKey: kind === "issue" ? this.lockFor(n) : `${this.repo}#${n}`, source: `watcher ${this.cfg.id} ${kind} #${n}` });
+  private submit(n: number, kind: "issue" | "pr", job: Parameters<Scheduler["submit"]>[0], first?: { storyAt?: string }): string {
+    return this.queue(job, { lockKey: kind === "issue" ? this.lockFor(n) : `${this.repo}#${n}`, source: `watcher ${this.cfg.id} ${kind} #${n}`, ...firstMeta(first) });
+  }
+
+  /** Is this run still after a code area held by `holder`: stepped aside for it, or about to claim areas? */
+  private stillClaims(runId: string, holder: string): boolean {
+    try {
+      const run = this.d.scheduler.get(runId);
+      return !!run && (steppedAsideFor(run) === holder || (run.status === "running" && run.state?.next === "claim_areas"));
+    } catch {
+      return false;
+    }
   }
 
   /** Update labels when a run we started finishes (the next tick would also reconcile). */
@@ -451,18 +526,18 @@ export class Watcher {
     return pr ? { text: `PR #${pr.number} (${pr.headRefName})`, number: pr.number, url: pr.url, title: pr.title, createdAt: pr.createdAt } : undefined;
   }
 
-  private startNew(issue: Issue) {
+  private startNew(issue: Issue, first?: { storyAt?: string }) {
     const { flow } = loadFlow(this.flowName(), this.d.repo);
     const runId = this.submit(issue.number, "issue", {
       kind: "run", flow, task: "", repo: this.d.repo,
       vars: { trigger_label: this.cfg.label, ...this.cfg.vars, github_repo: this.repo, issue: String(issue.number) },
-    });
+    }, first);
     this.act(`#${issue.number} “${issue.title}” → run ${runId} · label → ${this.L.working}`);
     return runId;
   }
 
-  private resume(issue: number, runId: string, why: string, decision?: { approved: boolean; by: string; note?: string }, labelled = false) {
-    this.submit(issue, "issue", { kind: "resume", runId, decision });
+  private resume(issue: number, runId: string, why: string, decision?: { approved: boolean; by: string; note?: string }, labelled = false, first?: { storyAt?: string }) {
+    this.submit(issue, "issue", { kind: "resume", runId, decision }, first);
     this.act(`#${issue} ${why} → resuming run ${runId}${labelled ? ` · label → ${this.L.working}` : ""}`);
   }
 
@@ -490,7 +565,17 @@ export class Watcher {
     // A check that was given up (timeout) must not start runs or store holds next to a newer check.
     const mine = this.tickToken;
     const alive = () => { if (mine !== this.tickToken) throw new Error("this check was given up"); };
-    const issues = await ghJson<Issue[]>(["issue", "list", "--repo", this.repo, "--label", this.cfg.label, "--state", "open", "--limit", "100", "--json", "number,title,labels,body"]);
+    const issues = await ghJson<Issue[]>(["issue", "list", "--repo", this.repo, "--label", this.cfg.label, "--state", "open", "--limit", "100", "--json", "number,title,labels,body,createdAt"]);
+    const whole = issues.length < 100;
+    const prioLabels = this.cfg.priority_labels.filter((l) => l.trim());
+    // The list is cut at 100 and has no order we can use: ask for the bug stories on their own, so none is missed.
+    if (!whole && prioLabels.length) {
+      const extra = await ghJson<Issue[]>(["issue", "list", "--repo", this.repo, "--label", this.cfg.label, "--state", "open", "--limit", "1000", // gh pages through the results up to the limit
+        "--search", `label:${prioLabels.map((l) => `"${l.replace(/"/g, "")}"`).join(",")} sort:created-asc`, "--json", "number,title,labels,body,createdAt"]);
+      const have = new Set(issues.map((i) => i.number));
+      for (const i of extra) if (!have.has(i.number)) issues.push(i);
+    }
+    const prio = (i: Issue) => goesFirst(i, this.cfg.priority_labels);
     let everyIssue: Issue[] | undefined; // all issues, fetched once per tick when a dependency must be checked
     const openDepsOf = async (issue: Issue) => {
       if (!/depends\s+on|blocked\s+by/i.test(issue.body ?? "")) return [];
@@ -518,35 +603,65 @@ export class Watcher {
     const runs = this.latestRuns("issue");
     const budgetLeft = this.budgetLeft();
     let started = 0;
+    let firstStarted = 0; // bug stories started or queued in this check
+    // Code areas bug stories wait for: the runs that hold them (of this watcher, and of other watchers of this repository).
+    const firstWaits = new Set<string>();
+    for (const p of this.d.peers?.() ?? []) {
+      if (p.watcher.id === this.cfg.id || p.watcher.github_repo !== this.repo || p.status.lastError) continue;
+      for (const t of p.issues) if (t.priority && t.claims && t.runId && this.stillClaims(t.runId, t.claims)) firstWaits.add(t.claims);
+    }
     const excluded = new Set(this.cfg.exclude_labels);
     const paused = await this.pausingPr();
     if (paused && this.status.lastActions[0]?.includes(paused.text) !== true) this.act(`not starting new work while ${paused.text} is open`);
     const holds: Hold[] = [];
     const tracked: TrackedIssue[] = [];
+    const offNow = new Map<number, number>(); // checks in a row that the label did not fit, per issue
     let anyRuns: Map<string, RunSummary> | undefined; // newest run per issue in any flow (to describe blockers)
     const checked = this.prechecked();
     const toCheck: Issue[] = [];
-    const questionCount = (comments: Comment[]) => countQuestions([...comments].reverse().find(isBot)?.body);
+    // The status comment is ours too, but it is not a question or an approval request: it never ends the wait.
+    const asked = (c: Comment) => isBot(c) && !isStatusComment(c);
+    const questionCount = (comments: Comment[]) => countQuestions([...comments].reverse().find(asked)?.body);
 
-    for (const issue of issues.sort((a, b) => a.number - b.number)) {
+    const overLimit = (isFirst: boolean) => started >= this.cfg.max_per_tick && !isFirst;
+    /** Why a story is not started: the per-check limit, or the bug stories that went first. */
+    const limited = (issue: Issue, runId?: string) =>
+      firstStarted > 0 ? this.held("bug_first", issue, { runId }) : this.held("starting", issue, { maxPerTick: this.cfg.max_per_tick, runId });
+
+    // Bug stories first, the oldest issue first (its creation time; the number only breaks a tie or fills a gap).
+    const age = (i: Issue) => { const t = Date.parse(i.createdAt ?? ""); return Number.isNaN(t) ? undefined : t; };
+    const byAge = (a: Issue, b: Issue) => { const x = age(a), y = age(b); return x !== undefined && y !== undefined ? x - y : 0; };
+    for (const issue of issues.sort((a, b) => Number(prio(b)) - Number(prio(a)) || (prio(a) ? byAge(a, b) : 0) || a.number - b.number)) {
       alive();
       const n = issue.number;
       if (issue.labels.some((l) => excluded.has(l.name))) continue;
       const status = issue.labels.map((l) => l.name).find((l) => this.allStatus.includes(l));
       const run = runs.get(String(n));
+      const isFirst = prio(issue);
+      const first = isFirst ? { storyAt: issue.createdAt } : undefined;
       // A job that is still queued has no run file yet: take its id from the queue.
       // A queued job may be a fresh run next to an older run file: the queued one is the current work.
-      const queuedId = this.d.scheduler.queue().pending.find((p) => p.githubRepo === this.repo && p.issue === String(n))?.runId;
-      const track: TrackedIssue = { issue: n, title: issue.title, runId: queuedId ?? run?.runId, done: status === this.L.done };
+      const pending = this.d.scheduler.queue().pending;
+      const queuedId = pending.find((p) => p.githubRepo === this.repo && p.issue === String(n))?.runId;
+      const track: TrackedIssue = { issue: n, title: issue.title, runId: queuedId ?? run?.runId, done: status === this.L.done, ...(isFirst ? { priority: true, createdAt: issue.createdAt } : {}) };
       tracked.push(track);
+      const off = labelLies(status, queuedId !== undefined || (!!run && this.d.scheduler.isActive(run.runId)), run, this.L);
+      if (off) {
+        const checks = (this.labelOff.get(n) ?? 0) + 1;
+        offNow.set(n, checks);
+        track.labelOff = { checks, ...off };
+      }
+      // A job of this watcher that is queued follows the label: it goes first, or goes back when the label is gone.
+      const own = pending.find((p) => p.runId === (queuedId ?? run?.runId) && (p.source === `watcher ${this.cfg.id} issue #${n}` || /^ui (resume|approve|reject)$/.test(p.source ?? "")));
+      if (own) this.d.scheduler.setPriority(own.runId, isFirst, issue.createdAt);
 
       // Questions asked up front (no run yet): wait for an answer, then start like a new issue.
       let answeredEarly = false;
       if (status === this.L.needsInfo && !run) {
         const comments = await issueComments(this.repo, n);
-        const answers = commentsAfter(comments, isBot);
+        const answers = commentsAfter(comments, asked);
         if (!answers.length) {
-          holds.push({ ...this.held("questions", issue, { questions: questionCount(comments) }), since: [...comments].reverse().find(isBot)?.createdAt });
+          holds.push({ ...this.held("questions", issue, { questions: questionCount(comments) }), since: [...comments].reverse().find(asked)?.createdAt });
           continue;
         }
         answeredEarly = true;
@@ -560,6 +675,8 @@ export class Watcher {
         }
         const areaWait = run.status === "running" ? this.d.areaWait?.(run) : undefined;
         if (areaWait) holds.push(this.heldRun(issue, run, { areaWait }));
+        const claim = isFirst ? steppedAsideFor(run) ?? areaWait?.runId : undefined;
+        if (claim) { firstWaits.add(claim); track.claims = claim; }
         continue;
       }
       if (this.d.scheduler.isLocked(this.lockFor(n))) {
@@ -586,26 +703,33 @@ export class Watcher {
         }
         if (paused) { holds.push(this.held("release", issue, { pr: paused })); continue; }
         if (!budgetLeft) { holds.push(this.held("daily_budget", issue)); continue; }
-        if (started >= this.cfg.max_per_tick) { holds.push(this.held("starting", issue, { maxPerTick: this.cfg.max_per_tick })); continue; }
+        if (overLimit(isFirst)) { holds.push(limited(issue)); continue; }
         alive();
         // It ran before: GitHub's issue list can lag behind (a just-failed or just-finished issue still
         // listed without its new label, or as open). Ask for this issue directly before starting again.
         if (run && run.status !== "running" && !(await this.reallyStartable(n))) continue;
-        const runId = this.startNew(issue);
+        const runId = this.startNew(issue, first);
         track.runId = runId;
         await setLabels(this.repo, n, this.L.working, this.allStatus);
         this.labelWhenDone(n, runId);
         started++;
+        if (isFirst) firstStarted++;
       } else if (status === this.L.working && run) {
         // Reconcile: the label says working but nothing is running (restart, crash, budget pause).
         const resumable = run.status === "cancelled" || /interrupted/.test(run.reason ?? "") ||
           (run.status === "stopped" && /daily budget/.test(run.reason ?? "") && budgetLeft) ||
           (run.status === "stopped" && /usage limit reached|signed out —/.test(run.reason ?? "") && retryLimitAfter(run)) ||
           (run.status === "stopped" && isPaused(run) && !/daily budget|usage limit reached|signed out —/.test(run.reason ?? "") && !paused && this.areaMayBeFree(run));
-        if (resumable && started < this.cfg.max_per_tick) {
-          this.resume(n, run.runId, run.status !== "stopped" ? "was interrupted" : /daily budget/.test(run.reason ?? "") ? "budget available again" : /usage limit/.test(run.reason ?? "") ? "trying again after the usage limit" : "can continue now");
+        const holder = steppedAsideFor(run);
+        if (isFirst && holder && !paused) { firstWaits.add(holder); track.claims = holder; }
+        if (resumable && !isFirst && holder && firstWaits.has(holder)) {
+          // A bug story waits for the same code area: it gets the area first.
+          holds.push(this.held("bug_first", issue, { runId: run.runId }));
+        } else if (resumable && !overLimit(isFirst)) {
+          this.resume(n, run.runId, run.status !== "stopped" ? "was interrupted" : /daily budget/.test(run.reason ?? "") ? "budget available again" : /usage limit/.test(run.reason ?? "") ? "trying again after the usage limit" : "can continue now", undefined, false, first);
           this.labelWhenDone(n, run.runId);
           started++;
+          if (isFirst) firstStarted++;
         } else if (!resumable && labelFor(run, this.L) !== this.L.working) {
           await setLabels(this.repo, n, labelFor(run, this.L), this.allStatus);
           this.act(`#${n} label → ${labelFor(run, this.L)}`);
@@ -615,7 +739,7 @@ export class Watcher {
           if (["usage_limit", "daily_budget", "interrupted", "release", "area_lock"].includes(next.kind)) holds.push(toHold(next));
         } else {
           // Resumable, but max_per_tick is used up: only the per-check limit is in the way.
-          holds.push(this.held("starting", issue, { maxPerTick: this.cfg.max_per_tick, runId: run.runId }));
+          holds.push(limited(issue, run.runId));
         }
       } else if (run && status !== this.L.done && labelFor(run, this.L) !== status) {
         // Reconcile: the label does not match the newest run (e.g. approved in the UI, or the
@@ -625,22 +749,23 @@ export class Watcher {
         this.act(`#${n} label → ${label}`);
       } else if (status === this.L.needsInfo && run?.status === "stopped") {
         const comments = await issueComments(this.repo, n);
-        const answers = commentsAfter(comments, isBot);
-        if (answers.length && started < this.cfg.max_per_tick) {
+        const answers = commentsAfter(comments, asked);
+        if (answers.length && !overLimit(isFirst)) {
           await setLabels(this.repo, n, this.L.working, this.allStatus);
-          this.resume(n, run.runId, `answered by @${answers[0]!.author.login}`, undefined, true);
+          this.resume(n, run.runId, `answered by @${answers[0]!.author.login}`, undefined, true, first);
           this.labelWhenDone(n, run.runId);
           started++;
+          if (isFirst) firstStarted++;
         } else if (!answers.length) {
           holds.push(this.heldRun(issue, run, { questions: questionCount(comments) }));
         } else {
-          holds.push(this.held("starting", issue, { maxPerTick: this.cfg.max_per_tick, runId: run.runId })); // answered; waits for the per-check limit
+          holds.push(limited(issue, run.runId)); // answered; waits for the per-check limit
         }
       } else if (status === this.L.waiting && run?.status === "waiting") {
         const decision = await this.findDecision(run.runId, await issueComments(this.repo, n));
         if (decision) {
           await setLabels(this.repo, n, this.L.working, this.allStatus);
-          this.resume(n, run.runId, `${decision.approved ? "approved" : "rejected"} by @${decision.by}`, decision, true);
+          this.resume(n, run.runId, `${decision.approved ? "approved" : "rejected"} by @${decision.by}`, decision, true, first);
           this.labelWhenDone(n, run.runId);
         } else {
           holds.push(this.heldRun(issue, run));
@@ -649,9 +774,19 @@ export class Watcher {
         holds.push(this.failedHold(issue, run, run?.status === "failed" ? run.reason : undefined));
       }
     }
-    if (toCheck.length) await this.precheck(toCheck, holds, budgetLeft);
+    if (toCheck.length) {
+      // Bug stories are checked on their own and first; the others follow in a later check, so they never ride along at the front.
+      const bugs = toCheck.filter(prio);
+      if (bugs.length) {
+        const firstAt = bugs.map((i) => i.createdAt).filter((t): t is string => !!t).sort()[0];
+        await this.precheck(bugs, holds, budgetLeft, { storyAt: firstAt });
+        for (const i of toCheck) if (!prio(i)) holds.push(this.held("bug_first", i));
+      } else await this.precheck(toCheck, holds, budgetLeft);
+    }
     let tidyError: Error | undefined;
-    await this.tidyClosed(runs, holds).catch((e: Error) => { tidyError = e; });
+    const closed: { issue: number; title: string }[] = [];
+    let closedWhole = false;
+    await this.tidyClosed(runs, holds, closed).then((w) => { closedWhole = w; }, (e: Error) => { tidyError = e; });
     await this.endWaitsOfClosedIssues(new Set(issues.map((i) => i.number))).catch((e: Error) => { tidyError ??= e; });
     if (paused && !holds.some((x) => x.next.kind === "release")) holds.unshift(this.held("release", undefined, { pr: paused }));
     alive();
@@ -664,24 +799,44 @@ export class Watcher {
     this.status.holds = holds;
     this.status.pausedBy = paused ? { number: paused.number, url: paused.url, title: paused.title, createdAt: paused.createdAt } : undefined;
     this.tracked = tracked;
+    this.labelOff = offNow;
+    if (this.cfg.status_comment) await this.reportStatus(runs, holds, tracked, closed, !tidyError && closedWhole && whole, () => mine === this.tickToken && !this.stopped);
     // The closed-issue scan is part of the check: its failure is the check's error.
     if (tidyError) throw new Error(`tidying closed issues: ${errorLine(tidyError.message)}`);
+  }
+
+  /** Tells the shared writer what this check saw. Never throws, and does not touch Recent activity. */
+  private async reportStatus(runs: Map<string, RunSummary>, holds: Hold[], tracked: TrackedIssue[], closed: { issue: number; title: string }[], complete: boolean, alive: () => boolean) {
+    try {
+      let all: RunSummary[] | undefined; // loaded at most once per check
+      await this.statusComments.report(this.cfg.id, {
+        id: this.cfg.id, label: this.cfg.label, failedLabel: this.L.failed, tracked, holds, closed, complete,
+        scheduler: this.d.scheduler, areaWait: this.d.areaWait,
+        lastRunId: (n) => runs.get(String(n))?.runId,
+        releaseAt: (run) => releaseAtFor(this.d.watchers?.() ?? [], run, (all ??= this.d.scheduler.list(1000))),
+      }, alive);
+    } catch (e) {
+      this.d.log(`[${this.cfg.id}] ! status comments: ${errorLine((e as Error).message)}`);
+    }
   }
 
   /**
    * Closed issues (e.g. by a merged pull request) that still carry a waiting/working/error label:
    * done if their last run succeeded, otherwise just without the stale status labels.
+   * Fills `handled` with the closed issues it dealt with; returns true when GitHub's list was whole (not cut at its limit).
    */
-  private async tidyClosed(runs: Map<string, RunSummary>, holds: Hold[]) {
+  private async tidyClosed(runs: Map<string, RunSummary>, holds: Hold[], handled: { issue: number; title: string }[]): Promise<boolean> {
     const pending = this.d.scheduler.queue().pending;
     const stale = [this.L.working, this.L.waiting, this.L.needsInfo, this.L.failed];
-    const closed = await ghJson<Issue[]>(["issue", "list", "--repo", this.repo, "--state", "closed", "--limit", "30",
+    const limit = 30;
+    const closed = await ghJson<Issue[]>(["issue", "list", "--repo", this.repo, "--state", "closed", "--limit", String(limit),
       "--search", `label:${stale.map((l) => `"${l}"`).join(",")} sort:updated-desc`, "--json", "number,title,labels,state"]);
     for (const issue of closed) {
       if (issue.state && issue.state.toUpperCase() !== "CLOSED") continue;
       const names = issue.labels.map((l) => l.name);
       if (!names.some((l) => stale.includes(l))) continue;
       const run = runs.get(String(issue.number));
+      handled.push({ issue: issue.number, title: issue.title ?? "" });
       const queuedId = pending.find((p) => p.githubRepo === this.repo && p.issue === String(issue.number))?.runId;
       const working = !!queuedId || (!!run && (this.d.scheduler.isActive(run.runId) || this.d.scheduler.isQueued(run.runId)));
       if (working || run?.status === "waiting") {
@@ -693,6 +848,7 @@ export class Watcher {
       await setLabels(this.repo, issue.number, done ? this.L.done : undefined, [...this.allStatus, ...this.cfg.remove_on_done].filter((l) => names.includes(l)));
       this.act(`#${issue.number} (closed) label → ${done ? this.L.done : "none"}`);
     }
+    return closed.length < limit;
   }
 
   /**
@@ -732,7 +888,7 @@ export class Watcher {
   }
 
   /** One run over all new issues that asks the owner's open questions before any of them is built. */
-  private async precheck(list: Issue[], holds: Hold[], budgetLeft: boolean) {
+  private async precheck(list: Issue[], holds: Hold[], budgetLeft: boolean, first?: { storyAt?: string }) {
     const lockKey = `${this.repo}#precheck:${this.cfg.id}`;
     const hold = (kind: NextKind) => { for (const i of list) holds.push(this.held(kind, i)); };
     if (this.d.scheduler.isLocked(lockKey)) return hold("checking");
@@ -742,7 +898,7 @@ export class Watcher {
     const runId = this.queue({
       kind: "run", flow, task: "", repo: this.d.repo,
       vars: { ...this.cfg.vars, github_repo: this.repo, issues: nums.join(" "), needs_info_label: this.L.needsInfo },
-    }, { lockKey, source: `watcher ${this.cfg.id} precheck ${nums.map((x) => `#${x}`).join(" ")}` });
+    }, { lockKey, source: `watcher ${this.cfg.id} precheck ${nums.map((x) => `#${x}`).join(" ")}`, ...firstMeta(first) });
     this.act(`checking ${nums.map((x) => `#${x}`).join(", ")} for open questions → run ${runId}`);
     hold("checking");
   }

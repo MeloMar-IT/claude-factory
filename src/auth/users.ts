@@ -3,11 +3,12 @@ import { join } from "node:path";
 import { z } from "zod";
 import { removeCredentialsLocked } from "../credentials/store.js";
 import { prepareAuditLocked, type AuditEvent } from "./audit.js";
+import { checkRefinements, removeRefinementsLocked } from "../refinement/store.js";
 import { removeReposLocked } from "./repos.js";
-import { addSessionLocked, removeSessionsLocked } from "./sessions.js";
+import { addSessionLocked, removeSessionsLocked, sessionId } from "./sessions.js";
 import { dataHome, readJsonFile, withAuthLock, writeJsonFile } from "./store.js";
 
-export type UserErrorCode = "bad-name" | "bad-email" | "bad-password" | "email-taken" | "admin-exists" | "not-found" | "last-admin" | "bad-role";
+export type UserErrorCode = "bad-name" | "bad-email" | "bad-password" | "email-taken" | "admin-exists" | "not-found" | "last-admin" | "bad-role" | "has-password";
 
 /** A problem with what the caller asked for (not with the file). The message is safe to show. */
 export class UserError extends Error {
@@ -100,7 +101,10 @@ const UserSchema = z
     email: z.string().refine((s) => s === s.trim().toLowerCase() && s.length <= 254 && EMAIL_RE.test(s)),
     role: z.enum(["admin", "user"]),
     status: z.enum(["active", "blocked"]),
-    passwordHash: z.string().refine((s) => parseHash(s) !== undefined),
+    /** Missing for an account that has not set its password yet (it cannot sign in). */
+    passwordHash: z.string().refine((s) => parseHash(s) !== undefined).optional(),
+    /** A one-time link to set the first password: `id` is the SHA-256 of the token. Never with a password. */
+    passwordLink: z.object({ id: z.string().regex(/^[0-9a-f]{64}$/), expires: z.iso.datetime() }).strict().optional(),
     created: z.iso.datetime(),
     lastSignIn: z.iso.datetime().nullable(),
     /** The id of a stop-work request the server has not handled yet. */
@@ -114,7 +118,13 @@ const FileSchema = z
   .superRefine((f, ctx) => {
     const ids = new Set<string>();
     const emails = new Set<string>();
+    const links = new Set<string>();
     f.users.forEach((u, i) => {
+      if (u.passwordHash !== undefined && u.passwordLink) ctx.addIssue({ code: "custom", message: "hash and link", path: ["users", i, "passwordLink"] });
+      if (u.passwordLink) {
+        if (links.has(u.passwordLink.id)) ctx.addIssue({ code: "custom", message: "duplicate", path: ["users", i, "passwordLink", "id"] });
+        links.add(u.passwordLink.id);
+      }
       if (ids.has(u.id)) ctx.addIssue({ code: "custom", message: "duplicate", path: ["users", i, "id"] });
       if (emails.has(u.email)) ctx.addIssue({ code: "custom", message: "duplicate", path: ["users", i, "email"] });
       ids.add(u.id);
@@ -123,7 +133,7 @@ const FileSchema = z
   });
 
 export type User = z.infer<typeof UserSchema>;
-export type PublicUser = Omit<User, "passwordHash">;
+export type PublicUser = Omit<User, "passwordHash" | "passwordLink">;
 type UsersFile = z.infer<typeof FileSchema>;
 
 const read = (): UsersFile => readJsonFile(usersPath(), FileSchema, { version: 1, users: [] });
@@ -147,7 +157,7 @@ export const firstAdmin = (): User | undefined =>
   listUsers().filter((u) => u.role === "admin").sort((a, b) => Date.parse(a.created) - Date.parse(b.created))[0];
 
 export function publicUser(u: User): PublicUser {
-  const { passwordHash: _hash, ...rest } = u;
+  const { passwordHash: _hash, passwordLink: _link, ...rest } = u;
   return rest;
 }
 
@@ -194,8 +204,11 @@ export interface UserChanges {
 }
 
 const LAST_ADMIN = "this is the only admin that is not blocked; make another admin first";
+// An admin that has no password yet cannot sign in, so it does not count as another admin.
 const isLastAdmin = (users: User[], u: User) =>
-  u.role === "admin" && u.status === "active" && !users.some((o) => o.id !== u.id && o.role === "admin" && o.status === "active");
+  u.role === "admin" &&
+  u.status === "active" &&
+  !users.some((o) => o.id !== u.id && o.role === "admin" && o.status === "active" && o.passwordHash !== undefined);
 type DistributiveOmit<T, K extends keyof never> = T extends unknown ? Omit<T, K> : never;
 type Audited = DistributiveOmit<AuditEvent, "userId">;
 
@@ -236,7 +249,85 @@ function change(
 
 export async function setPassword(id: string, password: string, opts: ChangeOptions = {}): Promise<User> {
   const passwordHash = await hashPassword(password);
-  return change(id, (u) => ({ next: { ...u, passwordHash }, event: { action: "password" } }), { endSessions: true, by: opts.by });
+  return change(
+    id,
+    (u) => {
+      const { passwordLink: _link, ...rest } = u;
+      return { next: { ...rest, passwordHash }, event: { action: "password" } };
+    },
+    { endSessions: true, by: opts.by },
+  );
+}
+
+// ---- set-password link -----------------------------------------------------------------------------
+
+export const LINK_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const LINK_TOKEN_RE = /^[A-Za-z0-9_-]{43}$/;
+
+export interface LinkResult {
+  user: PublicUser;
+  /** The one-time token. Only the SHA-256 of it is stored. */
+  token: string;
+  /** When the link ends (ISO time). */
+  expires: string;
+}
+
+function makeLink(now = Date.now()): { token: string; link: { id: string; expires: string } } {
+  const token = randomBytes(32).toString("base64url");
+  return { token, link: { id: sessionId(token), expires: new Date(now + LINK_TTL_MS).toISOString() } };
+}
+
+/** Creates an account without a password and a one-time link to set it. */
+export async function createUserWithLink(input: { name: string; email: string; role?: "admin" | "user" }, opts: ChangeOptions = {}): Promise<LinkResult> {
+  const name = checkName(input.name);
+  const email = checkEmail(input.email);
+  const role = input.role ?? "user";
+  if (role !== "admin" && role !== "user") throw new UserError("bad-role", "the role must be admin or user");
+  const { token, link } = makeLink();
+  const user: User = { id: randomUUID(), name, email, role, status: "active", passwordLink: link, created: new Date().toISOString(), lastSignIn: null };
+  return withAuthLock(() => {
+    const file = read();
+    if (file.users.some((u) => u.email === email)) throw new UserError("email-taken", "an account with that e-mail exists already");
+    audited(opts.by, { action: "create", userId: user.id }, () => writeJsonFile(usersPath(), { ...file, users: [...file.users, user] }));
+    return { user: publicUser(user), token, expires: link.expires };
+  });
+}
+
+/** Replaces the link of an account that has no password. The old link is dead. */
+export async function newPasswordLink(id: string, opts: ChangeOptions = {}): Promise<LinkResult> {
+  const { token, link } = makeLink();
+  const user = change(
+    id,
+    (u) => {
+      if (u.passwordHash !== undefined) throw new UserError("has-password", "this account has a password already");
+      return { next: { ...u, passwordLink: link }, event: { action: "link" } };
+    },
+    { by: opts.by },
+  );
+  return { user: publicUser(user), token, expires: link.expires };
+}
+
+/**
+ * Sets the first password with a link. Undefined for any link that is not live (malformed, unknown, used, expired,
+ * replaced, or the account is blocked or gone); a bad password with a live link rejects. No session is started.
+ */
+export async function redeemPasswordLink(token: string, password: string, now = Date.now()): Promise<PublicUser | undefined> {
+  if (typeof token !== "string" || !LINK_TOKEN_RE.test(token)) return undefined;
+  const linkId = sessionId(token);
+  const live = (u: User) => u.passwordLink?.id === linkId && Date.parse(u.passwordLink.expires) > now && u.status === "active";
+  if (!listUsers().some(live)) return undefined;
+  const passwordHash = await hashPassword(password);
+  return withAuthLock(() => {
+    const file = read();
+    const i = file.users.findIndex(live);
+    if (i < 0) return undefined;
+    const { passwordLink: _link, ...rest } = file.users[i]!;
+    const next: User = { ...rest, passwordHash };
+    audited(next.id, { action: "password", userId: next.id }, () =>
+      writeJsonFile(usersPath(), { ...file, users: file.users.map((u, j) => (j === i ? next : u)) }),
+    );
+    return publicUser(next);
+  });
 }
 
 export interface StatusOptions extends ChangeOptions {
@@ -277,7 +368,7 @@ export function takeStopWork(id: string, act: (request: string) => void, waitMs 
   }, waitMs);
 }
 
-/** Changes name, e-mail and role in one step. Only a role change is logged. */
+/** Changes name, e-mail and role in one step. A role change is logged as `role`, any other change as `edit`. */
 export async function updateUser(id: string, changes: UserChanges, opts: ChangeOptions = {}): Promise<User> {
   const name = changes.name === undefined ? undefined : checkName(changes.name);
   const email = changes.email === undefined ? undefined : checkEmail(changes.email);
@@ -292,7 +383,7 @@ export async function updateUser(id: string, changes: UserChanges, opts: ChangeO
       if (role !== undefined && role !== "admin" && isLastAdmin(all, u)) throw new UserError("last-admin", LAST_ADMIN);
       const next: User = { ...u, name: name ?? u.name, email: email ?? u.email, role: role ?? u.role };
       if (next.name === u.name && next.email === u.email && next.role === u.role) return undefined;
-      return next.role !== u.role ? { next, event: { action: "role", oldRole: u.role, newRole: next.role } } : { next };
+      return { next, event: next.role !== u.role ? { action: "role", oldRole: u.role, newRole: next.role } : { action: "edit" } };
     },
     { by: opts.by },
   );
@@ -314,6 +405,11 @@ export async function checkSignIn(email: string, password: string): Promise<User
     await verifyPassword(fits ? password : "", DUMMY_HASH);
     return undefined;
   }
+  // An account without a password costs the same one scrypt, against the dummy hash.
+  if (user.passwordHash === undefined) {
+    await verifyPassword(password, DUMMY_HASH);
+    return undefined;
+  }
   return (await verifyPassword(password, user.passwordHash)) ? user : undefined;
 }
 
@@ -322,12 +418,12 @@ export async function checkSignIn(email: string, password: string): Promise<User
  * that was checked and the account must be active, else there is no session (a password change or block in between wins).
  * `replaces` is the id of the session the sign-in came with.
  */
-export function startSession(userId: string, verifiedHash: string, replaces?: string): { user: User; token: string } | undefined {
+export function startSession(userId: string, verifiedHash: string | undefined, replaces?: string): { user: User; token: string } | undefined {
   return withAuthLock(() => {
     const file = read();
     const i = file.users.findIndex((u) => u.id === userId);
     const current = file.users[i];
-    if (!current || current.passwordHash !== verifiedHash || current.status !== "active") return undefined;
+    if (!current || verifiedHash === undefined || current.passwordHash !== verifiedHash || current.status !== "active") return undefined;
     const user: User = { ...current, lastSignIn: new Date().toISOString() };
     writeJsonFile(usersPath(), { ...file, users: file.users.map((u, j) => (j === i ? user : u)) });
     return { user, token: addSessionLocked(userId, replaces) };
@@ -353,8 +449,11 @@ export function deleteUser(id: string, opts: ChangeOptions = {}): DeletedUser {
     if (!user) throw new UserError("not-found", "no such account");
     if (isLastAdmin(file.users, user)) throw new UserError("last-admin", LAST_ADMIN);
     return audited(opts.by, { action: "delete", userId: id }, () => {
-      // The repository list first: a repos.json that cannot be read stops the delete before anything else changes.
+      // A refinements.json that cannot be read stops the delete before anything changes; then the repository list
+      // (a repos.json that cannot be read stops it too), then the refinement sessions.
+      checkRefinements();
       removeReposLocked(id);
+      removeRefinementsLocked(id);
       removeSessionsLocked((s) => s.userId === id);
       const wiped = removeCredentialsLocked(id);
       writeJsonFile(usersPath(), { ...file, users: file.users.filter((u) => u.id !== id) });

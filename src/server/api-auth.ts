@@ -2,7 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 import { basename } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { adoptRuns } from "../auth/run-owner.js";
-import { createUser, checkSignIn, getUser, hasAdmin, startSession, UserError, type User } from "../auth/users.js";
+import { createUser, checkSignIn, getUser, hasAdmin, redeemPasswordLink, startSession, UserError, type User } from "../auth/users.js";
 import { SESSION_TTL_MS, csrfToken, findSession, revokeSession, sessionId } from "../auth/sessions.js";
 import { StoreError } from "../auth/store.js";
 import { homeMoved } from "../home.js";
@@ -204,6 +204,34 @@ async function signIn(ctx: ApiContext, req: IncomingMessage, res: ServerResponse
   });
 }
 
+const DEAD_LINK = "this link is not valid any more; ask your admin for a new one";
+
+/** Sets the first password with a one-time link. No session. Every token that is not a live link gets the same answer. */
+async function setPasswordWithLink(ctx: ApiContext, req: IncomingMessage, res: ServerResponse) {
+  notMoved();
+  const body = await readJson(req);
+  const password = passwordOf(body);
+  const token = typeof body.token === "string" ? body.token : "";
+  const clients = clientLimiterOf(ctx);
+  const client = clientKey(req);
+  if (clients.blocked(client)) throw new HttpError(429, "too many tries; wait 15 minutes");
+  if (checking >= MAX_CHECKS) throw new HttpError(429, "the server is busy; try again in a moment");
+  clients.fail(client);
+  checking++;
+  await guarded(ctx, async () => {
+    let user;
+    try {
+      user = await redeemPasswordLink(token, password).finally(() => checking--);
+    } catch (e) {
+      if (e instanceof UserError) throw new HttpError(400, e.message);
+      throw e;
+    }
+    if (!user) throw new HttpError(400, DEAD_LINK);
+    limiterOf(ctx).clear(user.email); // the wrong tries before the first password must not lock out the first sign-in
+    send(res, 200, { ok: true });
+  });
+}
+
 async function setup(ctx: ApiContext, req: IncomingMessage, res: ServerResponse) {
   notMoved();
   if (!accessOf(ctx, req).local) throw new HttpError(403, "the first account can only be created on the Mac itself");
@@ -233,10 +261,11 @@ async function setup(ctx: ApiContext, req: IncomingMessage, res: ServerResponse)
   });
 }
 
-/** The routes that need no session: GET/POST/DELETE /api/session and POST /api/setup. */
+/** The routes that need no session: GET/POST/DELETE /api/session, POST /api/setup and POST /api/set-password. */
 export async function authRoutes(ctx: ApiContext, req: IncomingMessage, res: ServerResponse, seg: string[], method: string): Promise<boolean> {
   if (seg.length !== 1) return false;
   if (seg[0] === "setup" && method === "POST") return await setup(ctx, req, res), true;
+  if (seg[0] === "set-password" && method === "POST") return await setPasswordWithLink(ctx, req, res), true;
   if (seg[0] !== "session") return false;
   if (method === "GET") {
     await guarded(ctx, () => {

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { WatcherSchema } from "../src/config.js";
 import type { RunSummary } from "../src/engine/state.js";
 import { statusName } from "../src/words.js";
+import type { RunNextOptions } from "../src/next-step.js";
 import { briefFailure, COMMENT_KINDS, REPORT_KINDS, reportFirst, commentFirst, commentText, firstLine, countQuestions, nextStep, nextStepEnv, releaseAtFor, releaseWatchersFor, runClosedIssue, runNextStep, trackingWatcher, type NextKind, type NextStep } from "../src/next-step.js";
 
 const run = (over: Partial<RunSummary> = {}) =>
@@ -21,7 +22,7 @@ describe("comment sentences", () => {
   it("has exactly the FACTORY_NEXT_ and FACTORY_FIRST_ variables, equal to the record", () => {
     const env = nextStepEnv();
     expect(Object.keys(env).sort()).toEqual([
-      "FACTORY_FIRST_APPROVAL", "FACTORY_FIRST_APPROVE_PLAN", "FACTORY_FIRST_APPROVE_SPLIT", "FACTORY_FIRST_DRAFT", "FACTORY_FIRST_INFO", "FACTORY_FIRST_LOOK",
+      "FACTORY_FIRST_APPROVAL", "FACTORY_FIRST_APPROVE_PLAN", "FACTORY_FIRST_APPROVE_SPLIT", "FACTORY_FIRST_DRAFT", "FACTORY_FIRST_FIXED", "FACTORY_FIRST_INFO", "FACTORY_FIRST_LOOK", "FACTORY_FIRST_MERGE_BACK",
       "FACTORY_FIRST_MERGE_PR", "FACTORY_FIRST_MERGE_RELEASE", "FACTORY_FIRST_NOTHING", "FACTORY_FIRST_OPEN_PR", "FACTORY_FIRST_PLANNER_QUESTIONS", "FACTORY_FIRST_QUESTIONS",
       "FACTORY_FIRST_SHIPS", "FACTORY_FIRST_START_CODING", "FACTORY_FIRST_START_PARTS",
       "FACTORY_NEXT_APPROVAL", "FACTORY_NEXT_APPROVE_PLAN", "FACTORY_NEXT_APPROVE_SPLIT", "FACTORY_NEXT_PLANNER_QUESTIONS", "FACTORY_NEXT_QUESTIONS",
@@ -58,6 +59,8 @@ describe("comment sentences", () => {
     ["merge_release", "**What you need to do:** Merge the release pull request when you like."],
     ["draft", "**Nothing needed from you** — it stays a draft until the checks pass."],
     ["start_parts", "**What you need to do:** Start the new issues when you want them built."],
+    ["fixed", "**Nothing needed from you** — the fix is on main and in develop."],
+    ["merge_back", "**What you need to do:** Merge main into develop, because the fix is not there yet."],
   ] as const)("words the report first line %s", (kind, text) => {
     expect(reportFirst(kind)).toBe(text);
   });
@@ -102,12 +105,14 @@ describe("runClosedIssue", () => {
     expect(runClosedIssue(run({ history: [step("report", true, "x\nclosed #12")] }))).toBe(true);
     expect(runClosedIssue(run({ history: [step("build/merge")] }))).toBe(true);
     expect(runClosedIssue(run({ history: [step("create_split")] }))).toBe(true);
+    expect(runClosedIssue(run({ history: [step("push_main", true, "PUSHED: main abc")] }))).toBe(true);
     expect(runClosedIssue(run({ state: { next: "create_split", steps: {}, visits: {} } }))).toBe(true);
     expect(runClosedIssue(run({ flowDef: flowDef("gh issue close 12"), state: { next: "report", steps: {}, visits: {} } }))).toBe(true);
   });
   it("is false otherwise", () => {
     expect(runClosedIssue(run({ history: [step("report", true, "commented")] }))).toBe(false);
     expect(runClosedIssue(run({ history: [step("report", false, "closed #12")] }))).toBe(false);
+    expect(runClosedIssue(run({ history: [step("push_main", true, "main moved meanwhile\nMOVED")] }))).toBe(false);
     expect(runClosedIssue(run({ flowDef: flowDef("gh issue comment 12"), state: { next: "report", steps: {}, visits: {} } }))).toBe(false);
     expect(runClosedIssue(run({ history: [step("plan")] }))).toBe(false);
     expect(runClosedIssue(undefined)).toBe(false);
@@ -126,6 +131,7 @@ describe("next-step records, one per kind", () => {
     ["approval", { message: "Deploy now" }, "You", "Approve or reject it on the run page", "#/runs/r1"],
     ["dependency", { ...data, blockers: [{ issue: 3 }] }, "Another story", "Nothing — it continues by itself", ISSUE],
     ["one_at_a_time", { ...data, blockingRun: "r0" }, "Another story", "Nothing — it continues by itself", "#/runs/r0"],
+    ["bug_first", data, "Another story", "Nothing — it continues by itself", ISSUE],
     ["area_lock", { areaWait: { runId: "r0", areas: "src" } }, "Another story", "Nothing — it continues by itself", "#/runs/r0"],
     ["usage_limit", data, "A time limit", "Nothing — it continues by itself", ISSUE],
     ["daily_budget", data, "A time limit", "Nothing — it continues by itself", ISSUE],
@@ -238,7 +244,7 @@ describe("next-step records, one per kind", () => {
   });
 
   it("has a kind in the table for every kind", () => {
-    expect(new Set(cases.map((c) => c[0])).size).toBe(25);
+    expect(new Set(cases.map((c) => c[0])).size).toBe(26);
   });
 
   it("says why a closed issue and a silent watcher need attention", () => {
@@ -460,6 +466,60 @@ describe("until", () => {
   });
 });
 
+describe("the failure of a run", () => {
+  const failed = (over: Partial<RunSummary> = {}) =>
+    run({ status: "failed", reason: 'step "a" failed: exit code 1', state: { next: "a", steps: {}, visits: {} }, history: [{ id: "a", type: "shell", ok: false, visit: 1, output: "x" }] as never, ...over });
+
+  it("is explained with options that follow watched and the failed label", () => {
+    const n = runNextStep(failed(), { watched: true, failedLabel: "Factory_ERROR" });
+    expect(n.failure).toMatchObject({ cause: "code", kind: "A problem in the code" });
+    expect(n.failure!.options).toHaveLength(4);
+    expect(n.failure!.options[0]).toContain("Factory_ERROR");
+    expect(runNextStep(failed()).failure!.options[0]).toBe("Retry — resume the run on its page");
+  });
+  it("is not there for other runs, and is dropped by briefFailure", () => {
+    expect(runNextStep(run({ status: "failed", reason: "interrupted — resume it" })).failure).toBeUndefined();
+    for (const status of ["running", "succeeded", "cancelled"] as const) expect(runNextStep(run({ status })).failure).toBeUndefined();
+    const factory = runNextStep(failed({ reason: "internal error: x" }), watched);
+    expect(factory.failure).toBeDefined();
+    expect(briefFailure(factory).failure).toBeUndefined();
+  });
+  it("holds no sentence of a model for a user", () => {
+    const r = failed({ failureNote: { kind: "code", why: "the secret sentence", by: "m" } });
+    expect(JSON.stringify(runNextStep(r, { forUser: true }))).not.toContain("secret sentence");
+    expect(JSON.stringify(runNextStep(r))).toContain("secret sentence");
+  });
+  it("counts a step budget as a limit and a rejection as a decision", () => {
+    expect(runNextStep(failed({ reason: 'step "a" failed: claude result: error_max_budget_usd' })).cause).toBe("limit");
+    expect(runNextStep(failed({ reason: 'step "a" failed: rejected' })).cause).toBe("decision");
+  });
+});
+
+describe("paused runs", () => {
+  const paused = (reason: string, history: unknown[] = [], over: Partial<RunNextOptions> = {}) =>
+    runNextStep(run({ status: "stopped", reason, history: history as never }), { ...watched, now: new Date("2026-10-01T08:20:00Z"), timeZone: "UTC", ...over });
+  it("a true usage limit stays a time limit", () => {
+    const n = paused("usage limit reached: busy", [{ limited: true }]);
+    expect(n).toMatchObject({ who: "A time limit", status: "paused — usage limit" });
+    expect(n.failure).toBeUndefined();
+  });
+  it("the daily budget is unchanged", () => {
+    expect(paused("daily budget of $5 reached — resume tomorrow").status).toBe("paused — daily budget");
+  });
+  it("signed out reads its own status, for an administrator and for a user", () => {
+    const reason = 'signed out — the Claude Code login has expired. Sign in again: run "claude" in a terminal and type /login.';
+    expect(paused(reason).status).toBe("paused — signed out");
+    expect(paused(reason, [], { forUser: true }).status).toBe("paused — signed out");
+    expect(paused(reason).failure).toBeUndefined();
+  });
+  it("an unreachable service reads its own status and has a time", () => {
+    const n = paused("usage limit reached: connection error", [{ limited: true, unreachable: true }]);
+    expect(n).toMatchObject({ why: "The AI service could not be reached", status: "paused — AI service not reachable" });
+    expect(n.until).toBeTruthy();
+    expect(n.failure).toBeUndefined();
+  });
+});
+
 describe("runNextStep", () => {
   it("classifies real reason strings", () => {
     const k = (over: Partial<RunSummary>) => runNextStep(run(over), watched).kind;
@@ -493,6 +553,14 @@ describe("runNextStep", () => {
     expect(a.kind).toBe("one_at_a_time");
     expect(a.where.url).toBe("#/runs/r0");
     expect(runNextStep(run({ status: "stopped" }), { queued: {} }).kind).toBe("queued");
+  });
+  it("a queued resume behind a bug story says so, unless it waits for a lock", () => {
+    expect(runNextStep(run({ status: "stopped" }), { queued: { behindPriority: true } }).kind).toBe("bug_first");
+    expect(runNextStep(run({ status: "stopped" }), { queued: { behindPriority: true, waitingFor: "r0" } }).kind).toBe("one_at_a_time");
+  });
+  it("a story that waits for a bug story is named in a dependency record", () => {
+    const n = nextStep("dependency", { repo: "acme/app", issue: 9, title: "T" }, { watched: true, blockers: [{ issue: 4, next: nextStep("bug_first", { repo: "acme/app", issue: 4 }) }] });
+    expect(n.text).toContain("which waits for a bug story");
   });
   it("a superseded stopped run needs nobody; a succeeded one stays done", () => {
     const a = runNextStep(run({ status: "stopped", reason: "stopped at step \"approve\"" }), { superseded: true });

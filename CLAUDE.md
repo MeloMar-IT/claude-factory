@@ -21,6 +21,7 @@ node scripts/build-flows.mjs   # regenerate flows/*.yaml (see below)
 | `src/steps/` | Step runners: `claude.ts` (Claude Code CLI), `codex.ts`, `shell.ts` |
 | `src/agents/` | Picking agent/provider/model, fallbacks on limits |
 | `src/flow/` | Flow schema (zod) and loading; `blocks.ts` for the block library |
+| `src/monitor/` | The monitor: detectors, findings store, the `Monitor` check (`detectors.ts`, `work-detectors.ts`, `findings.ts`, `monitor.ts`) |
 | `src/queue/` | Scheduler (concurrency, locks), GitHub watchers, dependencies |
 | `src/server/` | HTTP API (`api-*.ts`) and the server; the UI calls it |
 | `ui/` | Web UI: plain JavaScript modules, no build step, no framework |
@@ -28,7 +29,7 @@ node scripts/build-flows.mjs   # regenerate flows/*.yaml (see below)
 | `blocks/` | Reusable step blocks (YAML) |
 | `tools/` | Helper scripts the flows call (`$FACTORY_TOOLS/…`) |
 | `scripts/build-flows.mjs` | Generates `flows/*.yaml` from `blocks/` and code |
-| `docs/` | `USER_GUIDE.md`, `FLOW_AUTHORING.md` (flow format for AI assistants), `CHANGELOG.md` |
+| `docs/` | `USER_GUIDE.md`, `DESIGN.md` (how it is built), `LESSONS_LEARNED.md`, `FLOW_AUTHORING.md` (flow format for AI assistants), `CHANGELOG.md` |
 | `tests/` | vitest; `tests/fixtures/` has fake `claude`, `codex` and `gh` |
 
 ## Rules

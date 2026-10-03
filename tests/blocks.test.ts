@@ -109,7 +109,10 @@ describe("comment wording comes from the next-step module", () => {
     expect(text("tools/create-split")).toMatch(/const comment = \[\s*\.\.\.\(first \? \[first, ""\]/);
     expect(text("tools/create-split")).toContain("FACTORY_FIRST_INFO");
     before(stepRun(flowPath("issue-plan"), "post_plan"), 'echo "$FACTORY_FIRST_START_CODING"', "issue-plan/post_plan");
-    for (const f of ["issue-code-daily", "issue-deliver", "issue-gitflow"]) before(stepRun(flowPath(f), "report"), 'echo "$FACTORY_FIRST_SHIPS"', `${f}/report`);
+    for (const f of ["issue-code-daily", "issue-deliver"]) before(stepRun(flowPath(f), "report"), 'echo "$FACTORY_FIRST_SHIPS"', `${f}/report`);
+    const gitflowReport = stepRun(flowPath("issue-gitflow"), "report");
+    before(gitflowReport, 'echo "$first"', "issue-gitflow/report");
+    for (const v of ["SHIPS", "FIXED", "MERGE_BACK"]) expect(gitflowReport).toContain(`first="$FACTORY_FIRST_${v}"`);
     before(stepRun(flowPath("pr-feedback"), "reply"), 'echo "$FACTORY_FIRST_LOOK"', "pr-feedback/reply");
     const dailies: [string, string][] = [["release-daily", "release_pr"], ["daily-pr", "report"]];
     for (const [f, id] of dailies) {

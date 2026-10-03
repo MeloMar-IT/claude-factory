@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { StatusComments } from "../src/queue/status-comment.js";
 import { parseFlow } from "../src/flow/load.js";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -10,6 +11,7 @@ import { Scheduler } from "../src/queue/scheduler.js";
 import { failureComment, parseInterval, Watcher } from "../src/queue/watcher.js";
 import { watcherProblem } from "../src/server/next.js";
 import { firstLine } from "../src/next-step.js";
+import { failureSummary } from "../src/failure.js";
 import { LABEL_WORDS } from "../src/words.js";
 import { claudeBin, fakeGithub, first, oldFlowFor } from "./helpers/fake-github.js";
 
@@ -23,6 +25,59 @@ describe("parseInterval", () => {
     expect(() => parseInterval("30d")).toThrow(/at most/);
     expect(() => parseInterval("1s")).toThrow(/at least 10s/);
     expect(() => parseInterval("soon")).toThrow(/invalid interval/);
+  });
+});
+
+describe("monitor entries in the config", () => {
+  const parse = (watchers: unknown[]) => ConfigSchema.parse({ watchers });
+  const MON = { id: "mon", source: "monitor" };
+
+  it("a monitor needs no repository; another source does", () => {
+    expect(WatcherSchema.parse(MON)).toMatchObject({ source: "monitor", github_repo: "", enabled: true, every: "5m" });
+    expect(() => WatcherSchema.parse({ id: "x", source: "issues" })).toThrow(/github_repo/);
+    expect(() => WatcherSchema.parse({ id: "x", github_repo: "nope" })).toThrow(/owner\/repo/);
+  });
+
+  it("a monitor with a repository, flow, precheck flow or owner fails", () => {
+    for (const extra of [{ github_repo: "a/b" }, { flow: "issue-gitflow" }, { precheck_flow: "epic-questions" }, { owner: "a@b.c" }]) {
+      expect(() => WatcherSchema.parse({ ...MON, ...extra })).toThrow(/does not use this/);
+    }
+  });
+
+  it("only one monitor, and its id must be unique; other watchers may repeat an id", () => {
+    expect(() => parse([MON, { ...MON, id: "two" }])).toThrow(/only one monitor/);
+    expect(() => parse([MON, { id: "mon", github_repo: "a/b" }])).toThrow(/used by another watcher/);
+    const w = { id: "same", github_repo: "a/b" };
+    expect(parse([w, w]).watchers).toHaveLength(2);
+    expect(parse([MON, w]).watchers).toHaveLength(2);
+  });
+
+  it("the monitor section has defaults, and rejects out-of-range and unknown keys", () => {
+    expect(ConfigSchema.parse({}).monitor).toEqual({
+      restart_loop: { resumes: 5, within_minutes: 10 },
+      watcher_error: { checks: 3 },
+      github_limit: { percent: 80 },
+      watcher_silent: { intervals: 5 },
+      unexplained_failure: { runs: 1, within_hours: 24 },
+      stuck_run: { extra_minutes: 10, no_timeout_minutes: 120 },
+      same_step_failing: { issues: 3, within_hours: 24 },
+      label_mismatch: { checks: 3 },
+      orphan_lock: { minutes: 10 },
+      queue_stalled: { minutes: 15 },
+      restart_overdue: { hours: 2 },
+      develop_red: { failures: 2, within_hours: 24 },
+      slow_step: { factor: 3, times: 3, within_hours: 24 },
+    });
+    expect(() => ConfigSchema.parse({ monitor: { same_step_failing: { issues: 1 } } })).toThrow();
+    expect(() => ConfigSchema.parse({ monitor: { slow_step: { factor: 1 } } })).toThrow();
+    expect(() => ConfigSchema.parse({ monitor: { stuck_run: { no_timeout_minutes: 10081 } } })).toThrow();
+    expect(() => ConfigSchema.parse({ monitor: { queue_stalled: { minutes: 0 } } })).toThrow();
+    expect(ConfigSchema.parse({ monitor: { restart_loop: { resumes: 9 } } }).monitor.restart_loop).toEqual({ resumes: 9, within_minutes: 10 });
+    expect(() => ConfigSchema.parse({ monitor: { restart_loop: { resumes: 50 } } })).toThrow(); // run.json keeps 50 resumes
+    expect(() => ConfigSchema.parse({ monitor: { github_limit: { percent: 0 } } })).toThrow();
+    expect(() => ConfigSchema.parse({ monitor: { github_limit: { percent: 101 } } })).toThrow();
+    expect(() => ConfigSchema.parse({ monitor: { nope: 1 } })).toThrow();
+    expect(() => ConfigSchema.parse({ monitor: { restart_loop: { nope: 1 } } })).toThrow();
   });
 });
 
@@ -67,6 +122,28 @@ describe("watcher", () => {
     expect(log).toMatch(/gh issue edit 5 .*--add-label factory:done/);
     expect(log).not.toMatch(/issue edit (3|9) /);
     expect(runFor("5").status).toBe("succeeded");
+  });
+
+  it("counts checks that fail in a row (errorCount) and calls afterCheck after good and failed checks", async () => {
+    let calls = 0;
+    let reject = false;
+    const w = new Watcher(WatcherSchema.parse({ id: "w", github_repo: "acme/app", flow: oldFlowFor({}) }), {
+      scheduler, runsDir: join(gh.tmp, "runs"), repo: gh.tmp, log: () => {},
+      afterCheck: async () => { calls++; if (reject) throw new Error("hook failed"); },
+    });
+    process.env.FAKE_GH_FAIL = "issue list";
+    await w.tick();
+    expect(w.status.errorCount).toBe(1);
+    await w.tick();
+    expect(w.status.errorCount).toBe(2);
+    expect(calls).toBe(2);
+    delete process.env.FAKE_GH_FAIL;
+    reject = true;
+    await w.tick(); // the hook's rejection changes nothing
+    expect(w.status.errorCount).toBeUndefined();
+    expect(w.status.lastError).toBeUndefined();
+    expect(w.status.lastOk).toBeDefined();
+    expect(calls).toBe(3);
   });
 
   describe("label descriptions", () => {
@@ -397,6 +474,7 @@ describe("watcher", () => {
     process.env.FAKE_GH_PRS = "[]";
     await w.tick();
     expect(w.status.pausedBy).toBeUndefined();
+    await settle(); // the second check started a run: let it end before the folder goes
   });
 
   it("errorSince is set on the first failing check, kept, and cleared by a good one", async () => {
@@ -489,6 +567,11 @@ describe("watcher", () => {
     }
     const head = body.slice(0, body.indexOf("<details>"));
     expect(head).toContain("- **What happened:** The step a failed.");
+    expect(head).toContain("- **Why:** ");
+    expect(head).toContain("- **Kind of problem:** ");
+    expect(head).toContain("- **Already tried:** Nothing else — it failed at the first attempt.");
+    const opts = head.slice(head.indexOf("**Your options**")).split("\n").filter((l) => l.startsWith("- "));
+    expect(opts.map((l) => l.split(" — ")[0])).toEqual(["- Retry", "- Retry with a hint", "- Change the plan", "- Close"]);
     expect(head).not.toContain("What you can do");
     expect(head).toContain("Last failing step: `a`");
     for (const bad of ["@someone", "```", "evil", "# Title"]) expect(head).not.toContain(bad);
@@ -496,12 +579,34 @@ describe("watcher", () => {
     expect(body.startsWith("**What you need to do:** Do the thing, then retry.\n\n🤖 **Spaghetti Code Foundry** could not finish this issue.\n")).toBe(true);
   });
 
-  it("failureComment for a Foundry failure has the 'itself failed' heading and no Why line", () => {
-    const s = { runId: "r9", reason: "boom", history: [] } as never;
-    const body = failureComment(s, { who: "Something is wrong", action: "Fix it", why: "The Foundry failed, not the code: boom", cause: "factory" } as never);
+  it("failureComment for a Foundry failure has the 'itself failed' heading, and what and why", () => {
+    const s = { runId: "r9", status: "failed", reason: "Boom", history: [] } as never;
+    const body = failureComment(s, { who: "Something is wrong", action: "Fix it", why: "The Foundry failed, not the code: Boom", cause: "factory" } as never);
     expect(body.split("\n")[2]).toBe("🤖 **Spaghetti Code Foundry** itself failed on this issue, not the code.");
-    expect(body).toContain("- **What happened:** The Foundry failed, not the code: boom.");
-    expect(body).not.toContain("- **Why:**");
+    expect(body).toContain("- **What happened:** The run failed.");
+    expect(body).toContain("- **Why:** Boom.");
+  });
+
+  it("failureComment names the failed child of a parallel step and shows its output", () => {
+    const h = (id: string, ok: boolean, output: string, over = {}) => ({ id, type: "shell", ok, visit: 1, output, ...over });
+    const s = {
+      runId: "r9", status: "failed", reason: 'step "p" failed: failed: a',
+      history: [h("a", false, "child failure text"), h("b", true, "sibling ok text"), h("p", false, "## a\nchild failure text\n\n## b\nsibling ok text", { type: "parallel", error: "failed: a" })],
+    } as never;
+    const body = failureComment(s, { who: "Something is wrong", action: "Fix it", why: "x" } as never);
+    expect(body).toContain("Last failing step: `a`");
+    expect(body).toContain("child failure text");
+    expect(body).not.toContain("sibling ok text");
+  });
+
+  it("failureComment says when a model wrote the Why, and names a custom failed label in the options", () => {
+    const s = { runId: "r9", status: "failed", reason: 'step "a" failed: exit code 1', history: [], failureNote: { kind: "code", why: "the tests keep failing", by: "claude:anthropic:haiku" } } as never;
+    const sum = failureSummary(s, { watched: true, failedLabel: "Factory_ERROR" });
+    const body = failureComment(s, { who: "Something is wrong", action: "Fix it", why: "x", failure: sum } as never);
+    expect(body).toContain("- **Why:** The tests keep failing.");
+    expect(body).toContain("(A model read the output");
+    expect(body).toContain("- Retry — remove the Factory_ERROR label");
+    expect(failureComment({ ...(s as object), failureNote: undefined } as never, { who: "Something is wrong", action: "Fix it", why: "x" } as never)).not.toContain("(A model read");
   });
 
   describe("failure comment", () => {
@@ -523,7 +628,9 @@ describe("watcher", () => {
       const body = bodyOf(4);
       expect(body.split("\n")[2]).toBe(FACTORY_LINE);
       expect(body.split("\n").at(-1)).toBe(`<!-- claude-factory run=${runFor("4").runId} -->`);
-      expect(headOf(body)).not.toContain("- **Why:**");
+      expect(headOf(body)).toContain("- **Why:** The plan had no questions to ask.");
+      expect(headOf(body)).toContain("- **Kind of problem:** A problem with the environment or the Foundry");
+      expect(headOf(body)).toContain("**Your options**");
       issues([4, "factory:failed"]);
       await w.tick();
       expect(w.status.holds).toMatchObject([{ issue: 4, next: { kind: "failed", who: "Something is wrong", cause: "factory" } }]);
@@ -871,6 +978,370 @@ describe("watcher", () => {
 
   it("requires a task for schedule watchers", () => {
     expect(() => WatcherSchema.parse({ id: "s", github_repo: "a/b", source: "schedule" })).toThrow(/needs a task/);
+  });
+
+  describe("status comment", () => {
+    const MARK = "<!-- claude-factory status -->";
+    const statusC = (body: string, over: Record<string, unknown> = {}) => ({
+      author: { login: "bot" }, body, createdAt: "2026-01-02T00:00:00Z", url: "https://github.com/acme/app/issues/3#issuecomment-77", viewerDidAuthor: true, ...over,
+    });
+    const setComments = (...c: unknown[]) => { process.env.FAKE_GH_COMMENTS = JSON.stringify({ comments: c }); };
+    const logLines = () => gh.ghLog().split("\n");
+    const reads = (n: number) => logLines().filter((l) => new RegExp(`^gh issue view ${n} .*comments,labels`).test(l)).length;
+    /** Every call that reads or writes a comment of issue 3. */
+    const commentCalls = () => logLines().filter((l) => /^gh (issue comment 3|api repos\/\S+\/issues\/comments|issue view 3 .*comments)/.test(l)).length;
+    const closedIssue = (n: number, label: string) => ({ number: n, title: `issue ${n}`, state: "CLOSED", labels: [{ name: label }] });
+    const withDeps = (over: Record<string, unknown>, deps: Record<string, unknown>) =>
+      new Watcher(WatcherSchema.parse({ id: "w", github_repo: "acme/app", vars: { test_cmd: "test -f feature.txt" }, ...over, flow: oldFlowFor(over) }), {
+        scheduler, runsDir: join(gh.tmp, "runs"), repo: gh.tmp, log: (l) => lines.push(l), ...deps,
+      });
+    const sharedFile = () => join(gh.tmp, "data", "status-comments.json");
+
+    it("is created once, with one read of the comments", async () => {
+      issues([3, "factory:failed"]);
+      const w = watcher();
+      await w.tick();
+      await w.tick();
+      expect(gh.statusComments()).toHaveLength(1);
+      expect(gh.statusComments()[0]).toMatchObject({ issue: 3 });
+      expect(gh.statusComments()[0]!.body.split("\n")[0]).toMatch(/^\*\*What you need to do:\*\*/);
+      expect(reads(3)).toBe(1);
+      expect(gh.comments()).toEqual([]); // the helper hides it
+    });
+
+    it("is edited when the issue changes, then left alone", async () => {
+      issues([3, "factory:failed"]);
+      const w = watcher();
+      await w.tick();
+      issues([3, "factory:done"]);
+      await w.tick();
+      expect(gh.statusComments()).toHaveLength(1);
+      expect(gh.statusEdits()).toHaveLength(1);
+      expect(gh.statusEdits()[0]!.id).toBe("1");
+      expect(gh.statusEdits()[0]!.body).toMatch(/^\*\*Nothing needed from you\*\* — it is done\./);
+      expect(reads(3)).toBe(1);
+      const calls = commentCalls();
+      await w.tick();
+      await w.tick();
+      expect(commentCalls()).toBe(calls);
+    });
+
+    it("gives a done issue without a comment one, then nothing", async () => {
+      issues([3, "factory:done"]);
+      const w = watcher();
+      await w.tick();
+      expect(gh.statusComments()).toHaveLength(1);
+      expect(gh.statusComments()[0]!.body).toContain("it is done");
+      const calls = commentCalls();
+      await w.tick();
+      expect(commentCalls()).toBe(calls);
+    });
+
+    describe("after a restart", () => {
+      const first = async () => {
+        issues([3, "factory:done"]);
+        await watcher().tick();
+        return gh.statusComments()[0]!.body;
+      };
+      it("makes no write when the comment says the same", async () => {
+        const body = await first();
+        setComments(statusC(body));
+        const before = gh.ghLog().length;
+        const w = watcher();
+        await w.tick();
+        const log = gh.ghLog().slice(before);
+        expect(log).toMatch(/issue view 3 /);
+        expect(log).not.toMatch(/issue comment 3|issues\/comments/);
+      });
+      it("edits the comment that is there when the text differs", async () => {
+        await first();
+        setComments(statusC(`old text\n\n${MARK}`));
+        const w = watcher();
+        await w.tick();
+        expect(gh.statusEdits().map((e) => e.id)).toEqual(["77"]);
+        expect(gh.statusComments()).toHaveLength(1); // only the first one
+      });
+      it("does not edit a comment of someone else, and posts its own", async () => {
+        await first();
+        setComments(statusC(`old text\n\n${MARK}`, { viewerDidAuthor: false }));
+        const w = watcher();
+        await w.tick();
+        expect(gh.statusEdits()).toEqual([]);
+        expect(gh.statusComments()).toHaveLength(2);
+      });
+    });
+
+    it("is posted at the next check when posting fails, and does not fail the check", async () => {
+      issues([3, "factory:failed"]);
+      process.env.FAKE_GH_FAIL = "issue comment";
+      const w = watcher();
+      await w.tick();
+      expect(lines.some((l) => l.includes("status comment #3"))).toBe(true);
+      expect(w.status.lastError).toBeUndefined();
+      expect(w.status.holds).toMatchObject([{ issue: 3 }]);
+      delete process.env.FAKE_GH_FAIL;
+      setComments(statusC(`old\n\n${MARK}`)); // it was posted after all
+      await w.tick();
+      expect(gh.statusComments()).toEqual([]);
+      expect(gh.statusEdits().map((e) => e.id)).toEqual(["77"]);
+    });
+
+    it("does not fail the check when an edit fails", async () => {
+      issues([3, "factory:failed"]);
+      const w = watcher();
+      await w.tick();
+      process.env.FAKE_GH_FAIL = "api repos/acme/app/issues/comments/1";
+      issues([3, "factory:done"]);
+      await w.tick();
+      expect(lines.some((l) => l.includes("status comment #3"))).toBe(true);
+      expect(w.status.lastError).toBeUndefined();
+    });
+
+    it("keeps the folder of a failed run out of the issue when the failure comment is off", async () => {
+      issues([8]);
+      const w = watcher({ comment_on_failure: false });
+      await w.tick();
+      await settle();
+      saveRun({ ...runFor("8"), status: "failed", reason: 'workspace "/Users/me/private" is gone' });
+      issues([8, "factory:failed"]);
+      await w.tick();
+      expect(gh.ghLog()).not.toContain("/Users/me");
+      expect(gh.statusEdits().concat(gh.statusComments().map((c) => ({ id: "", body: c.body }))).length).toBeGreaterThan(0);
+    });
+
+    describe("does not end a wait", () => {
+      it("an answer is found although the status comment comes after it", async () => {
+        process.env.FAKE_PLAN = "Which DB?\nPLAN_STATUS: NEEDS_INFO";
+        issues([4]);
+        const w = watcher();
+        await w.tick();
+        await settle();
+        const first = runFor("4");
+        delete process.env.FAKE_PLAN;
+        issues([4, "factory:needs-info"]);
+        setComments(
+          { author: { login: "bot" }, body: "questions <!-- claude-factory run=x -->", createdAt: "2026-01-01T00:00:00Z" },
+          { author: { login: "marcel" }, body: "Use Postgres", createdAt: "2026-01-01T01:00:00Z" },
+          statusC(`**Nothing needed from you**\n\n${MARK}`),
+        );
+        await w.tick();
+        await settle();
+        expect(runFor("4").runId).toBe(first.runId);
+        expect(runFor("4").resumes).toBe(1);
+        expect(lines.join("\n")).toContain("answered by @marcel");
+      });
+
+      it("a status comment is not an answer", async () => {
+        process.env.FAKE_PLAN = "Which DB?\nPLAN_STATUS: NEEDS_INFO";
+        issues([4]);
+        const w = watcher();
+        await w.tick();
+        await settle();
+        issues([4, "factory:needs-info"]);
+        setComments({ author: { login: "bot" }, body: "questions <!-- claude-factory run=x -->", createdAt: "2026-01-01T00:00:00Z" }, statusC(`x\n\n${MARK}`));
+        await w.tick();
+        await settle();
+        expect(runFor("4").resumes ?? 0).toBe(0);
+      });
+
+      it("counts the questions of the questions comment, also when it quotes the marker", async () => {
+        issues([4, "factory:needs-info"]);
+        const questions = (extra: string) => ({ author: { login: "bot" }, body: `**Q1.** a\n**Q2.** b\n${extra}\n<!-- claude-factory run=x questions -->`, createdAt: "2026-01-01T00:00:00Z" });
+        for (const extra of ["", `see ${MARK} for status`]) {
+          setComments(questions(extra), statusC(`**Nothing needed from you**\n\n${MARK}`));
+          const w = watcher();
+          await w.tick();
+          expect(w.status.holds).toMatchObject([{ issue: 4, since: "2026-01-01T00:00:00Z", next: { kind: "questions" } }]);
+          expect(w.status.holds![0]!.next.text).toContain("answer 2 questions");
+        }
+      });
+
+      it("finds /approve although the status comment comes after it", async () => {
+        issues([6]);
+        const w = watcher({ flow: "github-pr", vars: { test_cmd: "test -f feature.txt", require_approval: "yes", ci_settle_sec: "0" } });
+        await w.tick();
+        await settle();
+        const run = runFor("6");
+        issues([6, "factory:waiting-approval"]);
+        setComments(
+          { author: { login: "bot" }, body: `ready <!-- claude-factory run=${run.runId} approval -->`, createdAt: "2026-01-01T00:00:00Z" },
+          { author: { login: "marcel" }, body: "/approve ship it", createdAt: "2026-01-01T02:00:00Z" },
+          statusC(`**What you need to do:** x\n\n${MARK}`),
+        );
+        await w.tick();
+        await settle();
+        expect(runFor("6").status).toBe("succeeded");
+      });
+    });
+
+    describe("the scheduled release", () => {
+      it("says when the work ships, then that it is done once the release ran", async () => {
+        issues([8]);
+        const release = WatcherSchema.parse({ id: "release-daily", github_repo: "acme/app", source: "schedule", flow: "release-daily", at: "02:00", task: "release" });
+        const w = withDeps({}, { watchers: () => [release] });
+        await w.tick();
+        await settle();
+        const run = runFor("8");
+        saveRun({ ...run, history: [...run.history, { id: "push_develop", ok: true, visit: 1, output: "" } as never] });
+        issues([8, "factory:done"]);
+        await w.tick();
+        const edits = gh.statusEdits();
+        expect(edits.at(-1)!.body).toContain("02:00 release");
+        const dir = join(gh.tmp, "runs", "zz-release");
+        mkdirSync(dir, { recursive: true });
+        saveRun({ ...run, runId: "zz-release", runDir: dir, flow: "release-daily", status: "succeeded", vars: { github_repo: "acme/app" }, history: [], startedAt: new Date(Date.now() + 60_000).toISOString(), finishedAt: new Date(Date.now() + 90_000).toISOString() });
+        await w.tick();
+        expect(gh.statusEdits().at(-1)!.body).toContain("it is done");
+        const calls = logLines().filter((l) => /issue comment|issues\/comments|issue view 8/.test(l)).length;
+        await w.tick();
+        expect(logLines().filter((l) => /issue comment|issues\/comments|issue view 8/.test(l)).length).toBe(calls);
+      });
+    });
+
+    describe("when the watcher no longer follows the issue", () => {
+      it("says it is done after a succeeded run, once", async () => {
+        issues([8]);
+        const w = watcher();
+        await w.tick();
+        await settle();
+        issues(); // the label was removed
+        await w.tick();
+        const edits = gh.statusEdits();
+        expect(edits).toHaveLength(1);
+        expect(edits[0]!.body).toContain("it is done");
+        const calls = logLines().filter((l) => /issue comment|issues\/comments|issue view 8/.test(l)).length;
+        await w.tick();
+        expect(logLines().filter((l) => /issue comment|issues\/comments|issue view 8/.test(l)).length).toBe(calls);
+      });
+
+      it("says it no longer follows the issue when no run succeeded", async () => {
+        issues([3, "factory:failed"]);
+        const w = watcher();
+        await w.tick();
+        issues();
+        await w.tick();
+        expect(gh.statusEdits()).toHaveLength(1);
+        expect(gh.statusEdits()[0]!.body).toContain("no longer follows this issue");
+        expect(gh.statusEdits()[0]!.body).toContain("`claude-factory`");
+      });
+
+      it("does so after a restart, from the file", async () => {
+        const file = sharedFile();
+        issues([8]);
+        await withDeps({}, { statusComments: new StatusComments("acme/app", (m) => lines.push(m), { file }) }).tick();
+        await settle();
+        issues();
+        setComments(statusC(`old\n\n${MARK}`, { url: "https://github.com/acme/app/issues/8#issuecomment-31" }));
+        const readsBefore = reads(8);
+        await withDeps({}, { statusComments: new StatusComments("acme/app", (m) => lines.push(m), { file }) }).tick();
+        expect(reads(8)).toBe(readsBefore + 1);
+        expect(gh.statusEdits()).toEqual([{ id: "31", body: expect.stringContaining("it is done") }]);
+      });
+    });
+
+    describe("an issue closed while its run works", () => {
+      const slow = () => {
+        const dir = join(gh.tmp, ".claude-factory", "flows");
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(join(dir, "slow.yaml"), "name: slow\nworkspace: inplace\nsteps:\n  - {id: work, type: shell, run: 'sleep 1'}\n");
+      };
+      const slowDeps = (over: Record<string, unknown> = {}) =>
+        new Watcher(WatcherSchema.parse({ id: "w", github_repo: "acme/app", flow: "slow" }), {
+          scheduler, runsDir: join(gh.tmp, "runs"), repo: gh.tmp, log: (l) => lines.push(l), ...over,
+        });
+
+      it("asks to cancel the run, and says it is done when the run ends", async () => {
+        slow();
+        issues([8]);
+        const w = slowDeps();
+        await w.tick();
+        await new Promise((r) => setTimeout(r, 300));
+        issues();
+        process.env.FAKE_GH_CLOSED_ISSUES = JSON.stringify([closedIssue(8, "factory:working")]);
+        await w.tick();
+        expect(gh.statusEdits().at(-1)!.body).toContain("Cancel the run if the work is no longer wanted");
+        await settle();
+        process.env.FAKE_GH_CLOSED_ISSUES = "[]";
+        await w.tick();
+        expect(gh.statusEdits().at(-1)!.body).toContain("it is done");
+      });
+
+      it("does the same with a new object that read the file", async () => {
+        slow();
+        const file = sharedFile();
+        issues([8]);
+        await slowDeps({ statusComments: new StatusComments("acme/app", (m) => lines.push(m), { file }) }).tick();
+        await new Promise((r) => setTimeout(r, 300));
+        issues();
+        process.env.FAKE_GH_CLOSED_ISSUES = JSON.stringify([closedIssue(8, "factory:working")]);
+        setComments(statusC(`old\n\n${MARK}`, { url: "https://github.com/acme/app/issues/8#issuecomment-31" }));
+        await slowDeps({ statusComments: new StatusComments("acme/app", (m) => lines.push(m), { file }) }).tick();
+        expect(gh.statusEdits()).toEqual([{ id: "31", body: expect.stringContaining("Cancel the run if the work is no longer wanted") }]);
+        await settle();
+      });
+    });
+
+    describe("an issue that is gone", () => {
+      const gone = async () => {
+        issues([3, "factory:done"]);
+        const w = watcher();
+        await w.tick();
+        issues();
+        return w;
+      };
+      it("is not touched in a check where the closed-issue scan failed", async () => {
+        const w = await gone();
+        process.env.FAKE_GH_CLOSED_ISSUES = "not json";
+        await w.tick();
+        expect(w.status.lastError).toMatch(/tidying closed issues/);
+        expect(gh.statusEdits()).toEqual([]);
+        process.env.FAKE_GH_CLOSED_ISSUES = "[]";
+        await w.tick();
+        expect(gh.statusEdits()).toHaveLength(1);
+      });
+      it("is not touched when the closed-issue scan was cut at its limit", async () => {
+        const w = await gone();
+        const many = (n: number) => JSON.stringify(Array.from({ length: n }, (_, i) => closedIssue(100 + i, "factory:failed")));
+        process.env.FAKE_GH_CLOSED_ISSUES = many(30);
+        await w.tick();
+        expect(gh.statusEdits()).toEqual([]);
+        process.env.FAKE_GH_CLOSED_ISSUES = many(29);
+        await w.tick();
+        expect(gh.statusEdits()).toHaveLength(1);
+      });
+    });
+
+    it("is one comment for two watchers of the same issue", async () => {
+      const { WatcherManager } = await import("../src/queue/watchers.js");
+      issues([5]);
+      const cfg = ConfigSchema.parse({
+        protected_branches: [], concurrency: 2,
+        watchers: ["a", "b"].map((id) => ({ id, github_repo: "acme/app", label: "claude-factory", every: "1h", flow: oldFlowFor(), vars: { test_cmd: "test -f feature.txt" } })),
+      });
+      const manager = new WatcherManager({ scheduler, runsDir: join(gh.tmp, "runs"), repo: gh.tmp, config: () => cfg, log: (l) => lines.push(l) });
+      manager.sync();
+      try {
+        for (let i = 0; i < 100 && manager.statuses().some((s) => !s.status?.lastTick); i++) await new Promise((r) => setTimeout(r, 100));
+        await settle();
+        expect(gh.statusComments().filter((c) => c.issue === 5)).toHaveLength(1);
+        expect(JSON.parse(readFileSync(join(process.env.FACTORY_HOME!, "status-comments.json"), "utf8"))).toMatchObject({ "acme/app": { a: [5], b: [5] } });
+      } finally {
+        manager.stopAll();
+      }
+    });
+
+    it("is not written or read when status_comment is off", async () => {
+      issues([3, "factory:done"]);
+      const w = watcher({ status_comment: false });
+      await w.tick();
+      expect(gh.statusComments()).toEqual([]);
+      expect(reads(3)).toBe(0);
+    });
+
+    it("is on by default", () => {
+      expect(WatcherSchema.parse({ id: "w", github_repo: "a/b" }).status_comment).toBe(true);
+      expect(WatcherSchema.parse({ id: "w", github_repo: "a/b", status_comment: false }).status_comment).toBe(false);
+    });
   });
 });
 

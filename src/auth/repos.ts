@@ -2,10 +2,11 @@ import { createHash, randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
-import { CredentialError, addCredentialLocked, checkSecret, listCredentials, oldKeysLeft as credentialKeysLeft, removeCredentialsLocked } from "../credentials/store.js";
+import { CredentialError, addCredentialLocked, checkSecret, listCredentials, moveCredentialLocked, oldKeysLeft as credentialKeysLeft, removeCredentialsLocked } from "../credentials/store.js";
+import { RepoSettingsSchema, checkRepoSettings } from "./repo-settings.js";
 import { type ParsedRepoUrl, RepoError, type RepoErrorCode, githubKey, parseRepoUrl, tryParseRepoUrl, validGithubName } from "./repo-url.js";
 import { authLockHeld, dataHome, readJsonFile, withAuthLock, writeJsonFile } from "./store.js";
-import { getUser } from "./users.js";
+import { type User, UserError, checkEmail, findUserByEmail, getUser } from "./users.js";
 
 export { RepoError };
 export type { RepoErrorCode };
@@ -43,6 +44,7 @@ const RecordSchema = z
     credentialId: z.uuid().optional(),
     username: z.string().optional(),
     added: z.iso.datetime(),
+    settings: RepoSettingsSchema.optional(),
   })
   .strict()
   .superRefine((r, ctx) => {
@@ -89,6 +91,9 @@ const FileV1 = z
 
 export type RepoRecord = z.infer<typeof RecordSchema>;
 type RepoFile = z.infer<typeof FileV2>;
+/** What a user may see: the record without the admin's settings. */
+export type PublicRepo = Omit<RepoRecord, "settings">;
+const strip = ({ settings: _s, ...rest }: RepoRecord): PublicRepo => ({ ...rest });
 
 /** The same id for the same old entry on every read, so a link to it keeps working until the file is rewritten. */
 function legacyId(owner: string, name: string): string {
@@ -120,7 +125,10 @@ const pathOfRecord = (r: RepoRecord) => r.url.replace(/^https:\/\/github\.com\//
 // ---- reading ---------------------------------------------------------------------------------------
 
 /** The repositories of an account, in the order they were added. A record never holds a secret. */
-export const listRepos = (userId: string): RepoRecord[] => read().repos.filter((r) => r.owner === userId).map((r) => ({ ...r }));
+export const listRepos = (userId: string): PublicRepo[] => read().repos.filter((r) => r.owner === userId).map(strip);
+
+/** Every repository of every account, with the admin settings. Only for an admin's call. */
+export const listAllRepos = (): RepoRecord[] => read().repos.map((r) => ({ ...r }));
 
 /** True when the account has this GitHub repository (any case, with or without ".git", https or ssh). */
 export function ownsRepo(userId: string, name: string): boolean {
@@ -205,7 +213,7 @@ export interface NewRepo {
  * Adds a repository. The record is written first and the token second, and a failed second write takes the record back,
  * so no token exists without a record. `ownerOk` says whether the account exists (default: it is in users.json).
  */
-export function addRepo(userId: string, given: NewRepo | string, opts: { ownerOk?: (userId: string) => boolean } = {}): RepoRecord {
+export function addRepo(userId: string, given: NewRepo | string, opts: { ownerOk?: (userId: string) => boolean } = {}): PublicRepo {
   const input: NewRepo = typeof given === "string" ? { url: given } : given;
   const url = parseRepoUrl(input.url);
   const auth = checkAuth(url, { method: input.method ?? "none", username: input.username, token: input.token }, input.method !== undefined && input.method !== "none");
@@ -239,7 +247,7 @@ export function addRepo(userId: string, given: NewRepo | string, opts: { ownerOk
         throw e;
       }
     }
-    return { ...record };
+    return strip(record);
   });
 }
 
@@ -256,7 +264,7 @@ export interface AuthChange {
  * first, then the record is written, then the new token is saved. A failure in between leaves a record that names a missing
  * token (never a token without a record); giving the token again repairs it.
  */
-export function setRepoAuth(userId: string, id: string, input: AuthChange, opts: { ownerOk?: (userId: string) => boolean } = {}): { repo: RepoRecord; oldKeysLeft: number } {
+export function setRepoAuth(userId: string, id: string, input: AuthChange, opts: { ownerOk?: (userId: string) => boolean } = {}): { repo: PublicRepo; oldKeysLeft: number } {
   if ([input.method, input.username, input.token, input.url].every((v) => v === undefined)) throw badAuth("give a method, a user name, a token or an address");
   return withAuthLock(() => {
     ownerExists(opts, userId);
@@ -286,6 +294,7 @@ export function setRepoAuth(userId: string, id: string, input: AuthChange, opts:
       ...(credentialId ? { credentialId } : {}),
       ...(auth.username ? { username: auth.username } : {}),
       added: rec.added,
+      ...(rec.settings ? { settings: rec.settings } : {}),
     };
     let oldKeysLeft = 0;
     // a change to none also on a record that is none already: a retry cleans an old key left by the first try
@@ -296,7 +305,7 @@ export function setRepoAuth(userId: string, id: string, input: AuthChange, opts:
       // saving retries old keys too, so the count from the wipe may be out of date
       oldKeysLeft = credentialKeysLeft();
     }
-    return { repo: { ...next }, oldKeysLeft };
+    return { repo: strip(next), oldKeysLeft };
   });
 }
 
@@ -339,4 +348,73 @@ export function removeReposLocked(userId: string): number {
   if (!mine.length) return 0;
   save(file.repos.filter((r) => r.owner !== userId));
   return mine.length;
+}
+
+// ---- admin: settings and transfer ------------------------------------------------------------------
+
+/** Sets (or, with {}, clears) the admin settings of any repository. Returns the record with its settings. */
+export function setRepoSettings(id: string, input: unknown): RepoRecord {
+  const settings = checkRepoSettings(input);
+  return withAuthLock(() => {
+    const file = read();
+    const rec = file.repos.find((r) => r.id === id);
+    if (!rec) throw new RepoError("not-found", "no such repository");
+    const { settings: _old, ...rest } = rec;
+    const next: RepoRecord = Object.keys(settings).length ? { ...rest, settings } : rest;
+    if (JSON.stringify(next) !== JSON.stringify(rec)) save(file.repos.map((r) => (r === rec ? next : r)));
+    return { ...next };
+  });
+}
+
+/** Methods whose secret is a personal token: it is wiped when the repository changes owner. */
+export const PERSONAL_METHODS: readonly RepoMethod[] = ["github-token", "https-token"];
+/** Methods whose secret belongs to the repository (a deploy key, a GitHub App installation): it moves with the repository. */
+export const REPO_BOUND_METHODS: readonly RepoMethod[] = [];
+
+export interface TransferOptions {
+  /** Finds the new owner by e-mail (default: users.json). */
+  findOwner?: (email: string) => Pick<User, "id" | "status"> | undefined;
+}
+
+const EMAIL_CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
+
+/**
+ * Moves a repository to the account with the given e-mail. A personal token is wiped and the record reads "none"; a
+ * repository-bound secret is re-encrypted for the new owner. The secret goes first and the record second, so a failure in
+ * between leaves the record with the old owner, and repeating the transfer finishes it.
+ */
+export function transferRepo(id: string, emailInput: unknown, opts: TransferOptions = {}): { repo: RepoRecord; oldKeysLeft: number } {
+  if (typeof emailInput !== "string" || !emailInput.trim()) throw new RepoError("bad-owner", "give the e-mail of the new owner");
+  let email = "";
+  try {
+    email = checkEmail(emailInput);
+  } catch (e) {
+    if (!(e instanceof UserError)) throw e;
+  }
+  if (!email || EMAIL_CONTROL.test(email)) throw new RepoError("bad-owner", "that is not a valid e-mail address");
+  return withAuthLock(() => {
+    const owner = (opts.findOwner ?? findUserByEmail)(email);
+    if (!owner) throw new RepoError("no-owner", "no account has that e-mail");
+    if (owner.status === "blocked") throw new RepoError("blocked", "that account is blocked");
+    const file = read();
+    const rec = file.repos.find((r) => r.id === id);
+    if (!rec) throw new RepoError("not-found", "no such repository");
+    // a repeat after a failed first try: the record is moved already, so only old keys are cleaned
+    if (rec.owner === owner.id) return { repo: { ...rec }, oldKeysLeft: cleanKeys(owner.id) };
+    if (file.repos.some((r) => r.owner === owner.id && keyOfRecord(r) === keyOfRecord(rec))) throw new RepoError("duplicate", "that account has that repository already");
+    if (file.repos.filter((r) => r.owner === owner.id).length >= REPO_LIMIT) throw new RepoError("limit", `that account has ${REPO_LIMIT} repositories already`);
+    let next: RepoRecord = { ...rec, owner: owner.id };
+    let oldKeysLeft = 0;
+    if (REPO_BOUND_METHODS.includes(rec.method)) {
+      if (!rec.credentialId || moveCredentialLocked(rec.owner, owner.id, rec.credentialId, secretName(rec)) === "missing") {
+        throw new RepoError("no-credential", "the sign-in of this repository is missing; set it again before the transfer");
+      }
+    } else if (rec.method !== "none") {
+      oldKeysLeft = wipeToken(rec);
+      const { credentialId: _c, username: _u, ...bare } = next;
+      next = { ...bare, method: "none" };
+    }
+    save(file.repos.map((r) => (r === rec ? next : r)));
+    return { repo: { ...next }, oldKeysLeft };
+  });
 }

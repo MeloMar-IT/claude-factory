@@ -44,6 +44,22 @@ const start = (yaml: string, over: Record<string, unknown> = {}) =>
   runFlow(parseFlow(yaml), { task: "t", repo, runsDir, claudeBin, config: baseConfig(), ...over });
 
 describe("stored secrets are redacted", () => {
+  it("hides the token in the failure note", async () => {
+    const guard = process.env.FACTORY_NO_FAILURE_MODEL;
+    delete process.env.FACTORY_NO_FAILURE_MODEL;
+    process.env.FAKE_EXPLAIN = `KIND: code\nWHY: it printed ${token} twice`;
+    try {
+      const s = await start("name: t\nworkspace: inplace\nsteps:\n  - {id: a, type: shell, run: 'exit 1'}\n");
+      expect(s.failureNote).toBeDefined();
+      expect(JSON.stringify(s.failureNote)).not.toContain(token);
+      expect(readFileSync(join(s.runDir, "run.json"), "utf8")).not.toContain(token);
+      expect(readFileSync(liveLogFile(s.runDir), "utf8")).not.toContain(token);
+    } finally {
+      delete process.env.FAKE_EXPLAIN;
+      if (guard !== undefined) process.env.FACTORY_NO_FAILURE_MODEL = guard;
+    }
+  });
+
   it("hides the token in a failing shell step and everything that records it", async () => {
     const s = await start(`
 name: t

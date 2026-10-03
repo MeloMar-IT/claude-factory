@@ -35,6 +35,8 @@ const stepWhat = (s: Ctx) => (s.step ? `The step ${s.step} failed` : "The run fa
 const OUTPUT = "Look at the output of the step and fix the cause";
 const LOG = "Look at the log of the step on the run page";
 
+export const NOT_EXPLAINED = "the error is not one the Foundry can explain";
+
 const ROWS: Row[] = [
   { re: /^exit code \S+/, make: (_m, s) => ({ what: stepWhat(s), why: "its command ended with an error", todo: OUTPUT }) },
   { re: /^timed out\b/, make: (_m, s) => ({ what: stepWhat(s), why: "it ran longer than its time limit", todo: "Look at the output of the step to see what took so long" }) },
@@ -113,4 +115,27 @@ export function explainError(raw: string | undefined, about: ErrorAbout = "run",
     if (m) return fin({ startOver: row.startOver ?? false, ...(forUser && row.user ? row.user(m, ctx) : row.make(m, ctx)) });
   }
   return fin(general(ctx));
+}
+
+/** Text that says GitHub's request limit was hit. */
+export const GITHUB_LIMIT_RE = /API rate limit (?:already )?exceeded|secondary rate limit/i;
+
+/** One line without what changes between two occurrences: run ids, folders, tokens, times, long numbers. */
+export function cleanLine(line: string): string {
+  return line
+    .replace(/\b\d{8}-\d{6}-[0-9a-f]{4}\b/g, "<run>")
+    .replace(/\b(?:gh[pousr]_|github_pat_|sk-)[\w-]{8,}/g, "<token>")
+    .replace(/\b[0-9a-f]{32,}\b/gi, "<token>")
+    .replace(/\d{4}-\d{2}-\d{2}[T ][\d:.]+(?:Z|\s?[+-]\d{2}:?\d{2})?/g, "<time>")
+    .replace(/\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}\/\d{1,2}\/\d{2,4}\b|\b\d{1,2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]* \d{4}\b/g, "<date>")
+    .replace(/\b\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:\s?[ap]m)?/gi, "<time>")
+    .replace(/(?:[A-Za-z]:)?(?:\/[\w.@+~-]+){2,}\/?/g, "<path>")
+    .replace(/\b\d{5,}\b/g, "<n>")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** A short kind for an error text: the same error gives the same kind. */
+export function errorKind(raw: string | undefined): string {
+  return cleanLine(errorLine(raw)).slice(0, 80);
 }

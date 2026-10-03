@@ -19,11 +19,15 @@ import { areaWait, forgetHistory, nextRoutes, type RestartState } from "./next.j
 import { healthRoutes } from "./health.js";
 import { boardRoutes } from "./board.js";
 import { TurnNotifier } from "./notifier.js";
+import { ClarityRecorder, clarityRoutes } from "./clarity.js";
 import { CSP, HSTS, listenProblem, localUrl, requestAccess } from "./net.js";
 import { ACCOUNT_SWEEP_MS, accountActive, accountSweeper } from "./account-work.js";
 import { adoptRuns } from "../auth/run-owner.js";
 import { hasAdmin, type User } from "../auth/users.js";
 import { repoRoutes } from "./api-repos.js";
+import { REFINEMENT_SWEEP_MS, refinementRoutes, refinementSweeper } from "./api-refinement.js";
+import { userRoutes } from "./api-users.js";
+import { logRing } from "../monitor/monitor.js";
 import { authorize, findRule } from "./permissions.js";
 import { sinceRoutes } from "./since.js";
 import { yourTurnRoutes } from "./your-turn.js";
@@ -47,6 +51,8 @@ export interface ServerOptions {
   adoptEveryMs?: number;
   /** How often blocked and deleted accounts are checked, in ms (default 2000). */
   accountSweepMs?: number;
+  /** How often dropped refinement sessions past their 30 days are removed, in ms (default 600000). */
+  refinementSweepMs?: number;
 }
 
 export interface ApiContext {
@@ -69,12 +75,17 @@ export interface ApiContext {
 /** A route handler: returns true when it handled the request. */
 export type Route = (ctx: ApiContext, req: IncomingMessage, res: ServerResponse, seg: string[], method: string, user: User) => Promise<boolean>;
 
-const ROUTES: Route[] = [credentialRoutes, repoRoutes, adminRoutes, flowRoutes, runRoutes, nextRoutes, yourTurnRoutes, turnActionRoutes, sinceRoutes, boardRoutes, healthRoutes];
+const ROUTES: Route[] = [credentialRoutes, repoRoutes, refinementRoutes, userRoutes, adminRoutes, flowRoutes, runRoutes, nextRoutes, yourTurnRoutes, turnActionRoutes, sinceRoutes, boardRoutes, healthRoutes, clarityRoutes];
 
 export async function startServer(given: ServerOptions): Promise<{ url: string; close: () => void; ctx: ApiContext; notifier?: TurnNotifier }> {
   // every free-form server, watcher and notifier log line passes the redaction (fail closed)
   const sink = given.log ?? (() => {});
-  const log = (msg: string) => sink(redactText(msg));
+  const ring = logRing(); // the newest redacted lines, for the monitor
+  const log = (msg: string) => {
+    const text = redactText(msg);
+    ring.push(text);
+    sink(text);
+  };
   const opts: ServerOptions = { ...given, log };
   let config = loadConfig();
   const listen = config.server.listen;
@@ -98,13 +109,15 @@ export async function startServer(given: ServerOptions): Promise<{ url: string; 
       if (s.vars?.github_repo && !steppedAsideFor(s)) watchers.kickRepo(s.vars.github_repo);
     },
   });
-  const watchers = new WatcherManager({ scheduler, runsDir: opts.runsDir, repo: opts.repo, config: () => config, areaWait, log });
+  const watchers = new WatcherManager({ scheduler, runsDir: opts.runsDir, repo: opts.repo, config: () => config, areaWait, log, serverLog: ring.lines, restart: () => ctx.restart });
   const ctx: ApiContext = { opts, diagLog: sink, scheduler, watchers, config: () => config, reloadConfig: () => (config = loadConfig()), listen };
 
   // Before the first pump and before adopt(): jobs of blocked accounts never start, and a stop-work request made while
   // the server was down does not reach a run that is adopted later.
   const sweep = accountSweeper(scheduler, log);
   sweep();
+  const refinementSweep = refinementSweeper(log);
+  refinementSweep();
 
   async function api(req: IncomingMessage, res: ServerResponse, path: string) {
     const method = req.method ?? "GET";
@@ -188,19 +201,25 @@ export async function startServer(given: ServerOptions): Promise<{ url: string; 
   adoptTimer.unref();
   const sweepTimer = setInterval(sweep, opts.accountSweepMs ?? ACCOUNT_SWEEP_MS);
   sweepTimer.unref();
+  const refinementTimer = setInterval(refinementSweep, opts.refinementSweepMs ?? REFINEMENT_SWEEP_MS);
+  refinementTimer.unref();
   if (opts.watchers !== false) watchers.sync();
   let notifier: TurnNotifier | undefined;
   if (process.env.FACTORY_NO_NOTIFY !== "1") {
     notifier = new TurnNotifier(ctx, { baseUrl: localUrl(listen, opts.port), log });
     notifier.start();
   }
+  const clarity = new ClarityRecorder(ctx, { log });
+  clarity.start();
   return {
     url: localUrl(listen, opts.port),
     ctx,
     notifier,
     close: () => {
+      clarity.stop();
       clearInterval(adoptTimer);
       clearInterval(sweepTimer);
+      clearInterval(refinementTimer);
       notifier?.stop();
       watchers.stopAll();
       server.close();

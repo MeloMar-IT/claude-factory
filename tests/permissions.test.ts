@@ -158,14 +158,31 @@ const EXAMPLES: Record<string, Example> = {
   "POST your-turn/restore": no("your-turn/restore", 200, {}),
   "GET your-turn/detail": no("your-turn/detail", 400),
   "POST your-turn/act": no("your-turn/act", 400, {}),
+  "GET clarity": no("clarity", 200),
   "GET credentials": { path: "credentials", user: 200, admin: 200 },
   "POST credentials": { path: "credentials", body: {}, user: 400, admin: 400 },
+  "GET users": no("users", 200),
+  "POST users": no("users", 400, {}),
+  "PUT users/:id": no(`users/${UNKNOWN}`, 404, {}),
+  "POST users/:id/block": no(`users/${UNKNOWN}/block`, 404, {}),
+  "POST users/:id/unblock": no(`users/${UNKNOWN}/unblock`, 404, {}),
+  "POST users/:id/link": no(`users/${UNKNOWN}/link`, 404, {}),
+  "DELETE users/:id": no(`users/${UNKNOWN}`, 404),
   "DELETE credentials/:id": { path: `credentials/${UNKNOWN}`, user: 404, admin: 404 },
   "GET repos": { path: "repos", user: 200, admin: 200 },
   "POST repos": { path: "repos", body: {}, user: 400, admin: 400 },
   "PUT repos/:id/auth": { path: `repos/${UNKNOWN}/auth`, body: {}, user: 400, admin: 400 },
   "DELETE repos/:id": { path: `repos/${UNKNOWN}`, user: 404, admin: 404 },
+  "GET refinement": { path: "refinement", user: 200, admin: 200 },
+  "POST refinement": { path: "refinement", body: {}, user: 400, admin: 400 },
+  "GET refinement/:id": { path: `refinement/${UNKNOWN}`, user: 404, admin: 404 },
+  "PUT refinement/:id": { path: `refinement/${UNKNOWN}`, body: {}, user: 404, admin: 404 },
+  "POST refinement/:id/drop": { path: `refinement/${UNKNOWN}/drop`, body: {}, user: 404, admin: 404 },
+  "POST refinement/:id/restore": { path: `refinement/${UNKNOWN}/restore`, body: {}, user: 404, admin: 404 },
   "DELETE repos/:owner/:name": { path: "repos/nope/nope", user: 404, admin: 404 },
+  "GET admin/repos": no("admin/repos", 200),
+  "PUT admin/repos/:id/settings": no(`admin/repos/${UNKNOWN}/settings`, 404, {}),
+  "POST admin/repos/:id/transfer": no(`admin/repos/${UNKNOWN}/transfer`, 400, {}),
 };
 
 describe("the table", () => {
@@ -184,20 +201,24 @@ describe("the table", () => {
     expect(findRule("DELETE", ["repos", "a", "b"])?.path).toBe("repos/:owner/:name");
     expect(findRule("DELETE", ["repos", "a"])?.path).toBe("repos/:id");
     expect(findRule("PUT", ["repos", "a", "auth"])?.path).toBe("repos/:id/auth");
+    expect(findRule("GET", ["admin", "repos"])?.path).toBe("admin/repos");
+    expect(findRule("PUT", ["admin", "repos", "a", "settings"])?.path).toBe("admin/repos/:id/settings");
+    expect(findRule("GET", ["admin"])).toBeUndefined();
+    expect(findRule("POST", ["refinement", "a", "drop"])?.path).toBe("refinement/:id/drop");
   });
 
   it("has an example for every rule and a rule for every example", () => {
     expect(Object.keys(EXAMPLES).sort()).toEqual(RULES.map(ruleKey).sort());
   });
 
-  it("names every route group of the source in a rule (or session and setup)", () => {
+  it("names every route group of the source in a rule (or session, setup and set-password)", () => {
     const dir = resolve("src/server");
     const groups = new Set<string>();
     for (const f of readdirSync(dir).filter((n) => n.endsWith(".ts"))) {
       for (const m of readFileSync(join(dir, f), "utf8").matchAll(/seg\[0\]\s*(?:===|!==)\s*"([^"]+)"/g)) groups.add(m[1]!);
     }
     expect(groups.size).toBeGreaterThan(10);
-    const known = new Set([...RULES.map((r) => r.path.split("/")[0]!), "session", "setup"]);
+    const known = new Set([...RULES.map((r) => r.path.split("/")[0]!), "session", "setup", "set-password"]);
     expect([...groups].filter((g) => !known.has(g))).toEqual([]);
   });
 });

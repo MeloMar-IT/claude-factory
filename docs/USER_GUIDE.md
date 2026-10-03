@@ -1,8 +1,17 @@
 # Spaghetti Code Foundry user guide
 
 Spaghetti Code Foundry runs **flows**: pipelines of steps that code, test, review and ship
-changes with AI coding agents on your own machine. This guide walks through the web UI, writing
-your own flows, automating work from GitHub, choosing models, and keeping it all safe.
+changes with AI coding agents on your own machine. Its main use: put one label on a GitHub
+issue, and the Foundry asks the open questions, plans, codes, tests, reviews and merges the
+story — and asks you only when it has to.
+
+This guide walks through the web UI, writing your own flows, automating work from GitHub,
+choosing models, and keeping it all safe. How it is built is in [DESIGN.md](DESIGN.md); what we
+learned building it is in [LESSONS_LEARNED.md](LESSONS_LEARNED.md).
+
+![Your turn: only what waits for you](images/your-turn.png)
+
+*The pictures in this guide show a demo repository, `acme/webshop`, with made-up stories.*
 
 Formerly **claude-factory**. The command is now `scf` (`factory` still works), the repository is `MeloMar-IT/spaghetti-code-foundry` and the data folder is `~/.spaghetti-code-foundry` (see [section 11](#11-upgrading-from-claude-factory)). The `<repo>/.claude-factory` folder, the labels (`claude-factory`, `factory:*`) and `factory/…` branches keep the old name.
 
@@ -18,6 +27,7 @@ Formerly **claude-factory**. The command is now `scf` (`factory` still works), t
 - [9. Command line](#9-command-line)
 - [10. Troubleshooting](#10-troubleshooting)
 - [11. Upgrading from claude-factory](#11-upgrading-from-claude-factory)
+- [12. Refinement](#12-refinement)
 
 ---
 
@@ -42,11 +52,18 @@ twice). That signs you in. You can also create the admin in a terminal with
 an upgrade from a version without sign-in, do this once; nothing else changes. The CLI, the
 watchers and runs that are already going do not need an account.
 
+![Sign in](images/sign-in.png)
+
 **Sign in and out.** After that, the UI shows a sign-in form. Your name and a **Sign out**
 button are in the top bar. You stay signed in for 7 days, or until you sign out. A password
 change or a block (`scf user password`, `scf user block`) signs that account out at once. If you
 are blocked, you cannot sign in. If the session ends while a page is open, the next action
 brings you back to the sign-in form.
+
+**Set-password link.** A new account may get a link instead of a password. Open it in the
+browser's address bar, type the password twice, and press **Set password**. Then sign in with it.
+The link works once and for 7 days. If the page says "this link is not valid any more", ask your
+admin for a new one.
 
 | Page | What it is for |
 |---|---|
@@ -54,13 +71,31 @@ brings you back to the sign-in form.
 | **Board** | Where every story is, in columns per repository |
 | **Flows** | Your flows and the built-in ones: edit, create, run |
 | **Library** | Reusable blocks of steps to drop into flows |
+| **Refinement** | Where a rough idea grows into a story before it goes to the backlog |
 | **Runs** | Everything that ran or is running; the ones that need you on top |
+| **My repositories** | The repositories you work in, and how the Foundry signs in to them |
+| **Repositories** | Admin: the repositories of all accounts, their settings, and transfer to another account |
 | **Watchers** | Automatic runs from GitHub issues, PR comments, red CI, or a schedule |
 | **Models** | Which agents and models are available, and which model runs which step |
 | **Dashboard** | Spend, success rate, where runs fail, eval results |
+| **Users** | The accounts: add, edit, block and delete them (admins only) |
 | **Settings** | Budget, safety, notifications, bot identity, disk clean-up |
 
-An account with the role `user` sees only **Runs**.
+An account with the role `user` sees only **Refinement**, **Runs** and **My repositories**:
+
+![What a user sees: Runs and My repositories](images/user-home.png)
+
+**Under the top bar** is the health line. It says "All good", or names what is wrong with the
+Foundry itself, and on the right when each repository was last checked.
+
+#### The day in four steps
+
+1. Put the build label on your issues on GitHub (or let a watcher's schedule do the work).
+2. Open **Your turn**. Answer questions and approve risky plans; one button each.
+3. Look at **Board** when you want to know where a story is and why.
+4. Merge the daily release pull request when it shows up under Your turn.
+
+Everything else continues by itself.
 
 Everything the UI does is also available from the command line (see [section 9](#9-command-line)).
 
@@ -93,6 +128,8 @@ When a run finishes, its branch stays in your repository. Review it, merge it, o
 
 ### Your turn
 
+![Your turn](images/your-turn.png)
+
 **Your turn** lists only what waits for you, one button each: questions to answer, approvals, failed or stopped work, a release pull request to merge, and a watcher that has an error. It never lists work that is running, queued, paused by a limit or waiting for another story, and never evaluation runs.
 
 - **Order:** the item that holds back the most stories comes first, then the one that waits longest. Items are grouped by repository.
@@ -101,6 +138,8 @@ When a run finishes, its branch stays in your repository. Review it, merge it, o
 - **Answer and approve here:** for an item of a watcher, buttons next to the GitHub link do the work. **Show questions** has **Accept all recommendations** (only for questions asked up front) and **Answer…** (a box per question; each needs an answer, and **Use recommendation** fills one in visibly). **Show plan**, **Show split** and **Show request** show the risk and **Approve** / **Reject** (say what to change). A failed item has **Retry** and **Retry with a hint…**. Each action is a normal comment on the issue under the Foundry's GitHub login, signed with your name, so replying on GitHub still works. Approve and reject need write access for that login. The item then shows under **Done — continuing**.
 - **Dismiss** hides an item. It stays hidden until its situation changes (a new question, a new approval, a new failure). **Show again** at the bottom brings all dismissed items back. Watcher errors cannot be dismissed. Dismissals are kept in `your-turn.json` in the data folder.
 - **No refresh needed:** the page updates every 5 seconds. When you come back from a GitHub link, the watcher checks GitHub at once. An answer you give elsewhere shows at the next watcher check.
+- **Closed on GitHub, run still working:** such an issue is listed, with a link to the run (the Runs page while the run is only queued). Cancel the run if the work is no longer wanted, or Dismiss it to let the run finish.
+- **Checked every minute:** the Foundry checks that the Board, the watchers, the runs and this page agree. The result is on the [Dashboard](#dashboard).
 - **Empty:** it says "Nothing needs you." and, when it can, how many stories are being built and when the next release pull request is expected.
 - **Badge:** the number of items shows in the navigation and in the tab title, for example "(3) Foundry". When something waits, the app opens on this page.
 - **Notifications:** new items can also reach you as a macOS or Slack message; see **Notifications** under Settings.
@@ -134,11 +173,13 @@ The same data is at `GET /api/health`: `ok`, `summary` ("All good", "1 problem",
 
 ### The board
 
+![The board of a repository](images/board.png)
+
 **Board** shows where every story is, like a parcel tracker. There is one board per repository; with more than one repository you get tabs.
 
 - **Columns:** *Your turn* (something waits for you; here it also holds a run you stopped yourself, which the Your turn page does not list), *Waiting for another story*, *Queued* (also paused by a limit), *Planning*, *Coding*, *Reviewing*, *Merging* (also finished work that waits for the scheduled release), *Done* (grouped Today and This week) and *Failed*.
 - **Which stories show:** every issue a watcher tracks, at any age. Other runs on an issue show for 7 days after they end. Done shows the last 7 days. Evaluation runs and runs without an issue never show.
-- **The card:** issue number and title, what happens next, the current step ("coding — step 12 of 29"), and the stories it waits for ("after #88"). Click the card to open its run page. A story that has no run yet is not a link; use the issue link on it.
+- **The card:** issue number and title, what happens next, the current step ("coding — step 12 of 29"), and the stories it waits for ("after #88"). A bug story has a "goes first" mark. Click the card to open its run page. A story that has no run yet is not a link; use the issue link on it.
 - **Highlight:** "What is in the way of #89?" marks the whole chain of stories that hold it back and dims the others. The line above the board lists the chain, also stories that have no card. **Show all** clears it.
 - **Updates:** the page asks every 5 seconds, so what the Foundry knows shows within 5 seconds. Changes on GitHub show after the watcher's next check; when you come back from a GitHub link, the watcher checks at once.
 - **Which column running work is in:** the Foundry reads it from the step names. Steps like `plan`, `ask_for_info` and `risk_gate` are Planning; `implement` starts Coding; `review`, `review_1` and `review_2` start Reviewing; `commit`, `push…` and `open_pr` start Merging. Any other step name stays in the phase of the step before. A flow with other names shows its running work under Coding.
@@ -151,10 +192,12 @@ Runs whose next move is yours (the record says **You**) are listed under **Needs
 that wait for a limit, the budget or another run are not. Under each task the table shows the
 "what happens next" sentence, also for finished runs. At most *N* runs execute at the same time
 (Settings → Runs at the same time); the rest queue. Each queue line shows the same sentence
-and a link to what it waits for.
+and a link to what it waits for. A bug story in the queue has a "goes first" mark.
 
 An admin sees every run, with an **Owner** column, and can pick one account in the **Owner**
 filter next to the title (the list shows "All owners" and each account with its number of runs).
+The Owner column shows the account's name, `deleted user` when the account is gone, and nothing for
+a run without an owner.
 A user sees only their own runs and their own queued runs; runs of others in front of them show
 as "n runs ahead of you".
 
@@ -177,8 +220,17 @@ is wrong yet: look at the live log.
 Open a run to follow it live. At the top, the **What happens next** block says who has the next
 move, what to do, why, a link to the place to do it, and when it continues by itself (if
 known). It updates live. While the run is not finished it also shows its progress, the estimate
-and the "Taking longer than usual" hint (see "How long will it take?" above). For a failure it
-says what happened, why and what you can do in plain words. The raw reason (for a waiting run, the approval message) is the **Details** row below.
+and the "Taking longer than usual" hint (see "How long will it take?" above). The raw reason of a
+waiting run (the approval message) is the **Details** row below. An admin also sees an **Owner**
+row: the name of the account that started the run, or `deleted user` (no row for a run without an
+owner).
+
+A failed run shows a **failure card** instead: who has the next move, the kind of problem, what
+happened, why, what the Foundry already tried, what to do first and your four options (Retry,
+Retry with a hint, Change the plan, Close). The page opens on **Steps**, and **Show the failed
+step** opens the step that explains the failure. The raw reason is one click away under **Raw
+details** in the card; it is never the first thing shown. A user sees the card without raw
+details.
 
 The status next to the flow name has the same **?**. The **Current step** (while the run
 works) or **Resumes at step** (when it is stopped) row names the step and says what it does:
@@ -223,6 +275,33 @@ a **What happens next** block with **You** as who and the approval message as th
 Runs survive restarts: if the Foundry stops mid-run, the run is marked *interrupted* and can be
 resumed (watchers do this automatically).
 
+**The failure summary.** A failed run (the run page and the comment on the issue) says what
+failed, why, what was tried and the kind of problem:
+
+- **A problem in the code** — the tests keep failing, a review is rejected by the checks. Example:
+  "The step run_tests kept failing. Already tried: 3 fix attempts."
+- **A problem with the environment or the Foundry** — a blocked command, a login, the network, wrong
+  model settings. Example: "git could not log in to the remote."
+- **A limit** — the budget of a step or of the run was used up. Example: "It used the amount the
+  flow allows for one run."
+- **A person's decision** — someone rejected an approval. The note of the approver is shown.
+
+The four options, for a watched issue and for a run by hand:
+
+| Option | Watched issue | Run by hand |
+|---|---|---|
+| Retry | Remove the failed label, or resume the run on its page | Resume the run on its page (a new run when the fix is a change to the flow, such as a larger budget) |
+| Retry with a hint | Write the hint as a comment on the issue, then remove the failed label | Start a new run and put the hint in its task |
+| Change the plan | Change the text of the issue, then remove the failed label | Change the task, then start a new run |
+| Close | Close the issue if the work is no longer wanted | Leave the run as it is |
+
+For a code failure the *why* is one sentence written by a small model that read the end of the
+failing output (see "The failure summary call" in Costs). The comment and the card then say so.
+If the model says the cause is the environment, the failure counts as a Foundry failure.
+
+A usage limit, the daily budget, a sign-out and an unreachable AI service do not fail a run: they
+pause it, and it continues by itself (a sign-out needs you to sign in again first).
+
 **When the Foundry itself failed.** Some failures are not a bug in the code. The run page, the
 Runs list, the watcher card, the Dashboard and the notification then say "The Foundry failed, not
 the code", what went wrong and the fix. The causes and fixes:
@@ -232,14 +311,30 @@ the code", what went wrong and the fix. The causes and fixes:
   the run page's log has the whole command.
 - A push to a protected branch was blocked: change **Protected branches** in Settings or the
   flow's branch, then resume.
+- A hotfix: GitHub refuses the push to `main` ("only accepts pull requests"): allow direct pushes
+  for the Foundry's account on GitHub, or remove the `bug` label so the issue is built as a
+  feature. Nothing was pushed.
+- A hotfix: `main` changed in the same places while the run worked ("changed in the same
+  places"): nothing was pushed and the branch is kept. Delete the `hotfix/…` branch and start the
+  issue again.
+- A hotfix: the tests fail on `main` with the fix merged in (`red_main`): nothing was pushed to
+  `main`. Fix the cause on the hotfix branch and resume, or remove the label and build it as a
+  feature.
+- A hotfix: `develop` could not take the fix: the fix is on `main` and the issue is closed; see
+  "Hotfix" under Branches for what to do.
 - A marker the Foundry could not read (no `PLAN_STATUS` line, no questions to ask, no `SUBTASK`
   lines): resume the run to try the step again.
 - An internal error, an unknown step, or a run that failed before any step ran (workspace, bot
   identity, GitHub App token): fix the setting, or restart or update the Foundry, then resume.
+- A git or gh login error, or a network error, in a command of the flow: log in again (`gh auth
+  login`) or check the network, then resume.
+- Wrong model or provider settings, or a missing `claude` or `codex` program: fix the setting or
+  install the program, then resume.
 - An interrupted run: resume it (a watcher does this by itself).
 
 A failed test, guard or review, too many visits of a step and a push blocked by the secret scan
-are code failures and keep the usual text. If a command was blocked earlier in such a run, the
+are code failures and keep the usual text. A step budget that is used up is a limit, and a
+rejection is a person's decision. If a command was blocked earlier in such a run, the
 sentence adds a hint to allow it in the flow if it was needed.
 
 ### Words the Foundry uses
@@ -259,7 +354,10 @@ Every status in the app has a **?** that shows the two sentences from this table
 | waiting for #88 | It needs #88 to be done first. Nothing to do — it starts by itself after that. |
 | waiting for another run | Only one run at a time works here, and another run is active. Nothing to do — it starts when that run is finished. |
 | waiting for another run in the same code | Another run is changing the same part of the code. Nothing to do — it goes on when that run is finished. |
+| waiting — a bug story goes first | A story with a bug label is repaired before other work. Nothing to do — it goes on by itself after that. |
 | paused — usage limit | The usage limit of the AI account is reached. Nothing to do — the Foundry tries again after the limit resets. |
+| paused — signed out | The Foundry is signed out of its AI account. Sign in again — the run then goes on by itself. |
+| paused — AI service not reachable | The AI service could not be reached. Nothing to do — the Foundry tries again later. |
 | paused — daily budget | Today's budget is used up. Nothing to do — it goes on tomorrow. |
 | checking for questions | The Foundry reads the new issues and looks for questions only you can answer. Nothing to do — an issue without questions starts after the check. |
 | starting soon | Nothing is in the way, it only waits for the watcher's next check. Nothing to do — it starts by itself. |
@@ -438,6 +536,9 @@ your own block with **☆ Save as block**.
 
 ![Models](images/models.png)
 
+*The Models page on the demo machine, where the agents are stand-ins: on your machine the two
+coding agents show as installed.*
+
 ### Agents
 
 Agent steps run on one of two command-line agents:
@@ -504,6 +605,7 @@ running (see [Keep it running](#keep-it-running)). GitHub access uses the `gh` C
 |---|---|---|
 | **Issues** | an open issue has the trigger label | `issue-gitflow` (or `issue-plan` / `issue-code-daily` for the human-in-the-loop pipeline) |
 | **Schedule** | it is time (every N, or once a day at a set time) | `release-daily` |
+| **Monitor** | never — it checks the Foundry itself and records problems (see [The monitor](#the-monitor-the-foundry-checks-itself)) | none |
 | *Review comments* | someone comments on a Foundry PR (branch `factory/*`) | none shipped — name your own flow |
 | *CI failures* | the latest CI run of a workflow on the default branch failed | none shipped — name your own flow |
 
@@ -511,6 +613,87 @@ running (see [Keep it running](#keep-it-running)). GitHub access uses the `gh` C
 
 For a **schedule**, the text becomes the run's task. Intervals: `30s`, `5m`, `1h`, `7d`; or set
 **Once a day at** `17:00` with a time zone.
+
+### The monitor: the Foundry checks itself
+
+The monitor is a watcher that looks at the Foundry itself and writes down what is wrong, so you
+do not have to find it. It is **off until you add it**: on the Watchers page choose **Add watcher**
+and the source **The Foundry itself**. It needs only an id and an interval. It has no repository, no
+flow and no label, only one is allowed, and only an admin can add it. It starts nothing and changes
+no run, label or file of a run; it only writes its findings.
+
+Each check runs these detectors. Each one reads the runs, the queue, the watchers and the server
+log; none calls an AI or GitHub.
+
+| Detector | Finds | Severity | Default |
+|---|---|---|---|
+| Restart loop | the same run resumed again and again | critical | more than 5 times in 10 minutes |
+| Watcher error | a watcher's checks fail one after the other (grouped by kind of error) | major | more than 3 checks in a row |
+| GitHub request limit | the limit was hit, or most of it is used | critical when hit, major when used | more than 80% |
+| Watcher silent | an enabled watcher finished no check | critical | 5 times its interval |
+| Unexplained failure | a run failed with an error no rule of the Foundry explains | minor | 1 run in 24 hours |
+| Stuck run | a running run wrote nothing to its log for longer than its step's timeout plus a margin (no timeout: 120 minutes) | major | timeout + 10 minutes |
+| Same step keeps failing | the same step of the same flow ended runs as failed for different issues | major | 3 issues in 24 hours |
+| Label and run disagree | an issue's status label does not match its newest run | minor | more than 3 checks |
+| Lock without owner | a code-area lock or a run lock is held by a run that is not running | major | more than 10 minutes |
+| Queue not moving | jobs are queued, slots are free, and nothing started | critical | 15 minutes |
+| Restart overdue | a new version is installed and the server has not restarted | major | more than 2 hours |
+| Develop is red | the tests after a merge into develop failed one after the other | critical | 2 in a row, looking back 24 hours |
+| Slow step | a step took much longer than its usual time (the times kept for estimates; needs 3 earlier runs and more than 2 minutes) | minor | more than 3 times, 3 times in 24 hours |
+
+*Critical* means work has stopped, *major* means work is slowed or wrong, *minor* means wrong but
+harmless. A detector that crashes shows up as a finding "Detector X failed"; the others still run.
+
+Change the thresholds in `config.yaml`:
+
+```yaml
+watchers:
+  - { id: monitor, source: monitor, every: 5m }
+monitor:
+  restart_loop: { resumes: 5, within_minutes: 10 }   # resumes: at most 49
+  watcher_error: { checks: 3 }
+  github_limit: { percent: 80 }
+  watcher_silent: { intervals: 5 }
+  unexplained_failure: { runs: 1, within_hours: 24 }
+  stuck_run: { extra_minutes: 10, no_timeout_minutes: 120 }
+  same_step_failing: { issues: 3, within_hours: 24 }
+  label_mismatch: { checks: 3 }
+  orphan_lock: { minutes: 10 }
+  queue_stalled: { minutes: 15 }
+  restart_overdue: { hours: 2 }
+  develop_red: { failures: 2, within_hours: 24 }
+  slow_step: { factor: 3, times: 3, within_hours: 24 }
+```
+
+**What is never a finding:** a run that waits for a person (approval or questions), a usage limit
+that resets by itself, a sign-out (that is your turn, already shown), a story that waits for a
+dependency or a release, and a `factory:done` label. While the server waits to restart, the label
+and watcher-silent detectors are quiet.
+
+Notes:
+
+- Label data comes from the watchers' last checks. A `done` label is never a mismatch.
+- A run inside a sub-flow step is not checked for being stuck.
+- Same step keeps failing counts runs that ended failed, not steps that failed and were fixed in
+  the same run. A step that only handles another step's failure is not named.
+- Develop is red counts every test run after a merge, also several of one story, and looks back
+  `within_hours`.
+- A lock without owner is counted from the check that first saw it. A lock whose owner's `run.json`
+  cannot be read is counted the same way.
+- Slow step compares with the newest 500 succeeded runs that finished before the last
+  `within_hours`, rebuilt about once an hour.
+- The monitor keeps running while a new version waits for the server to restart.
+
+Findings are kept in `monitor-findings.json` in the data folder and survive a restart. Each has a
+detector, a fingerprint (the same problem gives the same one), a severity, one sentence, the
+evidence, when it was first and last seen and how often. A finding not seen for 24 hours becomes
+*gone* (kept 30 days; at most 500 findings are kept). A file that cannot be read is kept as
+`monitor-findings.json.broken`. If the monitor's own check fails, the Health line says so.
+Findings are not shown in the app yet.
+
+*Unexplained* is strict: no rule in the Foundry's failure rules matched (an AI's summary does not
+count). An ordinary failing command (`exit code 1`) is explained. The request-limit numbers come
+from `gh api rate_limit`, read at most once a minute for the server's own login and the bot token.
 
 ### How issue watchers use labels
 
@@ -523,7 +706,7 @@ in GitHub:
 | `factory:needs-info` | Waiting for you — questions: reply on the issue, or reply `/defaults` |
 | `factory:waiting-approval` | Waiting for you — approval: reply `/approve` or `/reject` on the issue |
 | `factory:done` | Done — nothing to do |
-| `factory:failed` | Failed; the comment on the issue starts with what you need to do, then says what happened and why, with the failing output. Remove the label to start over, or resume the run on its page to continue at the failed step. If the Foundry itself failed, the comment says so and names the fix |
+| `factory:failed` | Failed; the comment on the issue starts with what you need to do, then says what happened, why, the kind of problem, what was already tried and your options, with the failing output. Remove the label to start over, or resume the run on its page to continue at the failed step. If the Foundry itself failed, the comment says so and names the fix |
 
 The descriptions on GitHub say the same in short. They are set when the labels are created and
 refreshed at every server start. The trigger label and the review label (`vars.review_plan_label`)
@@ -556,7 +739,8 @@ watchers:
     exclude_labels: [wontfix]
     status_labels: {working: Factory_working, done: Factory_done, needs_info: Factory_needs_info, waiting: Factory_waiting, failed: Factory_ERROR}
     remove_on_done: [Factory_go]
-    max_per_tick: 2                # issues on different code areas are coded in parallel
+    max_per_tick: 2                # issues on different code areas are coded in parallel (bug stories are not counted)
+    priority_labels: [bug]         # stories with these labels go first (the default)
     dependency_done_labels: [Factory_done]
     vars:
       test_cmd: ./gradlew test
@@ -585,6 +769,7 @@ watchers:
 | `precheck_flow` | Run this flow once over all new labelled issues before any is started (`epic-questions` asks every owner decision up front) |
 | `pause_while_pr_open` | Start nothing while a PR from a branch with this prefix is open (for the older two-label pipeline) |
 | `comment_on_failure` | On by default: post the failure reason and output on the issue |
+| `status_comment` | On by default: keep one status comment on every issue the watcher follows (see "The status comment") |
 | `owner` | The e-mail of the account that owns this watcher's runs and may read and approve them. Empty: the first admin. Only an admin can set it, and it must be an account |
 
 **Coding agents run the build themselves.** In the issue flows the coding agent may run the
@@ -593,6 +778,45 @@ project's build and test commands (`./gradlew`, `mvn`, `npm`, `pytest`, `go test
 test fixtures. Pushing is never allowed. If the build needs environment settings (such as
 `JAVA_HOME`), put them in the `agent_env` variable: `KEY=value` pairs separated by `;` or new
 lines. `PATH`, tokens and the Foundry's own variables can't be set this way.
+
+### Bug stories go first
+
+A story with a bug label is repaired before the Foundry builds anything new. The watcher option `priority_labels` lists the labels (default `[bug]`, not case sensitive). Set `priority_labels: []` to turn it off for a watcher.
+
+- **What goes first:** in every check the watcher handles bug stories before all others: questions up front, starting, resuming and answering. When a slot is free, a waiting bug story gets it before any other story, also before stories that were queued earlier and stories of other repositories. Among bug stories the oldest issue goes first.
+- **No per-check limit:** bug stories are not counted against `max_per_tick`. Concurrency, the daily budget and `one_at_a_time` still limit what runs.
+- **Code areas:** when several stories wait for the same code area, a bug story gets it first when it becomes free. The other stories wait up to one check longer.
+- **What a bug story still waits for:** its own "Depends on" stories, the answers to its own questions, a daily budget or usage limit, and an open release pull request (`pause_while_pr_open`). It goes first after that.
+- **Nothing running is stopped.** A bug story only takes the next free slot.
+- **Taking the label off** ends it: the story goes back to its place in the queue.
+- **Where you see it:** a bug story has a "goes first" mark on the board and in the queue. Another story that waits for it says "waits: a bug story goes first".
+- **Runs started by hand** from the Runs page get no priority. Resume, approve and reject on the run page of a bug story do.
+
+### The status comment
+
+Every issue an issue watcher follows gets **one status comment** that says what happens next. It looks like this:
+
+```
+**Nothing needed from you** — it is being worked on.
+
+Nothing to do, it continues by itself.
+
+- **Where:** this issue
+
+_This comment is kept up to date by the Spaghetti Code Foundry. It is edited, never posted again. Other comments are history._
+```
+
+- **Edited, never a second one.** The Foundry changes the text of the same comment when the state changes. An edit sends no notification. Other comments (questions, plans, approvals, failures) are history and stay as they are.
+- **When it is your move**, the first line starts with **What you need to do**. Otherwise it says **Nothing needed from you** and why.
+- **Done.** Once the work is finished it says it is done. If the work waits for a scheduled release (a schedule watcher with `at`), it says it waits for that release, and says it is done after the release ran.
+- **Closed while the run works.** It asks you to cancel the run if the work is no longer wanted. When the run ends it says it is done.
+- **No longer followed.** If the issue is closed or loses the watcher's label, the last text says the Foundry no longer follows it (or that it is done, if its run succeeded). A closed-issue check that fails or is cut short changes nothing.
+- **Two watchers on one issue** (for example a plan and a code watcher) share one comment. It shows the record of the one that is working, else the one that waits for you.
+- **Plain words.** The comment uses the wording for a reader of the issue: no raw error text, folder, setting or amount of money. Pages of the Foundry app are named, not linked; the details are in the app.
+- **Switch it off** with `status_comment: false` on the watcher. A switched-off, removed or disabled watcher leaves its comments as they are.
+- **Extra copies.** If the Foundry finds more than one status comment of its own account on an issue, it keeps the oldest and removes the others (at most 5 per check; the rest follows at the next check).
+- **A failure is only in the log.** If a comment cannot be written, the check goes on; the log has a line `status comment #<n>: …` and the next check tries again.
+- **After an upgrade**, the first check adds one new comment (one notification) to every open issue the watcher follows, at most 30 per check. The Foundry remembers which issues have one in `status-comments.json` in its data folder (issue numbers only), so it can write a last text when an issue leaves the list, also after a restart.
 
 ### The label pipeline: one label → plan + code → one pull request
 
@@ -669,7 +893,7 @@ The threshold is the `auto_split_max_risk` variable (default 50).
 | `Factory_working` | Working, or paused — usage limit: planning and coding are running or paused | Wait; follow it on the Runs page |
 | `Factory_waiting` | Waiting for you — risky plan / split: it waits for your decision | `/approve` or `/reject` + feedback on the issue |
 | `Factory_done` | Done: implemented, tested, reviewed and merged into `develop` (gitflow) or in the rolling pull request | Nothing — merge the release pull request (or the rolling one) when you like |
-| `Factory_ERROR` | It failed; the comment on the issue starts with what you need to do, then says what happened and why, with the failing output | Fix the cause if needed, then remove the label to start over, or resume the run on its page to continue at the failed step. If the Foundry itself failed, the comment says so and names the fix |
+| `Factory_ERROR` | It failed; the comment on the issue starts with what you need to do, then says what happened, why, the kind of problem, what was already tried and your options, with the failing output | Fix the cause if needed, then remove the label to start over, or resume the run on its page to continue at the failed step. If the Foundry itself failed, the comment says so and names the fix |
 
 Issues with an excluded label (e.g. `geni`) are never picked up, whatever other labels they have.
 
@@ -727,6 +951,9 @@ The label-driven flows do the same:
 `**What you need to do:** Add the code label to start coding.`
 - The result of `issue-code-daily`, `issue-deliver` and `issue-gitflow` starts with
 `**Nothing needed from you** — it goes to main with the release pull request.`
+- The result of a hotfix in `issue-gitflow` starts with
+`**Nothing needed from you** — the fix is on main and in develop.` or, when `develop` could not
+take the fix yet, with `**What you need to do:** Merge main into develop, because the fix is not there yet.`
 - The reply of `pr-feedback` after review comments starts with
 `**What you need to do:** Look at the changes.`
 - The daily report (`daily-pr`) and the release check (`release-daily`) start with
@@ -795,7 +1022,39 @@ flowchart LR
   issues — a draft while the checks fail. **You merge it once a day.**
 - `develop` is created from `main` the first time, and kept up to date with `main` (for example
   after a hotfix) before new work starts. `develop` must not be in *Protected branches*
-  (Settings), since the Foundry pushes to it; `main` stays protected.
+  (Settings), since the Foundry pushes to it; `main` stays protected (the one exception is the
+  hotfix path below, and only when you switch it on).
+- **Hotfix — bug stories go to `main` at once.** An issue with a label in `hotfix_labels` (default
+  `bug`, any case) is built as a hotfix when an admin has switched on **Hotfixes** in Settings →
+  Safety (off by default). Without the setting, or in a changed copy of the flow, it is built as a
+  feature and the report says why in one line. The plan, plan review, size and risk checks, code
+  areas, build, tests, reviews and docs are the same. What differs:
+  - The branch is `hotfix/<issue>-<title>` (`hotfix_prefix`), made from the `main` commit the
+    tests passed on before the change.
+  - After the reviews the Foundry merges it into `main` (no fast-forward), **runs the tests on the
+    merge result and pushes `main` only when they pass.** If `main` moved meanwhile, it merges and
+    tests again. The issue is closed as soon as the fix is on `main`; it does not wait for the
+    release. No pull request, no tag.
+  - Then `main` goes into `develop` (conflicts are resolved by an agent and tested, like for a
+    feature), so the release has no conflicts from hotfixes. The merged `hotfix/…` branch is
+    deleted (`delete_merged_branches: no` keeps it; a branch that got new commits after the
+    merge is kept).
+  - A hotfix is never split by itself, and a plan above the risk threshold still waits for you.
+  - The comment on the issue says: fixed on `main` (with the commit), merged into `develop`, and
+    whether the running Foundry already has the fix (only when the issue belongs to the Foundry's
+    own repository).
+
+```mermaid
+flowchart LR
+    M[main] --> H["hotfix/42-…"]
+    H -->|"tests + reviews pass →<br/>merge, test, push"| M
+    M -->|"merge, test, push"| D[develop]
+```
+
+  If `develop` cannot take the fix (conflicts the agent cannot resolve, or red tests), the fix is
+  still on `main`; the comment starts with **Merge main into develop** and says why. The Foundry
+  tries again when it starts the next story (without conflicts only). To be sure, merge `main`
+  into `develop` yourself — until then the daily release pull request can show conflicts.
 - **Size limit:** a plan over 15 files or about 800 lines of production code (tests and docs
   don't count) is split into smaller issues instead — automatically when the split risk is low
   (`max_files`, `max_code_lines`).
@@ -845,7 +1104,13 @@ it; paused runs continue the next day. Flows can also cap one run (`limits.max_c
 - **Protected branches** — pushes to these branches (default `main`, `master`, `develop`,
   `release/*`) are refused during runs, whoever tries. Claude Code is not allowed to run
   `git push` at all, and Codex's sandbox has no network access by default — pushing is a flow
-  step.
+  step. This stops ordinary pushes from steps and agents; for a hard block use branch protection
+  on GitHub (and allow the Foundry's account when hotfixes are on).
+- **Hotfixes** — off by default. When on, bug stories (label from `hotfix_labels`) of the
+  built-in `issue-gitflow` are merged into `main` and `develop` without a person, after tests and
+  reviews. This is the one exception to **Protected branches**: only the merge-to-`main` step of
+  the unchanged built-in flow may push `main`; flows you write never can. Stored as
+  `hotfix_to_main` in `config.yaml` (an older build rejects that key).
 - **Secret scan** — every push is checked for API keys, tokens, private keys, connection
   strings and `.env`/key files in the new commits. Findings are shown masked and the push is
   refused. A private-key header only counts when key data follows it, so code (or a test) that
@@ -900,7 +1165,8 @@ or with `scf clean` (branches in your repositories are kept).
 
 **Accounts.** `scf user` keeps accounts in `users.json` in the data folder. Each account has an id,
 name, e-mail, role (`admin` or `user`), status (`active` or `blocked`), password hash, created time
-and last sign-in. Only you can read the file (mode `0600`). A data folder that does not exist yet is
+and last sign-in. An account can have no password yet: it has no hash, it cannot sign in, and it may
+have a `passwordLink` (`id`, the SHA-256 of the link token, and `expires`) instead. Only you can read the file (mode `0600`). A data folder that does not exist yet is
 created with mode `0700`. Passwords are never stored: each one is hashed with scrypt, a 16-byte
 random salt per account, N=32768, r=8, p=3 and a 64-byte key. The parameters are stored with each
 hash (`scrypt$N=32768,r=8,p=3$<salt>$<key>`). A hash in any other form makes the file invalid.
@@ -909,11 +1175,51 @@ Anyone who can run commands on the machine as you has admin rights: they can rea
 user. A file that cannot be read or is not valid is an error, never "no accounts".
 
 The last admin that is not blocked cannot be demoted, blocked or deleted: the command says "make
-another admin first", changes nothing and exits 1. Change a role with
+another admin first", changes nothing and exits 1. An admin that has no password yet does not count
+as another admin. Change a role with
 `scf user role <e-mail> admin|user`. `scf user list` shows the last sign-in of each account
 ("never" when there is none).
 
-**What a block or delete stops.** A blocked or deleted account cannot start anything new. The jobs it
+**The Users page.** Admins only: **Users** in the top bar (`#/users`). It lists name, e-mail, role,
+status (active, blocked, no password yet), last sign-in and the number of runs. Your own account is
+marked "(you)".
+
+- **Add user** asks for name, e-mail and role. Then the dialog shows the set-password link once. The
+  link works once, for 7 days, and you must send it to the user yourself. **Copy** needs HTTPS or
+  localhost; otherwise select the link in the field and copy it. Close the dialog too early and
+  the link is gone: use **New link**.
+- **New link** (only for an account without a password) shows a fresh link; the earlier one stops
+  working. For a blocked account the link works only after you unblock it.
+- **Edit** changes name, e-mail and role. After an e-mail change, set a watcher's `owner` again
+  (see above).
+- **Block** signs the user out, cancels their queued runs and lets running runs finish. **Also stop
+  all their work now** also cancels running runs and runs that wait for approval. The page then says
+  how many runs were cancelled.
+- **Unblock** lets the user sign in again. Cancelled runs are not restarted.
+- **Delete** asks first, names the account, wipes its stored credentials and keeps its runs
+  (they show `deleted user`). It cannot be undone.
+
+A refusal (the last admin, an e-mail that is taken, bad input) shows in the dialog and the list does
+not change. An error from Block or Delete can come after the change was made; close the dialog to
+see the list again. Blocking or deleting your own account signs you out, and the page reloads.
+
+**Managing accounts over the API.** Admins only (a user gets `403`). `GET /api/users` lists the
+accounts (`id`, `name`, `email`, `role`, `status`, `created`, `lastSignIn`, `runs`, `hasPassword`).
+`POST /api/users {"name": …, "email": …, "role": "admin"|"user"}` adds an account without a password
+and answers 201 with the account and its one-time token (400 for bad input, 409 for a taken e-mail).
+The token is shown once; the link is `<address>/#/set-password/<token>`.
+`PUT /api/users/<id>` changes `name`, `email` or `role`: leave a field out to keep it; `null` is not
+accepted (400). `POST /api/users/<id>/block {"stopWork": true}` blocks, signs the account out and
+answers with `cancelled: {queued, running, waiting}`. `POST /api/users/<id>/unblock` unblocks.
+`POST /api/users/<id>/link` gives a new token for an account without a password (409 if it has one).
+`DELETE /api/users/<id>` deletes as `scf user delete` does. An unknown id is 404, the last admin that
+is not blocked is 409. An admin may act on their own account within the last-admin rule; blocking
+yourself signs you out. If an old key stays in the Keychain, delete answers 500 and the account is
+gone; run `scf credential rotate-key`. A watcher's `owner` is an e-mail: after changing an account's
+e-mail, set the owner again, or its new runs go to the first admin.
+
+**What a block or delete stops.** Through the API the server acts at once and answers with the
+numbers; running runs are told to stop and show as cancelled a moment later. A blocked or deleted account cannot start anything new. The jobs it
 queued are cancelled (the server checks every 2 seconds; a block made while the server was down is
 handled at the next start, before any job starts). A job it queued never starts, also after a
 restart. Its running runs finish, and runs that wait for approval stay as they are. An admin can
@@ -925,18 +1231,21 @@ cancelled too. `scf user unblock` restarts nothing and removes a stop-work reque
 not handled yet. Watchers of the account keep working: disable the watcher or change its owner. The
 server log says how many runs it cancelled, with the account id only.
 
-**Audit log.** Every `scf user` action that changes something (`create`, `password`, `role`,
-`block`, `unblock`, `delete`) adds one line to `audit.jsonl` in the data folder (mode `0600`), for
+**Audit log.** Every `scf user` action and every users API call that changes something (`create`, `password`, `role`, `edit`,
+`block`, `unblock`, `delete`; also `link`, when a new set-password link replaces the old one) adds one line to `audit.jsonl` in the data folder (mode `0600`), for
 example `{"time":"2026-10-02T09:46:46.000Z","by":"cli","action":"role","userId":"<id>","oldRole":"user","newRole":"admin"}`.
+`by` is `cli` or the id of the admin. An `edit` line is a name or e-mail change. A password set through a link is a `password` line made by the account itself (`by` is its id).
 Only a role change has `oldRole` and `newRole`. A `block` line has `stopWork` (`true` when
 `--stop-work` was given). No line holds a name, e-mail, password, hash or
-token, and a failed action is not logged. If the file cannot be written, the command stops before
+token, and a failed action is not logged. A block or delete that stops with an error may already have
+signed the account out or removed its repositories and stored credentials; the server log names the
+problem, and the same action made again finishes the job and writes the line. If the file cannot be written, the command stops before
 it changes anything. In the rare case that the line cannot be added after the change (for example a
 full disk), the command says so and exits 1. The file is a record, not a protection: anyone who runs
 commands as you can edit it.
 
-**Sign-in and sessions.** The UI and its API need a signed-in account; only the sign-in, sign-out
-and first-admin calls and the static files are open. A session is kept on the server in
+**Sign-in and sessions.** The UI and its API need a signed-in account; only the sign-in, sign-out,
+first-admin and set-password calls and the static files are open. A session is kept on the server in
 `sessions.json` (mode `0600`): it holds only a SHA-256 of the session token, never the token. It
 lasts 7 days from sign-in and is not renewed. Sessions survive a restart and move with the data
 folder. The browser holds the token in the cookie `scf_session_<port>` (`HttpOnly`,
@@ -949,12 +1258,17 @@ The cookie gets the `Secure` flag when you reach the UI over HTTPS (through a pr
 - **Wrong passwords.** After 10 wrong tries for one e-mail in 15 minutes, sign-in answers 429
   for that e-mail until the 15 minutes are over. A server restart also clears the count. The
   answer for a wrong password and for an unknown e-mail is the same.
-- **Ending sessions.** Signing out, expiry, `scf user password` and `scf user block` end sessions.
+- **Set-password links.** Only a SHA-256 of the link token is stored. The token sits after `#` in
+  the address, so it is in no request line or log. `POST /api/set-password` shares the limits with
+  sign-in (60 tries per client in 15 minutes, 16 password checks at once), and using a link clears
+  the wrong-tries count of that e-mail.
+- **Ending sessions.** Signing out, expiry, `scf user password` and `scf user block` end sessions, and so do block and delete through the API.
   A run log that is open in the browser stops within 5 seconds. A role change does not end
   sessions; the new role counts from the next call.
 - **Problems with the files.** If `users.json` or `sessions.json` cannot be read or written, or
   another `scf` process holds the lock, sign-in shows "sign-in is not working; see the server
-  log". The log names the file and the kind of problem, never a password or a hash.
+  log". The log names the file and the kind of problem, never a password or a hash. The users API
+answers a plain 500 for such a problem and logs the same way (for example `users: audit.jsonl cannot-write`).
 
 #### Roles and permissions
 
@@ -962,9 +1276,9 @@ Every account has a role, `admin` or `user`. The server checks it on every call.
 not in the table below answers 404, also for an admin.
 
 - **An admin** may make every call and sees every page.
-- **A user** sees only the **Runs** page and may use the calls marked `yes` or `own runs` in the
+- **A user** sees only the **Refinement**, **Runs** and **My repositories** pages and may use the calls marked `yes` or `own runs` in the
   table. Every other call answers `403 {"error":"not allowed for your role"}`. Pages other than
-  Runs are not drawn; the address bar goes back to `#/runs`.
+  Refinement, Runs and My repositories are not drawn; the address bar goes back to `#/runs`.
 
 **What a user does not see.** The server cuts these from every answer a user gets, so the page
 cannot show them: costs, tokens, budgets and prices; the model, provider and agent; step output
@@ -995,9 +1309,49 @@ show as "n runs ahead of you", without ids.
 **Answering a run.** On a run that waits, a user can approve or reject it with a note
 (`POST /api/runs/<id>/approve` or `/reject` with `{"note": "…"}`). The note reaches the run.
 
+![My repositories](images/repos.png)
+
+**The My repositories page.** `#/repos` is in the top bar for every account. It lists your repositories
+with the URL, how the Foundry signs in (the authentication method) and the connection status, which is
+"Not tested yet" until the connection test exists. **Add repository** asks for the URL and the method:
+a GitHub fine-grained personal access token (give it these repository permissions, each "Read and write":
+Contents, Issues and Pull requests), or an HTTPS user name + token for other git hosts. The token is typed
+in a password field and is never shown again. **Change authentication** keeps the stored token if you leave
+the token empty; a new method needs a new token. **Remove** asks first and deletes the stored token too.
+Errors from the server show in the dialog in plain words. A failed removal shows above the list, with
+**Try again** when the server asks for it (an old key is still in the Keychain). A repository without a
+method shows "Needs authentication" for a user. An admin can also choose "The server's own access". The page
+has no per-repository settings. An admin sets them on the **Repositories** page.
+
+**The Repositories page (admin).** `#/all-repos` is the admin page **Repositories**; a user never gets it.
+It lists the repositories of all accounts with the owner (name and e-mail, and "blocked" for a blocked
+owner), the URL, the authentication method and the connection status ("Not tested yet" until the connection
+test exists). Three calls, all admin only: `GET /api/admin/repos`, `PUT /api/admin/repos/<id>/settings` and
+`POST /api/admin/repos/<id>/transfer {"email": …}`.
+
+- **Settings** per repository: the test command (one line, up to 500 characters), the docs to update (up to
+  50 paths, no leading `/`, `~` or `-`, no `..`), the protected branches (up to 50 patterns), and the names of
+  the main and the develop branch. Input is checked on the server: lengths, no control characters. Branch names
+  follow git's rules, are at most 200 characters, and may not be `@`. In a pattern `*` matches any text and
+  `?` matches one character; `[…]` is not allowed. `{}` clears the settings.
+- **The settings are only stored and shown.** Runs do not use them yet: the test command still comes from the
+  flow var `test_cmd` and the protected branches from `protected_branches` in `config.yaml`. They are never in
+  `GET /api/repos` and never shown on **My repositories**.
+- **Transfer** moves a repository to another account, chosen by e-mail (any case). It is refused, with a plain
+  message, when the e-mail is missing or not valid (400), no account has it (404), the account is blocked (409),
+  or it already has 50 repositories (400). Afterwards the repository is in the new owner's list and no longer in
+  the old one's, and its settings stay.
+- **Sign-in on transfer.** A personal token (`github-token`, `https-token`) is deleted and the method becomes
+  `none`. For a user that reads "Needs authentication"; for an admin it reads "The server's own access", like
+  every `none` repository of an admin. The new owner sets the sign-in again. Keeping a deploy key or a GitHub
+  App installation (they belong to the repository, not to a person) is prepared and starts to work when those
+  methods exist. The wipe cannot be undone; transfer back and type the token again.
+- Queued and running runs of the old owner are not stopped.
+
 **Repositories.** Every account has its own list of GitHub repositories, kept in `repos.json` in
 the data folder (mode `0600`). A repository is a record: `id`, `owner` (account id), `url`, `method`
-and `added`. It never holds a secret. These calls manage it:
+and `added`, and it may hold `settings`, which only an admin can read (`GET /api/repos` never has them).
+It never holds a secret. These calls manage it:
 
 - `GET /api/repos` lists your records.
 - `POST /api/repos {"url": …, "method": …, "username": …, "token": …}` adds one (201; 409 if you or
@@ -1055,7 +1409,7 @@ start a run can run commands as your Mac user (through the task and variables su
 account only to people you would give an admin account. To switch user runs off, change the rule
 `POST runs` to `no` in `src/server/permissions.ts`.
 
-**After an upgrade.** Existing accounts with the role `user` lose access to everything but Runs.
+**After an upgrade.** Existing accounts with the role `user` lose access to everything but Refinement, Runs and My repositories.
 Change a role with `scf user role <e-mail> admin|user`, or create an admin with
 `scf user create --admin` under another e-mail.
 
@@ -1103,17 +1457,34 @@ Change a role with `scf user role <e-mail> admin|user`, or create an admin with
 | `POST /api/your-turn/restore` | yes | no | restore dismissed items |
 | `GET /api/your-turn/detail` | yes | no | the questions, plan or split of an item |
 | `POST /api/your-turn/act` | yes | no | answer, approve, reject or retry an item, as a comment on the issue |
+| `GET /api/clarity` | yes | no | how long items waited for you, and what Your turn missed |
 | `GET /api/credentials` | yes | yes | your stored credentials |
 | `POST /api/credentials` | yes | yes | store a credential |
 | `DELETE /api/credentials/:id` | yes | yes | remove a credential |
+| `GET /api/users` | yes | no | list the accounts |
+| `POST /api/users` | yes | no | add an account without a password; the answer has its one-time set-password token |
+| `PUT /api/users/:id` | yes | no | change the name, e-mail or role of an account |
+| `POST /api/users/:id/block` | yes | no | block an account, end its sessions and cancel its queued jobs |
+| `POST /api/users/:id/unblock` | yes | no | unblock an account |
+| `POST /api/users/:id/link` | yes | no | a new set-password token for an account without a password |
+| `DELETE /api/users/:id` | yes | no | delete an account with its sessions, repositories, refinement sessions and stored credentials |
 | `GET /api/repos` | yes | yes | your repositories |
 | `POST /api/repos` | yes | yes | add a repository (a URL, and a token for it) |
 | `PUT /api/repos/:id/auth` | yes | yes | change the method, user name, token or address of your repository |
 | `DELETE /api/repos/:id` | yes | yes | remove your repository and its stored token |
 | `DELETE /api/repos/:owner/:name` | yes | yes | remove a GitHub repository by name (old form) |
+| `GET /api/admin/repos` | yes | no | the repositories of all accounts, with their settings |
+| `PUT /api/admin/repos/:id/settings` | yes | no | set the test command, docs, protected branches and branch names of a repository |
+| `POST /api/admin/repos/:id/transfer` | yes | no | move a repository to another account, by e-mail |
+| `GET /api/refinement` | yes | yes | your refinement sessions and the repositories a new one can use (an admin: the sessions of all accounts, with the owner) |
+| `POST /api/refinement` | yes | yes | start a refinement session on one of your GitHub repositories |
+| `GET /api/refinement/:id` | yes | yes | read your refinement session (an admin: any session) |
+| `PUT /api/refinement/:id` | yes | yes | rename your refinement session |
+| `POST /api/refinement/:id/drop` | yes | yes | drop your refinement session (an admin: any session); it is removed after 30 days |
+| `POST /api/refinement/:id/restore` | yes | yes | restore your dropped refinement session |
 
 **What comes later.** Runs that use a user's stored credentials or a repository's token, changing
-your own password in the UI, and pages for users (starting runs, repositories).
+your own password in the UI, a connection test for repositories, SSH deploy keys, the GitHub App, and pages for users (starting runs).
 
 ### Access from other computers
 
@@ -1190,7 +1561,7 @@ then cross the network unencrypted. Use it only on a network you trust.
 - The first admin can only be created on the Mac itself, not through the proxy.
 - Settings cannot be saved if the change would lock out the browser that saves it (its host name
   removed, or a `listen` value that does not cover the address it is connected to).
-- Sign-in is also limited per client address (60 tries in 15 minutes) and to 16 password checks at
+- Sign-in and set-password are also limited per client address (60 tries in 15 minutes) and to 16 password checks at
   the same time; an e-mail longer than 254 characters is a wrong sign-in.
 
 **Restart** after changing the address: stop and start `scf ui`, or run `scf service install` again.
@@ -1242,6 +1613,19 @@ them depends on how the agents are logged in:
 
 Budgets use these amounts either way, so they also protect your subscription limits.
 
+**The failure summary call.** When a run fails with what looks like a code problem, the Foundry
+makes one short call to a small model (default `haiku`) that reads the end of the failing output
+and writes the *why* sentence. It costs a few tenths of a cent to a few cents, is counted in the
+run and in the daily budget, and never gets more than what is left of them. The model has no
+tools and sees no GitHub token. Change the model or switch the call off in `config.yaml`:
+
+```yaml
+failure_summary: {enabled: true, model: haiku}   # model: ollama:<model> for a local one
+```
+
+With the call off, or on Codex-only installs, the card and the comment use the rules text. To
+turn it off for one process, set `SCF_NO_FAILURE_MODEL=1`.
+
 **Fixed-price subscriptions:** turn off **Enforce cost limits** in Settings (`cost_limits: false`).
 Costs are still recorded and shown everywhere, but nothing is ever stopped because of money — no
 run limit, no step limit, no daily budget. The usage limits that Claude and Codex report
@@ -1255,7 +1639,16 @@ Spend today and over 30 days, success rate, **Needs a human** (the number of run
 move is yours — the same as **Needs you** on the Runs page), the **Waiting** card (every
 labelled issue that isn't being worked on: who has the next move, what to do, why, and a link;
 lines for you come first), cost per day, results per flow and per repository,
-the steps where runs fail most, and eval results. A server that waits to restart shows in the
+the steps where runs fail most, and eval results.
+
+**Your turn in numbers** shows how long items waited for you (last 30 days) and whether anything waited for you without being on Your turn:
+
+- *Half waited X or less* and *the longest* — measured to the minute, and only while the server runs. A wait ends when you act in the app (the item moves to "Done — continuing") or the item leaves the page.
+- *Dismissed items are not counted* — they are counted apart.
+- *Waiting for you without being on Your turn* — 0 is normal. A higher number lists what was missing; "still missing" means it is missing now.
+- The data is in `clarity.json` in the data folder and never leaves the computer.
+
+A server that waits to restart shows in the
 [health line](#the-health-line), not on the Dashboard.
 
 ### Evals
@@ -1304,9 +1697,9 @@ The command is `scf`. `factory` still works as an alias and prints a short note.
 | `scf eval <suite.yaml> [--flows a,b] [--models …]` | Run an eval suite |
 | `scf clean [--older-than 7] [--purge] [--dry-run]` | Remove old run workspaces |
 | `scf user create [--admin] [--name n] [--email e]` | Create an account. The first one needs `--admin`. Name and e-mail are asked for on a terminal |
-| `scf user list` | List accounts with the last sign-in (never shows passwords or hashes) |
+| `scf user list` | List accounts with the last sign-in; `no password yet` for an account that has not set one (never shows passwords, hashes or links) |
 | `scf user role <e-mail> admin\|user` | Change the role of an account (not the last admin); counts from the next call |
-| `scf user password <e-mail>` | Set a new password and sign the account out |
+| `scf user password <e-mail>` | Set a new password and sign the account out; also for an account without a password (its link ends) |
 | `scf user block <e-mail> [--stop-work]` / `scf user unblock <e-mail>` | Block (and sign out) or unblock an account (not the last admin). Queued jobs are cancelled; `--stop-work` also cancels running and waiting runs |
 | `scf user delete <e-mail>` | Delete an account, its sessions and its stored credentials (not the last admin) |
 | `scf credential rotate-key` | Re-encrypt all stored credentials under a new key |
@@ -1328,6 +1721,7 @@ Both names work; if both are set, `SCF_…` wins.
 | `SCF_NO_OPEN` | `FACTORY_NO_OPEN` | Set to `1` to not open a browser |
 | `SCF_NO_SUPERVISE` | `FACTORY_NO_SUPERVISE` | Set to `1` to not restart the server on a new build |
 | `SCF_NO_NOTIFY` | `FACTORY_NO_NOTIFY` | Set to `1` to turn notifications off |
+| `SCF_NO_FAILURE_MODEL` | `FACTORY_NO_FAILURE_MODEL` | Set to `1` to skip the model call that writes the reason of a failed run |
 | `SCF_LOCK_DIR` | `FACTORY_LOCK_DIR` | Where lock files are kept |
 
 Flows are looked up in `<repo>/.claude-factory/flows/`, then `~/.spaghetti-code-foundry/flows/`, then the
@@ -1390,7 +1784,7 @@ start over. When the fix is a change to the flow (a larger budget), only a new r
 resumed run keeps the flow it started with. A change in Settings, such as the cost limits, also
 counts for a resume.
 
-The raw text is still there, as a detail: under **Details** on the run page and inside each
+The raw text is still there, as a detail: under **Raw details** in the failure card on the run page, and inside each
 failed step of the **Steps & transcripts** list, under **Error details** on the watcher card,
 and inside the collapsed **Details** of the failure comment on the issue. The settings behind
 the messages are `max_visits` (attempts), `limits.max_cost_usd` (run budget), `max_budget_usd`
@@ -1427,7 +1821,9 @@ branch); the run then says the Foundry failed. A secret-scan finding is in the c
 output lists the file, line and kind of secret.
 
 **Forgot the password.** Run `scf user password <e-mail>` on the machine. If no admin is left, run
-`scf user create --admin`.
+`scf user create --admin`. A set-password link that ended is replaced the same way. If the page said
+"sign-in is not working" after you sent the form, first try to sign in with the password you chose:
+it may have been set already.
 
 **The credential store is not working.** Run `scf credential check`. Unlock the login keychain if
 it fails. If the key is gone (for example the data folder was copied from another Mac), delete
@@ -1450,7 +1846,7 @@ learnings, queue, locks and evals. The copy is made next to the new folder and r
 in one step, so you never see a half-done move. Paths that point into the old folder (in run state,
 lock files, `queue.json` and `config.yaml`) are rewritten. If `config.yaml` can't be rewritten
 safely, it is kept as it was and a warning lists the values that still point to the old folder.
-`users.json`, `sessions.json` and `credentials.json` are copied unchanged, with their mode.
+`users.json`, `sessions.json`, `credentials.json` and `refinements.json` are copied unchanged, with their mode.
 
 **The backup.** `~/.claude-factory` is never changed or deleted, except for a note file
 `MOVED-TO-SPAGHETTI-CODE-FOUNDRY.txt`. Nothing there is used anymore: your settings now live in
@@ -1489,3 +1885,25 @@ the folder, set `SCF_HOME` to the folder you want, or delete the note file to co
 address. In an existing clone, run
 `git remote set-url origin https://github.com/MeloMar-IT/spaghetti-code-foundry.git`.
 The folder of your clone can keep its name.
+
+---
+
+## 12. Refinement
+
+**Refinement** is where a rough idea grows into a story before it goes to the backlog. For now the page keeps the idea, its state and a log. Nothing on this page calls an AI agent or GitHub yet.
+
+**Start a session.** Click **New session**. Choose a repository, write your idea in your own words (required, up to 10,000 characters) and, if you like, a title (up to 120 characters). When the title is empty, the first line of the idea is used. Only GitHub repositories from **My repositories** are offered. If you have none, the dialog links to that page.
+
+**States.** A session is *exploring*, *drafting*, *ready*, *published* or *dropped*. It starts as *exploring*. The state changes only by what you do. For now only **Drop** and **Restore** change it; later steps add the others.
+
+**The session page.** It shows the idea, the story drafts ("No story drafts yet." for now) and the log: who did what, and when. The list shows title, repository, state and last change; an admin also sees the owner.
+
+**Rename, drop, restore.** **Rename** changes the title. **Drop** (after a confirmation) takes the session out of **Open sessions**. Find it again under **Dropped**: **Restore** brings it back in the state it had. A dropped session is removed after 30 days.
+
+**Who may do what.** You see and change only your own sessions. An admin sees all sessions and who owns them, and may drop one, but cannot rename or restore it. In the log, you see an admin's action as "an administrator".
+
+**When something goes away.** If you remove the repository from My repositories, the session stays readable; the page says so, and it works again when you add the repository back. If an admin deletes your account, your refinement sessions are deleted with it.
+
+**Limits.** 200 sessions per account; dropped sessions count until they are removed. 1,000 log entries per session; after that the session can only be dropped. Nothing is removed to make room.
+
+**Where it is kept.** In `refinements.json` in the data folder (mode 0600). It survives a restart and is copied unchanged when the data folder moves. If the file cannot be read, the calls answer "the refinement sessions are not working; see the server log", and an account cannot be deleted until the file is repaired.

@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { StoreError, withAuthLock } from "../src/auth/store.js";
 import { KEYCHAIN_SERVICE, KeyError } from "../src/credentials/keychain.js";
 import {
-  CredentialError, addCredential, addCredentialLocked, checkKeychain, credentialsPath, listCredentials, readSecret, removeCredential, removeCredentialsLocked, rotateKey,
+  CredentialError, addCredential, addCredentialLocked, checkKeychain, credentialsPath, listCredentials, moveCredentialLocked, readSecret, removeCredential, removeCredentialsLocked, rotateKey,
 } from "../src/credentials/store.js";
 import { fakeKey, fakeKeychain, fakeToken, type FakeKeychain } from "./helpers/keychain.js";
 
@@ -464,5 +464,83 @@ describe("addCredentialLocked and the reserved names", () => {
     const c = locked("repo:x");
     expect(listCredentials(A).map((x) => x.name)).toEqual(["repo:x"]);
     expect(removeCredential(A, c.id).removed).toBe(1);
+  });
+});
+
+describe("moveCredentialLocked", () => {
+  const put = (userId: string, name: string, secret = fakeToken()) => withAuthLock(() => addCredentialLocked({ id: randomUUID(), userId, type: "token", name, secret }));
+  const move = (from: string, to: string, id: string, name: string) => withAuthLock(() => moveCredentialLocked(from, to, id, name));
+  const raw = () => readFileSync(credentialsPath(), "utf8");
+
+  it("throws outside the lock", () => {
+    expect(() => moveCredentialLocked(A, B, randomUUID(), "repo:x")).toThrow("inside withAuthLock");
+  });
+
+  it("moves: the new owner reads the secret, the old one does not; the metadata stays, the ciphertext changes", () => {
+    const c = put(A, "repo:x", "secret-one-123");
+    const other = put(A, "other", "secret-two-456");
+    const before = fileJson().credentials.find((x) => x.id === c.id)!;
+    const keyId = fileJson().keyId;
+    expect(move(A, B, c.id, "repo:x")).toBe("moved");
+    expect(readSecret(B, c.id)).toBe("secret-one-123");
+    expect(code(() => readSecret(A, c.id))).toBe("not-found");
+    expect(readSecret(A, other.id)).toBe("secret-two-456");
+    const after = fileJson().credentials.find((x) => x.id === c.id)!;
+    for (const k of ["id", "name", "type", "created", "fingerprint"]) expect(after[k]).toBe(before[k]);
+    expect(after.userId).toBe(B);
+    expect(after.iv).not.toBe(before.iv);
+    expect(fileJson().keyId).toBe(keyId);
+  });
+
+  it("keeps lastUsed", () => {
+    const c = put(A, "repo:x");
+    readSecret(A, c.id);
+    const used = fileJson().credentials[0]!.lastUsed;
+    expect(used).toBeTruthy();
+    move(A, B, c.id, "repo:x");
+    expect(fileJson().credentials[0]!.lastUsed).toBe(used);
+  });
+
+  it("is bound to the new owner: setting userId back gives wrong-key", () => {
+    const c = put(A, "repo:x");
+    move(A, B, c.id, "repo:x");
+    const f = fileJson();
+    f.credentials[0]!.userId = A;
+    write(f);
+    expect(() => readSecret(A, c.id)).toThrow(KeyError);
+  });
+
+  it("answers already for a repeat and leaves the file alone", () => {
+    const c = put(A, "repo:x");
+    move(A, B, c.id, "repo:x");
+    const text = raw();
+    expect(move(A, B, c.id, "repo:x")).toBe("already");
+    expect(raw()).toBe(text);
+  });
+
+  it("answers missing for an unknown id, a wrong name and a third account's credential", () => {
+    const c = put(A, "repo:x");
+    const text = raw();
+    expect(move(A, B, randomUUID(), "repo:x")).toBe("missing");
+    expect(move(A, B, c.id, "repo:y")).toBe("missing");
+    expect(move(randomUUID(), B, c.id, "repo:x")).toBe("missing");
+    expect(raw()).toBe(text);
+  });
+
+  it("refuses a name the new owner has already", () => {
+    const c = put(A, "repo:x");
+    put(B, "repo:x");
+    const text = raw();
+    expect(code(() => move(A, B, c.id, "repo:x"))).toBe("duplicate");
+    expect(raw()).toBe(text);
+  });
+
+  it("throws on a Keychain failure and leaves the file unchanged", () => {
+    const c = put(A, "repo:x");
+    const text = raw();
+    kc.fail("find");
+    expect(() => move(A, B, c.id, "repo:x")).toThrow(KeyError);
+    kc.fail();
+    expect(raw()).toBe(text);
   });
 });

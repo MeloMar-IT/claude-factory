@@ -30,7 +30,7 @@ export function boardFor(ctx: ApiContext, now = new Date()): Board {
     const id = i.next.runId;
     sources.push({
       next: i.next, run: id ? byRun.get(id) ?? ctx.scheduler.get(id) : undefined,
-      runId: i.runId, since: i.since, rank: i.rank, watcher: i.watcher,
+      runId: i.runId, since: i.since, rank: i.rank, watcher: i.watcher, goesFirst: i.priority,
     });
   }
 
@@ -68,7 +68,7 @@ export function boardFor(ctx: ApiContext, now = new Date()): Board {
     const at = covered.get(key);
     if (at !== undefined) {
       const old = sources[at]!;
-      sources[at] = { next: { ...next, title: old.next.title || ticketTitle(run) || next.title }, run, runId: run.runId, since: runSince(run), rank: 0, watcher: old.watcher };
+      sources[at] = { next: { ...next, title: old.next.title || ticketTitle(run) || next.title }, run, runId: run.runId, since: runSince(run), rank: 0, watcher: old.watcher, goesFirst: old.goesFirst };
       continue;
     }
     covered.set(key, sources.length);
@@ -82,10 +82,10 @@ export function boardFor(ctx: ApiContext, now = new Date()): Board {
     const key = `${p.githubRepo}#${n}`;
     if (ctx.scheduler.get(p.runId)) continue;
     const at = covered.get(key);
-    if (at === undefined) { covered.set(key, sources.length); sources.push({ next: jobNext(p), rank: 3 }); continue; }
+    if (at === undefined) { covered.set(key, sources.length); sources.push({ next: jobNext(p), rank: 3, goesFirst: p.priority }); continue; }
     if (takesOver(key, p.runId)) {
       const next = jobNext(p);
-      sources[at] = { next: { ...next, title: sources[at]!.next.title || next.title }, rank: 0, watcher: sources[at]!.watcher };
+      sources[at] = { next: { ...next, title: sources[at]!.next.title || next.title }, rank: 0, watcher: sources[at]!.watcher, goesFirst: sources[at]!.goesFirst };
     }
   }
 

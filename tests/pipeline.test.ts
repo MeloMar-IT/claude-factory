@@ -200,8 +200,11 @@ describe("label-driven issue pipeline", () => {
     expect(log).toContain("to start over, or resume the run");
     const e = explainError(run.reason);
     const rec = nextStep("failed", {}, { watched: true, failedLabel: "Factory_ERROR", reason: run.reason });
-    expect(log).toContain(`- **What happened:** ${e.what}.`);
+    expect(e.what).toContain("fix_tests");
+    expect(log).toContain("- **What happened:** The step run_tests kept failing");
     expect(log).toContain("- **Why:** ");
+    expect(log).toContain("- **Already tried:** 3 fix attempts");
+    expect(log).toContain("**Your options**");
     const body = gh.comments().find((c) => c.body.includes("could not finish this issue"))!.body;
     expect(first(body)).toBe(firstLine(rec));
     expect(body).not.toContain("**What you can do:**");

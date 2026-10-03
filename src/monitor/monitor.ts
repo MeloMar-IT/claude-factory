@@ -1,0 +1,310 @@
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { isAbsolute, join } from "node:path";
+import type { MonitorConfig, WatcherConfig } from "../config.js";
+import { pidAlive, runFile, type RunBrief, type RunSummary } from "../engine/state.js";
+import { errorLine, GITHUB_LIMIT_RE } from "../errors.js";
+import { buildHistory, type DurationHistory } from "../estimate.js";
+import { FACTORY_HOME } from "../flow/load.js";
+import type { RateReading } from "../github.js";
+import { parseInterval, type TrackedIssue, type WatcherStatus } from "../queue/watcher.js";
+import type { Scheduler } from "../queue/scheduler.js";
+import { runDetectors, type ActiveRun, type AreaLock, type Detector, type DetectorInput, type LogLine } from "./detectors.js";
+import { findingsFile, loadFindings, mergeFindings, saveFindings } from "./findings.js";
+import { ALL_DETECTORS } from "./work-detectors.js";
+
+export interface MonitorDeps {
+  scheduler: Pick<Scheduler, "briefs" | "get" | "queue"> & Partial<Pick<Scheduler, "briefsAsync" | "lastStart">>;
+  /** The other watchers with their status. */
+  watchers: () => { cfg: WatcherConfig; status: WatcherStatus; issues?: TrackedIssue[] }[];
+  /** Set while the server waits to restart. */
+  restart?: () => DetectorInput["restart"];
+  thresholds: () => MonitorConfig;
+  serverLog?: () => LogLine[];
+  rateLimit?: () => RateReading | undefined;
+  /** Runs before the detectors of every check (the manager reads the request limit here). */
+  beforeCheck?: () => Promise<void>;
+  log: (msg: string) => void;
+  /** For tests. */
+  file?: string;
+  detectors?: Detector[];
+  now?: () => Date;
+}
+
+/** At most this many runs are loaded in one check. */
+export const MAX_RUNS = 1000;
+const YIELD_EVERY = 25;
+const HOUR = 3_600_000;
+/** How many succeeded runs make the usual step times (as many as the estimates read). */
+export const USUAL_RUNS = 500;
+const MAX_LOCKS = 500;
+
+/** The newest time anything was written to the logs of a run (live.log and the step logs). Undefined when there is none. */
+export function lastLogWrite(runDir: string): string | undefined {
+  let newest = 0;
+  const look = (file: string) => {
+    try {
+      newest = Math.max(newest, statSync(file).mtimeMs);
+    } catch {
+      // a missing log is no write
+    }
+  };
+  look(join(runDir, "live.log"));
+  try {
+    for (const f of readdirSync(join(runDir, "logs"))) look(join(runDir, "logs", f));
+  } catch {
+    // no logs folder yet
+  }
+  return newest ? new Date(Math.round(newest)).toISOString() : undefined;
+}
+
+/** Where the lock tool keeps its locks (a folder per repository). */
+export const areaLockDir = (): string => process.env.SCF_LOCK_DIR || process.env.FACTORY_LOCK_DIR || join(process.env.FACTORY_HOME ?? FACTORY_HOME, "locks");
+
+export interface LockFile { key: string; repo: string; runId: string; runDir: string; areas: string[]; at: string }
+
+/** The lock files of the lock tool. Skips unreadable files and entries without a string runId, an absolute runDir, areas or at. At most 500. Never throws. */
+export function readAreaLocks(dir: string = areaLockDir()): LockFile[] {
+  const out: LockFile[] = [];
+  try {
+    for (const repo of readdirSync(dir)) {
+      let files: string[];
+      try {
+        files = readdirSync(join(dir, repo)).filter((f) => f.endsWith(".json"));
+      } catch {
+        continue; // a file, not a repository folder
+      }
+      for (const f of files) {
+        if (out.length >= MAX_LOCKS) return out;
+        try {
+          const l = JSON.parse(readFileSync(join(dir, repo, f), "utf8")) as Record<string, unknown>;
+          if (typeof l.runId !== "string" || typeof l.runDir !== "string" || !isAbsolute(l.runDir) || typeof l.at !== "string") continue;
+          if (!Array.isArray(l.areas) || !l.areas.every((a) => typeof a === "string")) continue;
+          out.push({ key: `${repo}/${f}`, repo, runId: l.runId, runDir: l.runDir, areas: l.areas as string[], at: l.at });
+        } catch {
+          // half-written or broken: left out
+        }
+      }
+    }
+  } catch {
+    // no lock folder: no locks
+  }
+  return out;
+}
+
+/** The newest log lines. Lines that match `keep` have their own short list, so a busy log cannot push them out. */
+export function logRing(max = 2000, keep: RegExp = GITHUB_LIMIT_RE, maxKept = 100): { push(text: string): void; lines(): LogLine[] } {
+  type Entry = LogLine & { seq: number };
+  const recent: Entry[] = [];
+  const kept: Entry[] = [];
+  let seq = 0;
+  const trim = (list: Entry[], n: number) => list.length > n * 2 && list.splice(0, list.length - n);
+  return {
+    push(text) {
+      const e = { seq: seq++, at: new Date().toISOString(), text };
+      recent.push(e);
+      trim(recent, max);
+      if (keep.test(text)) {
+        kept.push(e);
+        trim(kept, maxKept);
+      }
+    },
+    lines() {
+      const all = new Map<number, Entry>();
+      for (const e of recent.slice(-max)) all.set(e.seq, e);
+      for (const e of kept.slice(-maxKept)) all.set(e.seq, e);
+      return [...all.values()].sort((a, b) => a.seq - b.seq).map(({ at, text }) => ({ at, text }));
+    },
+  };
+}
+
+/** Checks the Foundry itself on a schedule and records what is wrong. It only writes its findings file. */
+export class Monitor {
+  status: WatcherStatus;
+  private timer?: NodeJS.Timeout;
+  private stopped = false;
+  private inFlight?: Promise<void>;
+  private prevEnd?: number;
+  private manual = false;
+  /** Area lock key → when the monitor first saw it without a running owner. */
+  private orphans = new Map<string, string>();
+  /** When the server last woke up from a sleep (as far as the monitor saw). */
+  private wokeAt?: string;
+  private usualCache?: { at: number; hours: number; history: DurationHistory };
+
+  constructor(public cfg: WatcherConfig, private d: MonitorDeps) {
+    this.status = { id: cfg.id, lastActions: [] };
+  }
+
+  private now() {
+    return this.d.now?.() ?? new Date();
+  }
+
+  start() {
+    this.stopped = false;
+    this.status.startedAt = new Date().toISOString();
+    const loop = async () => {
+      await this.tick();
+      if (this.stopped) return;
+      let every: number;
+      try {
+        every = parseInterval(this.cfg.every);
+      } catch {
+        return; // tick() reported the invalid interval as the monitor's error
+      }
+      this.status.nextTick = new Date(Date.now() + every).toISOString();
+      this.timer = setTimeout(loop, every);
+      this.timer.unref?.();
+    };
+    void loop();
+  }
+
+  stop() {
+    this.stopped = true;
+    clearTimeout(this.timer);
+    this.status.nextTick = undefined;
+  }
+
+  private act(msg: string) {
+    this.d.log(`[${this.cfg.id}] ${msg}`);
+    this.status.lastActions = [`${new Date().toLocaleTimeString()} ${msg}`, ...this.status.lastActions].slice(0, 20);
+  }
+
+  /** One check. Never throws; a check in flight is shared. A manual check never counts as "after a sleep". */
+  tick(manual = false): Promise<void> {
+    if (manual) this.manual = true;
+    return (this.inFlight ??= this.check().finally(() => (this.inFlight = undefined)));
+  }
+
+  private async check(): Promise<void> {
+    try {
+      await this.run();
+      this.status.lastError = undefined;
+      this.status.errorSince = undefined;
+      this.status.errorCount = undefined;
+      this.status.lastOk = new Date().toISOString();
+    } catch (e) {
+      this.status.lastError = errorLine((e as Error).message);
+      this.status.errorSince ??= new Date().toISOString();
+      this.status.errorCount = (this.status.errorCount ?? 0) + 1;
+      this.d.log(`[${this.cfg.id}] ! ${this.status.lastError}`);
+    } finally {
+      this.status.lastTick = new Date().toISOString();
+      this.prevEnd = this.now().getTime();
+      this.manual = false;
+    }
+  }
+
+  private async run() {
+    const start = this.now();
+    const every = parseInterval(this.cfg.every);
+    const asleep = !this.manual && this.prevEnd !== undefined && start.getTime() - this.prevEnd > every + 60_000;
+    // Kept for the later checks too: the detectors that skip the check after a sleep must not judge old times right after it.
+    if (asleep) this.wokeAt = start.toISOString();
+    const config = this.d.thresholds();
+    await this.d.beforeCheck?.().catch(() => {}); // e.g. read GitHub's request limit, so the detectors see it
+    const briefs = this.d.scheduler.briefsAsync ? await this.d.scheduler.briefsAsync() : this.d.scheduler.briefs();
+    const runs = await this.collect(briefs, start, config);
+    const queue = this.d.scheduler.queue();
+    const active: ActiveRun[] = queue.active.flatMap((a) => {
+      try {
+        const run = this.d.scheduler.get(a.runId);
+        return run ? [{ run, lastWrite: lastLogWrite(run.runDir) }] : [];
+      } catch {
+        return []; // a run.json that cannot be read is left out
+      }
+    });
+    const history = await this.usual(briefs, start, config);
+    const found = runDetectors(this.d.detectors ?? ALL_DETECTORS, {
+      now: start, asleep, config, runs, watchers: this.d.watchers(), log: this.d.serverLog?.() ?? [], rate: this.d.rateLimit?.(), queue, monitorId: this.cfg.id,
+      ...(this.wokeAt ? { wokeAt: this.wokeAt } : {}),
+      active, areaLocks: this.areaLocks(start, queue.active.map((a) => a.runId)), lastStart: this.d.scheduler.lastStart?.(), restart: this.d.restart?.(), history,
+    });
+    const stored = loadFindings(this.d.file ?? findingsFile());
+    if (stored.broken) this.act("the findings file could not be read; it was kept as monitor-findings.json.broken");
+    const merged = mergeFindings(stored.findings, found, start);
+    saveFindings(merged.findings, this.d.file ?? findingsFile());
+    for (const f of merged.fresh) this.act(`new finding (${f.severity}) ${f.detector}: ${f.summary}`);
+    for (const f of merged.gone) this.act(`finding gone: ${f.detector}: ${f.summary}`);
+    if (merged.dropped) this.act(`${merged.dropped} findings were dropped to keep the list at its limit`);
+  }
+
+  /**
+   * The area locks the lock tool honours, as the tool judges them: its owner's run.json says "running". A lock whose owner
+   * is not alive is an orphan; the monitor counts its age from the check that first saw it (a file time would be the
+   * last write of a long step, so every server restart would look like a dead owner).
+   */
+  private areaLocks(now: Date, activeIds: string[]): AreaLock[] {
+    const seen = new Map<string, string>();
+    const out: AreaLock[] = [];
+    for (const lock of readAreaLocks()) {
+      let owner: { status?: unknown; pid?: unknown };
+      try {
+        owner = JSON.parse(readFileSync(runFile(lock.runDir), "utf8")) as typeof owner;
+      } catch (e) {
+        // Missing: the tool ignores the lock. Cannot be parsed: the tool takes the owner as alive (it may be written right
+        // now), so the clock starts; only a file that stays broken for the whole interval is reported.
+        if ((e as NodeJS.ErrnoException).code === "ENOENT") continue;
+        const orphanSince = this.orphans.get(lock.key) ?? now.toISOString();
+        seen.set(lock.key, orphanSince);
+        out.push({ repo: lock.repo, areas: lock.areas, at: lock.at, orphanSince });
+        continue;
+      }
+      if (owner?.status !== "running") continue;
+      const pid = owner.pid;
+      if (activeIds.includes(lock.runId) || (typeof pid === "number" && pid !== process.pid && pidAlive(pid))) {
+        out.push({ repo: lock.repo, areas: lock.areas, at: lock.at });
+        continue;
+      }
+      const orphanSince = this.orphans.get(lock.key) ?? now.toISOString();
+      seen.set(lock.key, orphanSince);
+      out.push({ repo: lock.repo, areas: lock.areas, at: lock.at, orphanSince });
+    }
+    this.orphans = seen;
+    return out;
+  }
+
+  /**
+   * The runs the detectors need, each once, newest write first, at most MAX_RUNS: runs written lately (for restart loops),
+   * failed runs, and runs written within the longest look-back of the develop and slow-step detectors.
+   */
+  private async collect(briefs: RunBrief[], now: Date, config: MonitorConfig): Promise<RunSummary[]> {
+    const t = now.getTime();
+    const written = (b: RunBrief) => Date.parse(b.updatedAt);
+    const resumedFrom = t - config.restart_loop.within_minutes * 60_000;
+    const failedFrom = t - Math.max(config.unexplained_failure.within_hours, config.same_step_failing.within_hours, 1) * HOUR;
+    const recentFrom = t - Math.max(config.develop_red.within_hours, config.slow_step.within_hours) * HOUR;
+    const picked = briefs
+      .filter((b) => written(b) >= resumedFrom || (b.status === "failed" && Date.parse(b.finishedAt ?? b.startedAt) >= failedFrom) || written(b) >= recentFrom)
+      .sort((a, b) => written(b) - written(a))
+      .slice(0, MAX_RUNS);
+    return this.load(picked);
+  }
+
+  private async load(briefs: RunBrief[]): Promise<RunSummary[]> {
+    const runs: RunSummary[] = [];
+    for (const [i, b] of briefs.entries()) {
+      if (i > 0 && i % YIELD_EVERY === 0) await new Promise<void>((r) => setImmediate(r));
+      try {
+        const run = this.d.scheduler.get(b.dirName);
+        if (run) runs.push(run);
+      } catch {
+        // a run.json that cannot be read is left out
+      }
+    }
+    return runs;
+  }
+
+  /** The usual step times: the newest succeeded runs that finished before the look-back, so slow runs never raise their own baseline. Built once an hour. */
+  private async usual(briefs: RunBrief[], now: Date, config: MonitorConfig): Promise<DurationHistory> {
+    const t = now.getTime();
+    const hours = config.slow_step.within_hours;
+    const c = this.usualCache;
+    if (c && c.hours === hours && t - c.at >= 0 && t - c.at < HOUR) return c.history;
+    const before = t - hours * HOUR;
+    const done = (b: RunBrief) => Date.parse(b.finishedAt ?? b.startedAt);
+    const picked = briefs.filter((b) => b.status === "succeeded" && done(b) < before).sort((a, b) => done(b) - done(a)).slice(0, USUAL_RUNS);
+    const history = buildHistory(await this.load(picked));
+    this.usualCache = { at: t, hours, history };
+    return history;
+  }
+}

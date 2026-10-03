@@ -62,7 +62,9 @@ describe("req() in ui/api.js", () => {
     await apiMod.api.session();
     await apiMod.api.signIn("a@example.com", "pw");
     await apiMod.api.setup("Ann", "a@example.com", "pw");
-    expect(sent().map((c) => `${c.method} ${c.url}`)).toEqual(["GET /api/session", "POST /api/session", "POST /api/setup"]);
+    await apiMod.api.setPassword("tok", "pw");
+    expect(sent().map((c) => `${c.method} ${c.url}`)).toEqual(["GET /api/session", "POST /api/session", "POST /api/setup", "POST /api/set-password"]);
+    expect(JSON.parse(fetchMock.mock.calls[3]![1].body)).toEqual({ token: "tok", password: "pw" });
   });
 });
 
@@ -95,6 +97,7 @@ describe("the sign-in decisions", () => {
     signIn: vi.fn(async () => ({})),
     signOut: vi.fn(async () => ({})),
     setup: vi.fn(async () => ({})),
+    setPassword: vi.fn(async () => ({})),
     ...over,
   });
 
@@ -113,6 +116,37 @@ describe("the sign-in decisions", () => {
     expect(a.setup).toHaveBeenCalledExactlyOnceWith("Ann", "ann@example.com", "long-enough-password");
     expect(await auth.submitForm(a, "signin", { email: "ann@example.com ", password: "pw" })).toBe("");
     expect(a.signIn).toHaveBeenCalledExactlyOnceWith("ann@example.com", "pw");
+  });
+
+  it("reads a set-password link", () => {
+    expect(auth.linkToken("#/set-password/abc-_1")).toBe("abc-_1");
+    for (const hash of ["#/set-password/", "#/set-password/a/b", "#/runs", "", undefined, "#/set-password/a%20b", "#/set-password/a b", "#/set-password/a%"]) {
+      expect(auth.linkToken(hash), String(hash)).toBeNull();
+    }
+    expect(auth.linkToken(auth.linkHash("tok-en_9"))).toBe("tok-en_9");
+  });
+
+  it("shows the password form for a link, with or without a session", () => {
+    expect(auth.formKind({ user: { name: "Ann" } }, "#/set-password/x")).toBe("password");
+    expect(auth.formKind({ user: null, setupNeeded: false }, "#/runs")).toBe("signin");
+    expect(auth.formKind({ user: { name: "Ann" } })).toBeNull();
+  });
+
+  it("checks the new password", () => {
+    expect(auth.formProblem("password", { password: "short", repeat: "short" })).toBe("The password must be at least 10 characters.");
+    expect(auth.formProblem("password", { password: "long-enough-password", repeat: "other-password-1" })).toBe("The two passwords are not the same.");
+    expect(auth.formProblem("password", { password: "long-enough-password", repeat: "long-enough-password" })).toBe("");
+  });
+
+  it("sends the set-password form once, and only without a problem", async () => {
+    const a = fakeApi();
+    const v = { token: "tok", password: "long-enough-password", repeat: "long-enough-password" };
+    expect(await auth.submitForm(a, "password", { ...v, repeat: "x" })).toBe("The two passwords are not the same.");
+    expect(a.setPassword).not.toHaveBeenCalled();
+    expect(await auth.submitForm(a, "password", v)).toBe("");
+    expect(a.setPassword).toHaveBeenCalledExactlyOnceWith("tok", "long-enough-password");
+    const failing = fakeApi({ setPassword: async () => { throw new Error("this link is not valid any more; ask your admin for a new one"); } });
+    expect(await auth.submitForm(failing, "password", v)).toBe("this link is not valid any more; ask your admin for a new one");
   });
 
   it("returns the text of a failed call", async () => {
@@ -145,6 +179,7 @@ describe("ensureSignedIn on the fake DOM", () => {
     signIn: vi.fn(async () => ({})),
     signOut: vi.fn(async () => ({})),
     setup: vi.fn(async () => ({})),
+    setPassword: vi.fn(async () => ({})),
     ...over,
   });
   const neverResolves = async (p: Promise<unknown>) => {
@@ -239,6 +274,108 @@ describe("ensureSignedIn on the fake DOM", () => {
     expect(a.setup).toHaveBeenCalledExactlyOnceWith("Ann", "ann@example.com", "long-enough-password");
   });
 
+  describe("a set-password link", () => {
+    const GOOD = "long-enough-password";
+    const fakePage = (hash: string) => {
+      const page = { current: hash, watcher: undefined as undefined | (() => void), onCalls: 0 } as { current: string; watcher?: () => void; onCalls: number };
+      return Object.assign(page, {
+        hash: () => page.current,
+        clearHash: vi.fn(() => void (page.current = "")),
+        onHashChange: vi.fn((fn: () => void) => {
+          page.onCalls++;
+          page.watcher = fn;
+        }),
+      });
+    };
+    const open = async (over: Record<string, unknown> = {}, hash = "#/set-password/tok-1") => {
+      const a = fakeApi({ user: null, setupNeeded: false }, over);
+      const page = fakePage(hash);
+      const p = auth.ensureSignedIn(a, reload, page);
+      await vi.waitFor(() => expect(form()).toBeDefined());
+      return { a, page, p };
+    };
+    const line = () => withClass(form(), "p", "bad")[0]!;
+
+    it("shows the form without asking for a session, and waits", async () => {
+      const { a, p } = await open();
+      expect(a.session).not.toHaveBeenCalled();
+      expect((document.body as unknown as FakeElement).classList.contains("signed-out")).toBe(true);
+      expect(form().all("h2")[0]!.textContent).toBe("Choose your password");
+      expect(inputs().map((i) => i.attrs.autocomplete)).toEqual(["new-password", "new-password"]);
+      await neverResolves(p);
+    });
+
+    it("does not send two different passwords", async () => {
+      const { a } = await open();
+      fill([GOOD, "another-password-1"]);
+      submit();
+      await vi.waitFor(() => expect(line().textContent).toBe("The two passwords are not the same."));
+      expect(a.setPassword).not.toHaveBeenCalled();
+    });
+
+    it("on success cleans the address bar and shows the sign-in form with a note, without a reload", async () => {
+      const { a, page } = await open();
+      fill([GOOD, GOOD]);
+      submit();
+      await vi.waitFor(() => expect(form().all("h2")[0]!.textContent).toBe("Sign in"));
+      expect(a.setPassword).toHaveBeenCalledExactlyOnceWith("tok-1", GOOD);
+      expect(page.clearHash).toHaveBeenCalledTimes(1);
+      expect(form().all("p").some((p) => p.textContent.includes("Your password is set"))).toBe(true);
+      expect(reload).not.toHaveBeenCalled();
+      fill(["ann@example.com", GOOD]);
+      submit();
+      await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+      expect(a.signIn).toHaveBeenCalledExactlyOnceWith("ann@example.com", GOOD);
+    });
+
+    it("on a failed call shows the text, enables the button and keeps the address", async () => {
+      const { page } = await open({ setPassword: vi.fn(async () => { throw new Error("this link is not valid any more; ask your admin for a new one"); }) });
+      fill([GOOD, GOOD]);
+      const button = form().all("button")[0]!;
+      submit();
+      expect(button.disabled).toBe(true);
+      await vi.waitFor(() => expect(line().textContent).toContain("not valid any more"));
+      expect(button.disabled).toBe(false);
+      expect(page.clearHash).not.toHaveBeenCalled();
+    });
+
+    it("the link form reloads on any hash change, until the password is set", async () => {
+      const { page } = await open();
+      expect(page.onCalls).toBe(1);
+      for (const hash of ["#/runs", "", "#/set-password/other"]) {
+        reload.mockClear();
+        page.current = hash;
+        page.watcher!();
+        expect(reload, hash).toHaveBeenCalledTimes(1);
+      }
+      fill([GOOD, GOOD]);
+      submit();
+      await vi.waitFor(() => expect(form().all("h2")[0]!.textContent).toBe("Sign in"));
+      expect(page.onCalls).toBe(1);
+      reload.mockClear();
+      page.current = "#/runs";
+      page.watcher!();
+      expect(reload).not.toHaveBeenCalled();
+      expect(form().all("p").some((p) => p.textContent.includes("Your password is set"))).toBe(true);
+      page.current = "#/set-password/other";
+      page.watcher!();
+      expect(reload).toHaveBeenCalledTimes(1);
+    });
+
+    it("the sign-in form reloads only when the hash is a link", async () => {
+      const a = fakeApi({ user: null, setupNeeded: false });
+      const page = fakePage("");
+      void auth.ensureSignedIn(a, reload, page);
+      await vi.waitFor(() => expect(form()).toBeDefined());
+      page.current = "#/runs";
+      page.watcher!();
+      expect(reload).not.toHaveBeenCalled();
+      page.current = "#/set-password/tok-2";
+      page.watcher!();
+      expect(reload).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("shows an error block when the session cannot be read", async () => {
     const a = fakeApi(null, { session: vi.fn(async () => { throw new Error("sign-in is not working; see the server log"); }) });
     const p = auth.ensureSignedIn(a, reload);
@@ -254,6 +391,14 @@ describe("the page", () => {
     const at = app.indexOf("await ensureSignedIn();");
     expect(at).toBeGreaterThan(0);
     expect(at).toBeLessThan(app.indexOf("S.info = await api.info();"));
+  });
+
+  it("app.js loads the page again for a set-password link before it picks a page", () => {
+    const app = readFileSync("ui/app.js", "utf8");
+    const route = app.slice(app.indexOf("async function route()"));
+    const at = route.indexOf("if (linkToken(location.hash)) return location.reload();");
+    expect(at).toBeGreaterThan(0);
+    expect(at).toBeLessThan(route.indexOf("allowedHash("));
   });
 
   it("index.html has the place for the user name", () => {
@@ -285,12 +430,21 @@ describe("roles in the page", () => {
     expect(auth.isAdmin(undefined)).toBe(false);
   });
 
-  it("userHash keeps the Runs pages and sends everything else to the list", () => {
+  it("userHash keeps the Runs pages and My repositories and sends everything else to the list", () => {
+    expect(auth.userHash("#/repos")).toBe("#/repos");
+    expect(auth.userHash("#/repos/x")).toBe("#/runs");
+    expect(auth.userHash("#/reposx")).toBe("#/runs");
+    expect(auth.userHash("#/refinement")).toBe("#/refinement");
+    expect(auth.userHash("#/refinement/abc-1")).toBe("#/refinement/abc-1");
+    expect(auth.userHash("#/refinement/a/b")).toBe("#/runs");
+    expect(auth.userHash("#/refinementx")).toBe("#/runs");
     expect(auth.userHash("#/runs")).toBe("#/runs");
     expect(auth.userHash("#/runs/abc")).toBe("#/runs/abc");
     expect(auth.userHash("#/runs/abc/x")).toBe("#/runs");
     expect(auth.userHash("#/settings")).toBe("#/runs");
     expect(auth.userHash("")).toBe("#/runs");
+    expect(auth.userHash("#/users")).toBe("#/runs");
+    expect(auth.userHash("#/users/x")).toBe("#/runs");
   });
 
   it("allowedHash replaces a page a user may not open, and leaves the rest", () => {
@@ -300,7 +454,12 @@ describe("roles in the page", () => {
     replace.mockClear();
     expect(auth.allowedHash(false, "#/runs/abc", replace)).toBe("#/runs/abc");
     expect(auth.allowedHash(true, "#/settings", replace)).toBe("#/settings");
+    expect(auth.allowedHash(false, "#/repos", replace)).toBe("#/repos");
     expect(replace).not.toHaveBeenCalled();
+    expect(auth.allowedHash(true, "#/users", replace)).toBe("#/users");
+    expect(replace).not.toHaveBeenCalled();
+    expect(auth.allowedHash(false, "#/users", replace)).toBe("#/runs");
+    expect(replace).toHaveBeenCalledWith("#/runs");
   });
 
   it("startApp gives a user only the route, and an admin the whole start-up", async () => {

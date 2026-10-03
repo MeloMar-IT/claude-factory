@@ -53,6 +53,7 @@ export const watcherStateMark = (w) => (w.state ? statusMark(w.state, `state-${w
 const SOURCES = {
   issues: "Issues with a label → run a flow (default issue-gitflow)",
   schedule: "On a schedule → run a flow (default release-daily)",
+  monitor: "The Foundry itself → find its own problems",
 };
 // No shipped flow for these any more; still shown for a watcher that already uses them.
 const OLD_SOURCES = {
@@ -67,9 +68,13 @@ const CHORES = [
   ["Docs", "Check that README and docs match the code (commands, options, examples). Fix anything outdated."],
   ["Lint / TODOs", "Run the linter and fix the warnings that are safe to fix. Resolve TODO/FIXME comments that are quick and clearly specified."],
 ];
-const describeWatcher = (w) => {
+/** A monitor has no repository, flow, labels or owner: only these fields are saved (a changed source drops the rest). */
+export const monitorEntry = ({ id, every, enabled }) => ({ id, source: "monitor", every, enabled });
+
+export const describeWatcher = (w) => {
   const flow = w.flow === "default" ? DEFAULT_FLOWS[w.source] ?? "(no flow)" : w.flow;
   return {
+    monitor: "checks the Foundry itself for problems",
     issues: `issues labelled “${w.label}” → ${flow}`,
     "pr-feedback": `PR review comments → ${flow}`,
     "ci-failures": `CI failures on ${w.branch ?? "the default branch"} → ${flow}`,
@@ -84,7 +89,7 @@ async function editWatcher(existing, flows) {
     const repo = input(w.github_repo, { class: "mono", placeholder: "owner/repo" });
     const flow = input(w.flow, { class: "mono", list: "watcher-flows" });
     const source = h("select", { onChange: () => {
-      if (Object.values(DEFAULT_FLOWS).includes(flow.value)) flow.value = DEFAULT_FLOWS[source.value];
+      if (DEFAULT_FLOWS[source.value] && Object.values(DEFAULT_FLOWS).includes(flow.value)) flow.value = DEFAULT_FLOWS[source.value];
       if (source.value === "schedule" && /^\d+(s|m)$/.test(every.value)) every.value = "7d";
       showFor();
     } }, Object.entries({ ...SOURCES, ...(OLD_SOURCES[w.source] ? { [w.source]: OLD_SOURCES[w.source] } : {}) }).map(([v, label]) => h("option", { value: v, selected: w.source === v }, label)));
@@ -110,7 +115,7 @@ async function editWatcher(existing, flows) {
       const list = (el) => el.value.split(",").map((x) => x.trim()).filter(Boolean);
       // Keep settings this form doesn't show (status label names, pauses, …).
       const kept = watcherConfig(existing ?? {});
-      const next = { ...kept, id: id.value.trim(), source: source.value, flow: flow.value.trim(), github_repo: repo.value.trim(), label: label.value.trim(),
+      const next = source.value === "monitor" ? monitorEntry({ id: id.value.trim(), every: every.value.trim(), enabled: enabled.el.checked }) : { ...kept, id: id.value.trim(), source: source.value, flow: flow.value.trim(), github_repo: repo.value.trim(), label: label.value.trim(),
         every: every.value.trim(), max_per_tick: Number(max.value) || 1, enabled: enabled.el.checked, vars: parsedVars,
         task: source.value === "schedule" ? task.value.trim() : undefined,
         branch: source.value === "ci-failures" ? branch.value.trim() || undefined : undefined,
@@ -133,8 +138,16 @@ async function editWatcher(existing, flows) {
     const taskField = h("div", {}, f("Chore", task, "Becomes the run's task. The flow opens a PR only if something changed."),
       h("div", { class: "chips", style: { marginTop: "6px" } }, CHORES.map(([name, text]) => h("button", { class: "chip", type: "button", onClick: () => (task.value = text) }, name))));
     const branchField = f("Branch to watch", branch);
+    const repoField = f("GitHub repo", repo);
+    const flowField = f("Flow", flow);
+    const maxField = f("Max new runs per check", max);
+    const varsField = f("Variables for each run", vars, "One name=value per line. github_repo and issue/pr are set automatically.");
+    const ownerField = f("Owner of the runs", owner, "E-mail of an account. Empty: the first admin.");
     const showFor = () => {
+      const mon = source.value === "monitor";
+      for (const el of [repoField, flowField, maxField, varsField, ownerField]) el.style.display = mon ? "none" : "";
       labelField.style.display = source.value === "issues" ? "" : "none";
+      // a monitor needs only an id and an interval
       taskField.style.display = source.value === "schedule" ? "" : "none";
       atField.style.display = source.value === "schedule" ? "" : "none";
       branchField.style.display = source.value === "ci-failures" ? "" : "none";
@@ -142,14 +155,14 @@ async function editWatcher(existing, flows) {
     showFor();
     return h("div", { style: { display: "grid", gap: "12px" } },
       h("datalist", { id: "watcher-flows" }, flows.map((x) => h("option", { value: x.name }))),
-      h("div", { class: "grid" }, f("Id", id), f("GitHub repo", repo)),
+      h("div", { class: "grid" }, f("Id", id), repoField),
       f("Source", source),
-      h("div", { class: "grid" }, f("Flow", flow), labelField, branchField),
+      h("div", { class: "grid" }, flowField, labelField, branchField),
       taskField,
       atField,
-      h("div", { class: "grid" }, f("Check every", every, "e.g. 5m, 1h — for chores: how often it runs, e.g. 1d, 7d"), f("Max new runs per check", max)),
-      f("Variables for each run", vars, "One name=value per line. github_repo and issue/pr are set automatically."),
-      f("Owner of the runs", owner, "E-mail of an account. Empty: the first admin."),
+      h("div", { class: "grid" }, f("Check every", every, "e.g. 5m, 1h — for chores: how often it runs, e.g. 1d, 7d"), maxField),
+      varsField,
+      ownerField,
       enabled.row, err, h("div", { class: "row" }, h("span", { class: "spacer" }), save));
   });
 }
@@ -172,7 +185,7 @@ export async function renderWatchers(main) {
         h("div", { class: "row" },
           h("b", { class: "mono" }, w.id),
           watcherStateMark(w),
-          h("span", { class: "mono" }, w.github_repo),
+          w.github_repo ? h("span", { class: "mono" }, w.github_repo) : null,
           h("span", { class: "muted" }, describeWatcher(w)),
           h("span", { class: "spacer" }),
           w.enabled ? h("button", { class: "small", onClick: async () => { toast("Checking…"); await api.tickWatcher(w.id).catch((e) => toast(e.message, "error")); reload(); } }, "Check now") : null,
@@ -183,7 +196,7 @@ export async function renderWatchers(main) {
             reload();
           } }, "Delete")),
         h("div", { class: "muted", style: { fontSize: "12.5px" } },
-          w.source === "schedule" ? (w.at ? `checks every ${w.every}` : `max 1 run per ${w.every}`) : `every ${w.every} · max ${w.max_per_tick} per check`,
+          w.source === "monitor" ? `every ${w.every}` : w.source === "schedule" ? (w.at ? `checks every ${w.every}` : `max 1 run per ${w.every}`) : `every ${w.every} · max ${w.max_per_tick} per check`,
           w.exclude_labels?.length ? ` · skips ${w.exclude_labels.join(", ")}` : "",
           w.pause_while_pr_open ? ` · pauses while a ${w.pause_while_pr_open}* PR is open` : "",
           w.enabled ? lastOkText(st) : "",
@@ -249,6 +262,7 @@ export async function renderSettings(main) {
   const keyPath = input(c.github_app?.private_key_path ?? "", { class: "mono", placeholder: "/path/to/app.private-key.pem" });
   const sbxClaude = check(c.sandbox.claude, "Sandbox agents' shell commands by default");
   const secrets = check(c.secret_scan !== false, "Block pushes that add secrets (API keys, tokens, private keys, .env files)");
+  const hotfix = check(c.hotfix_to_main === true, "Hotfixes: build bug stories on a hotfix branch and merge them into main without a person (only the unchanged built-in issue-gitflow)");
   const sbxImage = input(c.sandbox.docker_image ?? "", { class: "mono", placeholder: "e.g. node:22" });
   const net = c.server ?? { listen: "127.0.0.1", allowed_hosts: [], allow_insecure_http: false };
   const listenSel = h("select", {}, ["127.0.0.1", "::1", "0.0.0.0", "::"].map((a) => h("option", { value: a }, a)));
@@ -266,6 +280,7 @@ export async function renderSettings(main) {
       concurrency: Number(conc.value) || 1,
       protected_branches: protectedB.value.split(",").map((s) => s.trim()).filter(Boolean),
       secret_scan: secrets.el.checked,
+      hotfix_to_main: hotfix.el.checked,
       notify: notifyFrom({
         macos: macos.el.checked, slack: slack.value, command: cmd.value, on: on.filter(([, x]) => x.el.checked).map(([s]) => s),
         successes: successes.el.checked, throttle: throttle.value, quietFrom: quietFrom.value, quietTo: quietTo.value, summaryAt: summaryAt.value,
@@ -304,6 +319,7 @@ export async function renderSettings(main) {
     section("Safety",
       f("Protected branches", protectedB, "Pushes to these are refused during runs (glob patterns, comma-separated). Also enable branch protection on GitHub."),
       secrets.row,
+      hotfix.row,
       sbxClaude.row,
       f("Docker image for sandboxed shell steps", sbxImage, "Steps marked “Run in Docker” (like tests) run in this image with only the workspace mounted.")),
     section("Notifications",

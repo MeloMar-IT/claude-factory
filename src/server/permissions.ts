@@ -6,7 +6,7 @@ import type { ApiContext } from "./server.js";
 /**
  * Who may make which API call. An admin may make every call in the table; a user only the calls marked `yes`,
  * and the calls marked `own` on runs the user started (any other run answers 404, like an unknown one). A call that is not in the table is answered with 404.
- * The routes /api/session and /api/setup need no session and are not in the table.
+ * The routes /api/session, /api/setup and /api/set-password need no session and are not in the table.
  */
 export type UserAccess = "yes" | "no" | "own";
 
@@ -62,14 +62,31 @@ export const RULES: Rule[] = [
   r("POST", "your-turn/restore", "no", "restore dismissed items"),
   r("GET", "your-turn/detail", "no", "the questions, plan or split of an item"),
   r("POST", "your-turn/act", "no", "answer, approve, reject or retry an item, as a comment on the issue"),
+  r("GET", "clarity", "no", "how long items waited for you, and what Your turn missed"),
   r("GET", "credentials", "yes", "your stored credentials"),
   r("POST", "credentials", "yes", "store a credential"),
   r("DELETE", "credentials/:id", "yes", "remove a credential"),
+  r("GET", "users", "no", "list the accounts"),
+  r("POST", "users", "no", "add an account without a password; the answer has its one-time set-password token"),
+  r("PUT", "users/:id", "no", "change the name, e-mail or role of an account"),
+  r("POST", "users/:id/block", "no", "block an account, end its sessions and cancel its queued jobs"),
+  r("POST", "users/:id/unblock", "no", "unblock an account"),
+  r("POST", "users/:id/link", "no", "a new set-password token for an account without a password"),
+  r("DELETE", "users/:id", "no", "delete an account with its sessions, repositories, refinement sessions and stored credentials"),
   r("GET", "repos", "yes", "your repositories"),
   r("POST", "repos", "yes", "add a repository (a URL, and a token for it)"),
   r("PUT", "repos/:id/auth", "yes", "change the method, user name, token or address of your repository"),
   r("DELETE", "repos/:id", "yes", "remove your repository and its stored token"),
   r("DELETE", "repos/:owner/:name", "yes", "remove a GitHub repository by name (old form)"),
+  r("GET", "admin/repos", "no", "the repositories of all accounts, with their settings"),
+  r("PUT", "admin/repos/:id/settings", "no", "set the test command, docs, protected branches and branch names of a repository"),
+  r("POST", "admin/repos/:id/transfer", "no", "move a repository to another account, by e-mail"),
+  r("GET", "refinement", "yes", "your refinement sessions and the repositories a new one can use (an admin: the sessions of all accounts, with the owner)"),
+  r("POST", "refinement", "yes", "start a refinement session on one of your GitHub repositories"),
+  r("GET", "refinement/:id", "yes", "read your refinement session (an admin: any session)"),
+  r("PUT", "refinement/:id", "yes", "rename your refinement session"),
+  r("POST", "refinement/:id/drop", "yes", "drop your refinement session (an admin: any session); it is removed after 30 days"),
+  r("POST", "refinement/:id/restore", "yes", "restore your dropped refinement session"),
 ];
 
 /** The key of a rule, e.g. "POST runs/:id/approve". */

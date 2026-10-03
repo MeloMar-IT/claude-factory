@@ -20,10 +20,10 @@ const g = (phase: Phase, ids: string): [Phase, string][] => ids.split(" ").map((
 const REVIEW = "review_1 address_review_1 run_tests_1 fix_tests_1 review_2 address_review_2 run_tests_2 fix_tests_2 docs final_guard";
 const FLOWS: Record<string, Groups> = {
   "issue-gitflow": [
-    ...g("planning", "pull_ticket feature_branch baseline_tests plan plan_review revise_gate revise_plan send_back split_gate approve_split create_split size_gate force_split risk_gate approve_plan claim_areas wait_for_area"),
+    ...g("planning", "pull_ticket feature_branch baseline_tests baseline_main hotfix_branch plan plan_review revise_gate revise_plan send_back split_gate approve_split create_split size_gate force_split risk_gate approve_plan claim_areas wait_for_area"),
     ...g("coding", "implement guard fix_guard run_tests fix_tests"),
     ...g("reviewing", "review_1 address_review_1 run_tests_1 fix_tests_1 review_gate review_2 address_review_2 run_tests_2 fix_tests_2 docs final_guard"),
-    ...g("merging", "commit push_feature merge_develop resolve_conflicts finish_merge test_develop fix_develop commit_develop_fix push_develop report"),
+    ...g("merging", "commit push_feature merge_develop resolve_conflicts finish_merge test_develop fix_develop commit_develop_fix push_develop merge_main test_main red_main push_main merge_back resolve_back finish_back test_back red_back fix_back commit_back_fix push_back hotfix_done report"),
     ...g("planning", "baseline_failed"),
   ],
   "issue-deliver": [
@@ -127,6 +127,7 @@ describe("columnOf", () => {
     ["dependency", rec("dependency", { blockers: [{ issue: 2 }] }), "waiting"],
     ["one at a time", rec("one_at_a_time"), "waiting"],
     ["area lock", rec("area_lock"), "waiting"],
+    ["bug story goes first", rec("bug_first"), "waiting"],
     ["queued", rec("queued"), "queued"],
     ["starting", rec("starting"), "queued"],
     ["checking", rec("checking"), "queued"],
@@ -161,6 +162,13 @@ describe("buildBoard", () => {
     ]);
     expect(b.empty).toBeUndefined();
     expect(buildBoard([], { now: NOW })).toEqual({ repos: [], empty: EMPTY_BOARD });
+  });
+
+  it("marks a card goes first only when asked, and never in Done", () => {
+    const b = buildBoard([src(rec("bug_first", {}, 1), { goesFirst: true }), src(rec("queued", {}, 2)), src(rec("done", {}, 3), { goesFirst: true })], { now: NOW });
+    expect(cardsOf(b, "waiting")[0]!.goesFirst).toBe(true);
+    expect(cardsOf(b, "queued")[0]!).not.toHaveProperty("goesFirst");
+    expect(cardsOf(b, "done")[0]!).not.toHaveProperty("goesFirst");
   });
 
   it("drops sources without an issue or a repository", () => {

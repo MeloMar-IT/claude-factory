@@ -54,7 +54,7 @@ export function health(ctx: ApiContext, now = new Date()): Health {
     if (!have || ended(r) > ended(have)) limits.set(agent, r);
   }
   for (const [limitAgent, r] of limits) {
-    const data = { limitAgent, finishedAt: r.finishedAt ?? r.startedAt, now };
+    const data = { limitAgent, finishedAt: r.finishedAt ?? r.startedAt, now, ...(r.history.at(-1)?.unreachable ? { unreachable: true } : {}) };
     const rec = nextStep("usage_limit", {}, { ...data, reason: r.reason });
     // The reset time is quoted from the agent's message: keep it only when it looks like a time.
     problems.push(RESET_TIME.test(rec.until ?? "") ? rec : nextStep("usage_limit", {}, data));
@@ -72,6 +72,13 @@ export function health(ctx: ApiContext, now = new Date()): Health {
     if (seen.has(key)) continue;
     seen.add(key);
     problems.push(p);
+  }
+
+  // The monitor is not in `tracked` (it has no repository): a check that fails is a problem of its own.
+  for (const w of ctx.watchers.statuses()) {
+    if (w.source !== "monitor" || !w.enabled || !w.status?.lastError) continue;
+    const p = watcherProblem(w, w.status, t);
+    if (p) problems.push(p);
   }
 
   const busy = new Set([...q.active.map((a) => a.runId), ...q.pending.map((p) => p.runId)]);
@@ -98,6 +105,7 @@ export function health(ctx: ApiContext, now = new Date()): Health {
   const lastOk = new Map<string, string | undefined>();
   for (const w of ctx.watchers.statuses()) {
     if (!w.enabled) continue;
+    if (w.source === "monitor") continue;
     const ok = tracked.find((x) => x.watcher.id === w.id)?.status.lastOk ?? w.status?.lastOk;
     if (!lastOk.has(w.github_repo)) lastOk.set(w.github_repo, ok);
     else {

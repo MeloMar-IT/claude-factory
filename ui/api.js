@@ -11,7 +11,7 @@ async function req(method, url, body) {
   const data = await r.json().catch(() => ({}));
   // the session ended (expired, revoked, password changed): start again at the sign-in page
   if (r.status === 401 && !url.startsWith("/api/session")) location.reload();
-  if (!r.ok) throw new Error(data.error || `${r.status} ${r.statusText}`);
+  if (!r.ok) throw Object.assign(new Error(data.error || `${r.status} ${r.statusText}`), { status: r.status });
   return data;
 }
 
@@ -20,6 +20,7 @@ const enc = encodeURIComponent;
 export const api = {
   session: () => req("GET", "/api/session"),
   signIn: (email, password) => req("POST", "/api/session", { email, password }),
+  setPassword: (token, password) => req("POST", "/api/set-password", { token, password }),
   signOut: () => req("DELETE", "/api/session"),
   setup: (name, email, password) => req("POST", "/api/setup", { name, email, password }),
   info: () => req("GET", "/api/info"),
@@ -42,6 +43,26 @@ export const api = {
   rejectRun: (id, note) => req("POST", `/api/runs/${enc(id)}/reject`, { note }),
   transcript: (id, n) => req("GET", `/api/runs/${enc(id)}/transcript/${n}`),
   diff: (id) => req("GET", `/api/runs/${enc(id)}/diff`),
+  repos: () => req("GET", "/api/repos"),
+  addRepo: (body) => req("POST", "/api/repos", body),
+  setRepoAuth: (id, body) => req("PUT", `/api/repos/${enc(id)}/auth`, body),
+  removeRepo: (id) => req("DELETE", `/api/repos/${enc(id)}`),
+  users:() => req("GET", "/api/users"),
+  addUser: (body) => req("POST", "/api/users", body),
+  saveUser: (id, body) => req("PUT", `/api/users/${enc(id)}`, body),
+  blockUser: (id, stopWork) => req("POST", `/api/users/${enc(id)}/block`, { stopWork: !!stopWork }),
+  unblockUser: (id) => req("POST", `/api/users/${enc(id)}/unblock`, {}),
+  userLink: (id) => req("POST", `/api/users/${enc(id)}/link`, {}),
+  deleteUser: (id) => req("DELETE", `/api/users/${enc(id)}`),
+  allRepos: () => req("GET", "/api/admin/repos"),
+  setRepoSettings: (id, body) => req("PUT", `/api/admin/repos/${enc(id)}/settings`, body),
+  transferRepo: (id, email) => req("POST", `/api/admin/repos/${enc(id)}/transfer`, { email }),
+  refinement: () => req("GET", "/api/refinement"),
+  createRefinement: (body) => req("POST", "/api/refinement", body),
+  refinementSession: (id) => req("GET", `/api/refinement/${enc(id)}`),
+  renameRefinement: (id, body) => req("PUT", `/api/refinement/${enc(id)}`, body),
+  dropRefinement: (id) => req("POST", `/api/refinement/${enc(id)}/drop`, {}),
+  restoreRefinement: (id) => req("POST", `/api/refinement/${enc(id)}/restore`, {}),
   queue: () => req("GET", "/api/queue"),
   config: () => req("GET", "/api/config"),
   saveConfig: (config) => req("PUT", "/api/config", config),
@@ -57,6 +78,7 @@ export const api = {
   restoreTurn: () => req("POST", "/api/your-turn/restore", {}),
   turnDetail: (key) => req("GET", `/api/your-turn/detail?key=${enc(key)}`),
   actTurn: (body) => req("POST", "/api/your-turn/act", body),
+  clarity: () => req("GET", "/api/clarity"),
   board: () => req("GET", "/api/board"),
   stats: () => req("GET", "/api/stats"),
   evals: () => req("GET", "/api/evals"),

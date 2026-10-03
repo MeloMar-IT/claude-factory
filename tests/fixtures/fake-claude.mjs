@@ -14,9 +14,11 @@ const emit = (o) => process.stdout.write(JSON.stringify(o) + "\n");
 let result = `ok args=${args.join(" ")}`;
 const denials = [];
 for (const line of prompt.split("\n")) {
-  const dn = line.match(/^DENY (\S+) (.*)$/);
+  // With `--tools ""` the real CLI has no tools: nothing is written or refused.
+  const noTools = args.includes("--tools") && args[args.indexOf("--tools") + 1] === "";
+  const dn = noTools ? null : line.match(/^DENY (\S+) (.*)$/);
   if (dn) denials.push({ tool_name: dn[1], tool_use_id: `toolu_${denials.length}`, tool_input: dn[1] === "Bash" ? { command: dn[2] } : { file_path: dn[2] } });
-  const w = line.match(/^WRITE (\S+) (.*)$/);
+  const w = noTools ? null : line.match(/^WRITE (\S+) (.*)$/);
   if (w) {
     emit({ type: "assistant", message: { content: [{ type: "tool_use", name: "Write", input: { file_path: w[1] } }] } });
     writeFileSync(w[1], w[2]);
@@ -29,6 +31,14 @@ if (prompt.includes("CLAUDE_SIGNED_OUT")) {
   emit({ type: "result", subtype: "success", is_error: true, result: "Failed to authenticate: OAuth session expired and could not be refreshed", session_id: "s", total_cost_usd: 0, num_turns: 1 });
   process.exit(1);
 }
+if (prompt.includes("CLAUDE_UNREACHABLE")) {
+  emit({ type: "result", subtype: "success", is_error: true, result: "API Error: Connection error (ECONNRESET)", session_id: "s", total_cost_usd: 0, num_turns: 1 });
+  process.exit(1);
+}
+if (prompt.includes("CLAUDE_OVERLOADED")) {
+  emit({ type: "result", subtype: "success", is_error: true, result: "API Error: 529 overloaded_error", session_id: "s", total_cost_usd: 0, num_turns: 1 });
+  process.exit(1);
+}
 if (prompt.includes("CLAUDE_LIMIT")) {
   emit({ type: "result", subtype: "success", is_error: true, result: "You've hit your limit · resets 3:50pm (Europe/Amsterdam)", session_id: "s", total_cost_usd: 0, num_turns: 1 });
   process.exit(1);
@@ -36,7 +46,11 @@ if (prompt.includes("CLAUDE_LIMIT")) {
 // Canned answers for the built-in blocks, so whole flows can run offline.
 let canned;
 let cost = 0.01;
-if (prompt.includes("You triage tickets")) canned = process.env.FAKE_TRIAGE ?? "Small change.\nROUTE: SMALL";
+if (prompt.includes("Explain why this run of a coding flow failed")) {
+  const e = process.env.FAKE_EXPLAIN;
+  canned = e === "ARGS" ? `KIND: code\nWHY: args ${args.filter((a, i) => a !== "--append-system-prompt" && args[i - 1] !== "--append-system-prompt").join(" ")} gh=${process.env.GH_TOKEN ?? ""}` : e ?? "KIND: code\nWHY: the tests still fail after the fixes";
+  cost = 0.002;
+} else if (prompt.includes("You triage tickets")) canned = process.env.FAKE_TRIAGE ?? "Small change.\nROUTE: SMALL";
 else if (prompt.includes("PLAN_STATUS: NEEDS_INFO")) canned = process.env.FAKE_PLAN ?? "1. change feature.txt\nPLAN_STATUS: READY";
 else if (prompt.includes("VERDICT: APPROVE")) canned = "Looks good.\nVERDICT: APPROVE";
 else if (prompt.includes("CI failed on this branch")) {
@@ -61,7 +75,7 @@ else if (prompt.includes("CI failed on this branch")) {
 } else if (prompt.includes("Your finished change is being merged into the develop branch")) {
   // Resolve by keeping both sides: drop the conflict markers from every conflicted file.
   const files = execFileSync("git", ["diff", "--name-only", "--diff-filter=U"], { encoding: "utf8" }).split("\n").filter(Boolean);
-  for (const f of files) {
+  for (const f of process.env.FAKE_RESOLVE_NOOP ? [] : files) { // FAKE_RESOLVE_NOOP: the resolver changes nothing
     writeFileSync(f, readFileSync(f, "utf8").split("\n").filter((l) => !/^(<<<<<<<|=======|>>>>>>>)/.test(l)).join("\n"));
     execFileSync("git", ["add", f]);
   }

@@ -1,6 +1,6 @@
 import { api } from "./api.js";
 import { h, mount, timeAgo, toast } from "./dom.js";
-import { needsYou, nextBlock, nextStatus, whenParts, whereLink } from "./next.js";
+import { needsYou, nextBlock, nextStatus, whenParts, whereLink, whoClass } from "./next.js";
 import { STEP_TYPES } from "./step-types.js";
 
 const money = (n) => (n ? `$${n.toFixed(4)}` : "—");
@@ -8,6 +8,18 @@ const secs = (ms) => (ms < 60_000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.floor
 const what = (r) => (r.vars?.issue ? `${r.vars.github_repo}#${r.vars.issue}` : r.vars?.pr ? `${r.vars.github_repo} PR #${r.vars.pr}` : "");
 
 const REFRESH_MS = 30_000;
+const GONE = "deleted user";
+/** The server's owner name as the list shows it: "deleted user" for an account that is gone, "" for no owner. */
+export const ownerLabel = (name) => (name === "deleted account" ? GONE : name ?? "");
+/** Account names by id from the answer of GET /api/users; null when it is not a list. */
+export const ownerNames = (users) => (Array.isArray(users) ? new Map(users.map((u) => [u.id, u.name])) : null);
+/** The account's name, "deleted user" when it is gone, "" for no owner or while the names are not known. */
+export const ownerText = (owner, names) => (!owner || !names ? "" : names.get(owner) ?? GONE);
+/** The Owner row of the run page, or null. */
+export const ownerRow = (s, names) => {
+  const t = ownerText(s.owner, names);
+  return t ? [h("dt", {}, "Owner"), h("dd", {}, t)] : null;
+};
 
 /** A row of the Runs list: the status name of the record with its "?", then flow, task, steps, cost, start. */
 export const runRow = (r, { owner = false, cost = true } = {}) => h("tr", { class: "link", onClick: () => (location.hash = `#/runs/${r.runId}`) },
@@ -16,7 +28,7 @@ export const runRow = (r, { owner = false, cost = true } = {}) => h("tr", { clas
   h("td", { class: "task", title: r.task }, r.task || h("span", { class: "muted" }, "—"),
     r.next ? h("div", { class: "muted", title: r.next.text }, r.next.text) : null,
     r.next && whenParts(r.next).length ? h("div", { class: "next-parts timing" }, whenParts(r.next)) : null),
-  owner ? h("td", {}, r.ownerName ?? "—") : null,
+  owner ? h("td", {}, ownerLabel(r.ownerName)) : null,
   h("td", { class: "mono" }, r.history?.length ?? 0),
   cost ? h("td", { class: "mono" }, money(r.totalCostUsd)) : null,
   h("td", { class: "muted" }, timeAgo(r.startedAt)));
@@ -26,7 +38,7 @@ export const aheadText = (n) => `${n} ${n === 1 ? "run" : "runs"} ahead of you`;
 
 /** A queued job: its status with "?", id, details, link and a Remove button. */
 export const queueRow = (p, onRemove) => h("div", { class: "row" },
-  p.next ? nextStatus(p.next) : null, h("span", { class: "mono" }, p.runId), h("span", { class: "muted" }, [p.kind, p.source, p.next?.text].filter(Boolean).join(" · ")),
+  p.next ? nextStatus(p.next) : null, p.priority ? h("span", { class: "pill first" }, "goes first") : null, h("span", { class: "mono" }, p.runId), h("span", { class: "muted" }, [p.kind, p.source, p.next?.text].filter(Boolean).join(" · ")),
   p.ahead ? h("span", { class: "muted" }, aheadText(p.ahead)) : null,
   ...(p.next ? whenParts(p.next) : []),
   p.next ? whereLink(p.next.where) : null,
@@ -58,7 +70,7 @@ export async function renderRunsList(main, { admin = true } = {}) {
       h("tbody", {}, list.map((r) => runRow(r, { owner: admin, cost: admin }))));
     const filter = admin ? h("select", { class: "small-select", title: "Show the runs of one account", onChange: (e) => { owner = e.target.value; draw(); } },
       h("option", { value: "" }, "All owners"),
-      owners.map((o) => h("option", { value: o.id, selected: o.id === owner }, `${o.name} (${o.runs})`))) : null;
+      owners.map((o) => h("option", { value: o.id, selected: o.id === owner }, `${ownerLabel(o.name)} (${o.runs})`))) : null;
 
     mount(main,
       h("div", { class: "toolbar" }, h("h1", {}, "Runs"),
@@ -109,13 +121,47 @@ function transcriptView(events) {
   }));
 }
 
-function stepsView(runId, summary) {
+function stepsView(runId, summary, open = -1) {
   if (!summary.history.length) return h("p", { class: "muted" }, "No steps finished yet.");
-  return h("div", { class: "timeline" }, summary.history.map((s, i) => stepEntry(runId, s, i)));
+  return h("div", { class: "timeline" }, summary.history.map((s, i) => stepEntry(runId, s, i, { open: i === open })));
 }
 
-/** One finished step: summary line, the raw error under "Details", and the output or transcript when opened. */
-export function stepEntry(runId, s, i) {
+/** The step that explains a failed run: the last failed one that is not a sub-flow or parallel step (else the last failed one). -1 if none. */
+export function failedStepIndex(s) {
+  const h2 = s.history ?? [];
+  let last = -1;
+  for (let i = h2.length - 1; i >= 0; i--) {
+    if (h2[i].ok) continue;
+    if (last < 0) last = i;
+    if (h2[i].type !== "flow" && h2[i].type !== "parallel") return i;
+  }
+  return last;
+}
+
+/**
+ * The card of a failed run: who, the kind of problem, what failed, why, what was tried, what to do first and the four
+ * options. The raw reason is one click away under "Raw details" (an administrator only). Null when the run has no explanation.
+ */
+export function failureCard(s, { onStep } = {}) {
+  const n = s.next;
+  const f = n?.failure;
+  if (!f) return null;
+  const row = (k, v) => [h("dt", {}, k), h("dd", {}, v)];
+  return h("div", { class: `card next-step failure ${whoClass(n)}` },
+    h("div", { class: "next-parts" }, h("b", {}, "This run failed"), h("span", { class: `pill ${whoClass(n)}` }, n.who), h("span", { class: `pill kind-${f.cause}` }, f.kind)),
+    h("dl", { class: "meta" },
+      row("What happened", f.what),
+      row("Why", f.byModel ? [f.why, h("div", { class: "muted" }, "A model read the output of the failing step to write this sentence. It can be wrong.")] : f.why),
+      row("Already tried", f.tried),
+      n.action ? row("Do first", n.action) : null),
+    h("b", {}, "Your options"),
+    h("ul", { class: "options" }, f.options.map((o) => h("li", {}, o))),
+    onStep ? h("button", { class: "small", onClick: onStep }, "Show the failed step") : null,
+    s.reason ? h("details", { class: "raw" }, h("summary", {}, "Raw details"), h("pre", { class: "mono", style: { whiteSpace: "pre-wrap" } }, s.reason)) : null);
+}
+
+/** One finished step: summary line, the raw error under "Details", and the output or transcript when opened. `open`: shown opened. */
+export function stepEntry(runId, s, i, { open = false } = {}) {
   // A user's view has no output: a plain row that cannot be opened and never asks for a transcript.
   if (!("output" in s)) {
     return h("div", { class: "tl" },
@@ -129,16 +175,20 @@ export function stepEntry(runId, s, i) {
       s.error ? h("p", { class: "muted", style: { margin: "4px 12px" } }, s.error) : null);
   }
   const body = h("div");
+  let loaded = false;
+  const load = async () => {
+    if (loaded) return;
+    loaded = true;
+    if (s.type !== "claude") return mount(body, h("pre", {}, s.output || "(no output)"));
+    mount(body, h("p", { class: "muted", style: { padding: "0 12px" } }, "Loading transcript…"));
+    const t = await api.transcript(runId, i).catch((err) => ({ events: [{ kind: "raw", text: err.message }] }));
+    mount(body, transcriptView(t.events));
+  };
+  if (open) load();
   return h("details", {
     class: "tl",
-    onToggle: async (e) => {
-      if (!e.target.open || body.dataset.loaded) return;
-      body.dataset.loaded = "1";
-      if (s.type !== "claude") return mount(body, h("pre", {}, s.output || "(no output)"));
-      mount(body, h("p", { class: "muted", style: { padding: "0 12px" } }, "Loading transcript…"));
-      const t = await api.transcript(runId, i).catch((err) => ({ events: [{ kind: "raw", text: err.message }] }));
-      mount(body, transcriptView(t.events));
-    },
+    open: open || null,
+    onToggle: (e) => { if (e.target.open) load(); },
   },
     h("summary", {},
       h("span", { class: `pill ${s.ok ? "ok" : "fail"}` }, s.ok ? "✔" : "✘"),
@@ -208,22 +258,30 @@ export function renderRunDetail(main, runId, { admin = true } = {}) {
   let summary;
   let tab = "log";
   let follow = true;
+  let names = null;
+  let open = true;
   logEl.addEventListener("scroll", () => {
     follow = logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 20;
   });
 
-  const showTab = async (t) => {
+  // The reader picked a tab: the page does not move it any more (a failed run opens on Steps until then).
+  let picked = false;
+  const tabButtons = [];
+  const showTab = async (t, open = -1) => {
     tab = t;
-    document.querySelectorAll(".tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === t));
+    for (const [k, b] of tabButtons) b.setAttribute("class", k === t ? "on" : "");
     if (t === "log") return mount(tabBody, logEl);
-    if (t === "steps") return mount(tabBody, summary ? stepsView(runId, summary) : null);
+    if (t === "steps") return mount(tabBody, summary ? stepsView(runId, summary, open) : null);
     mount(tabBody, h("p", { class: "muted" }, "Computing diff…"));
     mount(tabBody, diffView(await api.diff(runId).catch((e) => ({ patch: "", stat: e.message }))));
   };
 
   const tabs = h("div", { class: "seg tabs", style: { marginBottom: "12px" } },
-    [["log", "Live log"], ["steps", admin ? "Steps & transcripts" : "Steps"], ["diff", "Changes"]].map(([k, l]) =>
-      h("button", { "data-tab": k, class: k === tab ? "on" : null, onClick: () => showTab(k) }, l)));
+    [["log", "Live log"], ["steps", admin ? "Steps & transcripts" : "Steps"], ["diff", "Changes"]].map(([k, l]) => {
+      const b = h("button", { "data-tab": k, class: k === tab ? "on" : null, onClick: () => { picked = true; showTab(k); } }, l);
+      tabButtons.push([k, b]);
+      return b;
+    }));
 
   mount(main, head, tabs, tabBody);
   mount(tabBody, logEl);
@@ -231,6 +289,8 @@ export function renderRunDetail(main, runId, { admin = true } = {}) {
   const draw = (s) => {
     const prev = summary;
     summary = s;
+    const failedIdx = s.status === "failed" ? failedStepIndex(s) : -1;
+    const card = s.status === "failed" ? failureCard(s, failedIdx >= 0 ? { onStep: () => { picked = true; showTab("steps", failedIdx); } } : {}) : null;
     mount(head,
       h("div", { class: "toolbar" },
         h("a", { href: "#/runs", class: "btn ghost" }, "←"),
@@ -241,20 +301,25 @@ export function renderRunDetail(main, runId, { admin = true } = {}) {
         h("span", { class: "spacer" }),
         ...actions(s),
         admin ? h("a", { class: "btn", href: `#/flows/${encodeURIComponent(s.flow)}` }, "Open flow") : null),
-      s.next ? nextBlock(s.next) : null,
+      card ?? (s.next ? nextBlock(s.next) : null),
       h("div", { class: "card", style: { marginBottom: "16px" } },
         s.task ? h("p", { style: { margin: 0, whiteSpace: "pre-wrap" } }, s.task) : null,
         s.questions ? h("pre", { class: "mono", style: { whiteSpace: "pre-wrap" } }, h("b", {}, "Questions"), "\n", s.questions) : null,
         h("dl", { class: "meta" },
           what(s) ? [h("dt", {}, "Ticket"), h("dd", {}, what(s))] : null,
           h("dt", {}, "Run"), h("dd", {}, s.runId),
+          admin ? ownerRow(s, names) : null,
           s.branch ? [h("dt", {}, "Branch"), h("dd", {}, s.branch)] : null,
           s.workdir ? [h("dt", {}, "Workspace"), h("dd", {}, s.workdir)] : null,
           versionRow(s),
           stepRow(s),
-          detailsRow(s))));
+          card ? null : detailsRow(s))));
+    // A failed run opens on its steps, once, unless the reader already chose a tab.
+    if (card && !picked && !(prev && prev.status === "failed" && prev.next?.failure)) return showTab("steps");
     if (tab === "steps" && (!prev || prev.history.length !== s.history.length)) showTab("steps");
   };
+
+  if (admin) api.users().then((list) => { names = ownerNames(list); if (open && summary) draw(summary); }).catch(() => {});
 
   const es = api.events(runId);
   es.addEventListener("update", (e) => {
@@ -268,5 +333,8 @@ export function renderRunDetail(main, runId, { admin = true } = {}) {
   es.onerror = () => {
     if (es.readyState === EventSource.CLOSED) toast("Lost connection to the run stream", "error");
   };
-  return () => es.close();
+  return () => {
+    open = false;
+    es.close();
+  };
 }

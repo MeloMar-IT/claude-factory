@@ -1,7 +1,7 @@
 import type { WatcherConfig } from "./config.js";
 import { explainError } from "./errors.js";
 import type { RunSummary } from "./engine/state.js";
-import { classifyFailure, type FailureCause } from "./failure.js";
+import { classifyFailure, failureSummary, type FailureCause, type FailureSummary } from "./failure.js";
 import { statusHelp, statusName } from "./words.js";
 
 /** Why something waits (or what it does now). One kind per waiting reason. */
@@ -10,7 +10,7 @@ export type NextKind =
   | "dependency" | "one_at_a_time" | "area_lock" | "usage_limit" | "daily_budget" | "release"
   | "failed" | "restart" | "watcher_error" | "watcher_stale" | "closed_elsewhere"
   | "running" | "queued" | "checking" | "starting" | "interrupted" | "cancelled" | "stopped" | "done"
-  | "superseded";
+  | "superseded" | "bug_first";
 
 export type NextWho = "You" | "Foundry" | "Another story" | "A time limit" | "Something is wrong";
 
@@ -45,6 +45,8 @@ export interface NextStep {
   blockers?: BlockerInfo[];
   /** Why a failed or interrupted run did not finish. */
   cause?: FailureCause;
+  /** A failed run explained: what, why, what was tried and the four options. */
+  failure?: FailureSummary;
 }
 
 /** How far a run is and how long it may take. Estimates come from earlier runs; see estimate.ts. */
@@ -116,6 +118,10 @@ export interface NextData {
   cause?: FailureCause;
   /** The record is for a user: no money, no setup, no agent, no command, no raw reason. */
   forUser?: boolean;
+  /** `usage_limit`: the AI service could not be reached. */
+  unreachable?: boolean;
+  /** `failed`: the explained failure (the card, the comment). */
+  failure?: FailureSummary;
   /** `failed`: what went wrong, and the suggested fix. */
   what?: string;
   fix?: string;
@@ -189,6 +195,7 @@ function blockerClause(b: BlockerInfo): string {
     case "running": return "which is being worked on";
     case "queued": case "one_at_a_time": case "starting": case "checking": return "which is queued";
     case "area_lock": return "which waits for a code area";
+    case "bug_first": return "which waits for a bug story";
     case "usage_limit": case "daily_budget": return "which is paused by a limit";
     case "release": return n.until ? `which waits for the ${n.until}` : "which waits for the release pull request";
     case "failed": return "which failed";
@@ -330,6 +337,13 @@ export function nextStep(kind: NextKind, base: NextBase = {}, d: NextData = {}):
       break;
     }
     case "usage_limit": {
+      if (d.unreachable) {
+        who = "Foundry";
+        why = "The AI service could not be reached";
+        until = limitRetry(d, LIMIT_RETRY_MS);
+        say = "nothing to do, it is tried again later";
+        break;
+      }
       if (/signed out/.test(d.reason ?? "") && d.forUser) {
         // Only the administrator can sign in again; the run is retried by itself.
         why = "The Foundry is signed out of its AI account";
@@ -344,7 +358,9 @@ export function nextStep(kind: NextKind, base: NextBase = {}, d: NextData = {}):
         who = "You";
         why = `${codex ? "Codex" : "Claude Code"} is signed out (its login has expired)`;
         until = limitRetry(d, LIMIT_RETRY_MS);
-        say = `sign in again: ${codex ? 'run "codex login"' : 'run "claude" in a terminal and type /login'}. It continues by itself after that`;
+        const login = codex ? 'run "codex login"' : 'run "claude" in a terminal and type /login';
+        action = `Sign in again: ${login}`;
+        say = `sign in again: ${login}. It continues by itself after that`;
         break;
       }
       who = "A time limit";
@@ -398,7 +414,7 @@ export function nextStep(kind: NextKind, base: NextBase = {}, d: NextData = {}):
         const what = clean(d.what) || clean(d.reason);
         why = `The Foundry failed, not the code${what ? `: ${what}` : ""}`;
       } else {
-        why = `${e.what}: ${e.why}`;
+        why = d.failure?.byModel ? `${e.what}: ${d.failure.why.replace(/[.!?]+$/, "")}` : `${e.what}: ${e.why}`;
         // A blocked command is only a hint for a code failure.
         const hint = d.forUser ? "" : [clean(d.what), clean(d.fix)].filter(Boolean).join(", ");
         if (hint) why += ` (${hint})`;
@@ -457,6 +473,10 @@ export function nextStep(kind: NextKind, base: NextBase = {}, d: NextData = {}):
       w = runWhere ?? WATCHERS;
       break;
     }
+    case "bug_first":
+      who = "Another story";
+      why = "It waits: a bug story goes first"; say = "nothing to do, it continues by itself";
+      break;
     case "running":
       why = "It is being worked on"; say = "nothing to do, it continues by itself";
       break;
@@ -497,7 +517,7 @@ export function nextStep(kind: NextKind, base: NextBase = {}, d: NextData = {}):
       break;
   }
 
-  const facts = { releaseAt: kind === "release" && !d.pr ? d.releaseAt : undefined, blockers: (d.blockers ?? []).map((b) => b.issue), factory: kind === "failed" && d.cause === "factory", user: d.forUser, limit };
+  const facts = { releaseAt: kind === "release" && !d.pr ? d.releaseAt : undefined, blockers: (d.blockers ?? []).map((b) => b.issue), factory: kind === "failed" && d.cause === "factory", user: d.forUser, limit, signedOut: kind === "usage_limit" && !d.unreachable && /signed out/.test(d.reason ?? ""), unreachable: kind === "usage_limit" && d.unreachable };
   return {
     kind, status: statusName(kind, facts), help: statusHelp(kind, facts), who, why, action, where: w, until,
     repo: base.repo ?? "", user: "", issue, title: base.title ?? "", runId: base.runId,
@@ -506,6 +526,7 @@ export function nextStep(kind: NextKind, base: NextBase = {}, d: NextData = {}):
     ...(kind === "area_lock" && d.areaWait ? { afterRun: d.areaWait.runId } : {}),
     ...(kind === "dependency" ? { blockers: d.blockers ?? [] } : {}),
     ...(d.cause ? { cause: d.cause } : {}),
+    ...(kind === "failed" && d.failure ? { failure: d.failure } : {}),
   };
 }
 
@@ -516,7 +537,8 @@ export function nextStep(kind: NextKind, base: NextBase = {}, d: NextData = {}):
 export function briefFailure(n: NextStep): NextStep {
   if (n.kind !== "failed" || n.cause !== "factory") return n;
   const why = "The Foundry failed, not the code";
-  return { ...n, why, title: "", text: sentence(why, lowerFirst(n.action).replace(/[.!?]+$/, "")) };
+  const { failure: _failure, ...rest } = n;
+  return { ...rest, why, title: "", text: sentence(why, lowerFirst(n.action).replace(/[.!?]+$/, "")) };
 }
 
 /** The reasons a flow asks for in a comment on the issue. */
@@ -549,7 +571,7 @@ export function firstLine(n: Pick<NextStep, "who" | "action" | "why">): string {
 export function commentFirst(kind: CommentKind): string { return firstLine(commentRecord(kind)); }
 
 /** Comments that report something (plan, result, split, daily report): the fixed first line of each. */
-export const REPORT_KINDS = ["info", "merge_pr", "open_pr", "start_coding", "ships", "look", "merge_release", "draft", "start_parts"] as const;
+export const REPORT_KINDS = ["info", "merge_pr", "open_pr", "start_coding", "ships", "look", "merge_release", "draft", "start_parts", "fixed", "merge_back"] as const;
 export type ReportKind = (typeof REPORT_KINDS)[number];
 
 const you = (action: string) => ({ who: "You" as const, action, why: "" });
@@ -564,6 +586,8 @@ const REPORTS: Record<ReportKind, Pick<NextStep, "who" | "action" | "why">> = {
   merge_release: you("Merge the release pull request when you like"),
   draft: foundry("It stays a draft until the checks pass"),
   start_parts: you("Start the new issues when you want them built"),
+  fixed: foundry("The fix is on main and in develop"),
+  merge_back: you("Merge main into develop, because the fix is not there yet"),
 };
 
 /** firstLine() of the fixed record of a report kind. */
@@ -589,7 +613,7 @@ function stoppedStep(reason: string | undefined): string | undefined {
 
 export interface RunNextOptions extends NextData {
   /** Pending-job info from Scheduler.queue(). */
-  queued?: { waitingFor?: string };
+  queued?: { waitingFor?: string; behindPriority?: boolean };
   title?: string;
 }
 
@@ -603,7 +627,7 @@ export function runNextStep(run: RunSummary, o: RunNextOptions = {}): NextStep {
   const make = (k: NextKind, extra: NextData = {}) => nextStep(k, base, { ...d, ...extra });
   const reason = run.reason ?? "";
 
-  if (o.queued) return o.queued.waitingFor ? make("one_at_a_time", { blockingRun: o.queued.waitingFor }) : make("queued");
+  if (o.queued) return o.queued.waitingFor ? make("one_at_a_time", { blockingRun: o.queued.waitingFor }) : make(o.queued.behindPriority ? "bug_first" : "queued");
   if (o.superseded && run.status !== "running" && run.status !== "succeeded") return make("superseded");
   switch (run.status) {
     case "succeeded": return o.releaseAt ? make("release") : make("done");
@@ -619,7 +643,7 @@ export function runNextStep(run: RunSummary, o: RunNextOptions = {}): NextStep {
     case "cancelled": return make("cancelled");
     case "stopped": {
       if (/daily budget/.test(reason)) return make("daily_budget");
-      if (/usage limit reached|signed out —/.test(reason)) return make("usage_limit");
+      if (/usage limit reached|signed out —/.test(reason)) return make("usage_limit", { unreachable: !/signed out —/.test(reason) && !!run.history?.at(-1)?.unreachable });
       if (/interrupted/.test(reason)) return make("interrupted");
       const step = stoppedStep(reason);
       if (step === "send_back" || step === "ask_for_info") return make("planner_questions", { questions: o.questions });
@@ -630,7 +654,9 @@ export function runNextStep(run: RunSummary, o: RunNextOptions = {}): NextStep {
     default: {
       const f = classifyFailure(run);
       if (/interrupted/.test(reason)) return make("interrupted", { cause: f.cause });
-      return make("failed", { ...f, canResume: o.canResume ?? (run.state ? run.state.next != null : undefined) });
+      const canResume = o.canResume ?? (run.state ? run.state.next != null : undefined);
+      const failure = failureSummary(run, { watched: o.watched, failedLabel: o.failedLabel, canResume, forUser: o.forUser });
+      return make("failed", { ...f, canResume, failure });
     }
   }
 }
@@ -688,7 +714,7 @@ const stepIs = (id: string | null | undefined, ids: string[]) => !!id && ids.inc
  */
 export function runClosedIssue(run: RunSummary | undefined): boolean {
   if (!run) return false;
-  if ((run.history ?? []).some((x) => x.ok && (stepIs(x.id, ["merge", "create_split"]) || (stepIs(x.id, ["report"]) && /closed #\d+/.test(x.output ?? ""))))) return true;
+  if ((run.history ?? []).some((x) => x.ok && (stepIs(x.id, ["merge", "create_split"]) || (stepIs(x.id, ["report"]) && /closed #\d+/.test(x.output ?? "")) || (stepIs(x.id, ["push_main"]) && /^PUSHED:/m.test(x.output ?? ""))))) return true;
   const next = run.state?.next;
   if (stepIs(next, ["merge", "create_split"])) return true;
   if (stepIs(next, ["report"])) {
