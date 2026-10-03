@@ -22,7 +22,7 @@ describe("comment sentences", () => {
   it("has exactly the FACTORY_NEXT_ and FACTORY_FIRST_ variables, equal to the record", () => {
     const env = nextStepEnv();
     expect(Object.keys(env).sort()).toEqual([
-      "FACTORY_FIRST_APPROVAL", "FACTORY_FIRST_APPROVE_PLAN", "FACTORY_FIRST_APPROVE_SPLIT", "FACTORY_FIRST_DRAFT", "FACTORY_FIRST_INFO", "FACTORY_FIRST_LOOK",
+      "FACTORY_FIRST_APPROVAL", "FACTORY_FIRST_APPROVE_PLAN", "FACTORY_FIRST_APPROVE_SPLIT", "FACTORY_FIRST_DRAFT", "FACTORY_FIRST_FIXED", "FACTORY_FIRST_INFO", "FACTORY_FIRST_LOOK", "FACTORY_FIRST_MERGE_BACK",
       "FACTORY_FIRST_MERGE_PR", "FACTORY_FIRST_MERGE_RELEASE", "FACTORY_FIRST_NOTHING", "FACTORY_FIRST_OPEN_PR", "FACTORY_FIRST_PLANNER_QUESTIONS", "FACTORY_FIRST_QUESTIONS",
       "FACTORY_FIRST_SHIPS", "FACTORY_FIRST_START_CODING", "FACTORY_FIRST_START_PARTS",
       "FACTORY_NEXT_APPROVAL", "FACTORY_NEXT_APPROVE_PLAN", "FACTORY_NEXT_APPROVE_SPLIT", "FACTORY_NEXT_PLANNER_QUESTIONS", "FACTORY_NEXT_QUESTIONS",
@@ -59,6 +59,8 @@ describe("comment sentences", () => {
     ["merge_release", "**What you need to do:** Merge the release pull request when you like."],
     ["draft", "**Nothing needed from you** — it stays a draft until the checks pass."],
     ["start_parts", "**What you need to do:** Start the new issues when you want them built."],
+    ["fixed", "**Nothing needed from you** — the fix is on main and in develop."],
+    ["merge_back", "**What you need to do:** Merge main into develop, because the fix is not there yet."],
   ] as const)("words the report first line %s", (kind, text) => {
     expect(reportFirst(kind)).toBe(text);
   });
@@ -103,12 +105,14 @@ describe("runClosedIssue", () => {
     expect(runClosedIssue(run({ history: [step("report", true, "x\nclosed #12")] }))).toBe(true);
     expect(runClosedIssue(run({ history: [step("build/merge")] }))).toBe(true);
     expect(runClosedIssue(run({ history: [step("create_split")] }))).toBe(true);
+    expect(runClosedIssue(run({ history: [step("push_main", true, "PUSHED: main abc")] }))).toBe(true);
     expect(runClosedIssue(run({ state: { next: "create_split", steps: {}, visits: {} } }))).toBe(true);
     expect(runClosedIssue(run({ flowDef: flowDef("gh issue close 12"), state: { next: "report", steps: {}, visits: {} } }))).toBe(true);
   });
   it("is false otherwise", () => {
     expect(runClosedIssue(run({ history: [step("report", true, "commented")] }))).toBe(false);
     expect(runClosedIssue(run({ history: [step("report", false, "closed #12")] }))).toBe(false);
+    expect(runClosedIssue(run({ history: [step("push_main", true, "main moved meanwhile\nMOVED")] }))).toBe(false);
     expect(runClosedIssue(run({ flowDef: flowDef("gh issue comment 12"), state: { next: "report", steps: {}, visits: {} } }))).toBe(false);
     expect(runClosedIssue(run({ history: [step("plan")] }))).toBe(false);
     expect(runClosedIssue(undefined)).toBe(false);

@@ -5,6 +5,7 @@ import type { Flow, Step } from "../flow/schema.js";
 import { runAgentStep } from "../agents/run.js";
 import type { Target } from "../agents/targets.js";
 import { runShell } from "../steps/shell.js";
+import { grantPush, pushAllowEnv } from "./guards.js";
 import type { RunSummary, StepRecord } from "./state.js";
 import { outputEnvName, render, varEnvName, withScfAliases, type TemplateContext } from "./template.js";
 
@@ -43,6 +44,8 @@ export interface Engine {
   summary: RunSummary;
   config: Config;
   baseEnv: Record<string, string>;
+  /** Whether this run may take the hotfix path (see hotfixState); "off" when unset. */
+  hotfix?: "on" | "off" | "other";
   logsDir: string;
   claudeBin?: string;
   codexBin?: string;
@@ -66,8 +69,11 @@ export interface ApprovalDecision {
 
 export type StepResult = Pick<StepRecord, "ok" | "output" | "error" | "exitCode" | "sessionId" | "costUsd" | "agent" | "tokens" | "limited" | "denied" | "unreachable" | "retried">;
 
-export function stepEnv(scope: Scope, engine: Engine): Record<string, string> {
-  const env: Record<string, string> = { ...engine.baseEnv };
+export function stepEnv(scope: Scope, engine: Engine, step?: Pick<Step, "id">): Record<string, string> {
+  const hotfix = engine.hotfix ?? "off";
+  // Never inherited from the server's own environment: only pushAllowEnv() can set it, for one step.
+  const env: Record<string, string> = { ...engine.baseEnv, FACTORY_HOTFIX: hotfix, FACTORY_PUSH_ALLOW: "" };
+  if (step) Object.assign(env, pushAllowEnv(step, scope.depth, scope.ctx.vars, hotfix));
   for (const [k, v] of Object.entries(scope.ctx.vars)) env[varEnvName(k)] = v;
   for (const [id, s] of Object.entries(scope.ctx.steps)) env[outputEnvName(id)] = String(s.output ?? "");
   return withScfAliases(env);
@@ -133,16 +139,24 @@ export async function executeStep(step: Step, scope: Scope, engine: Engine, logF
     case "shell": {
       const image = scope.flow.sandbox.docker_image ?? engine.config.sandbox.docker_image;
       if (step.sandbox && !image) engine.log(`    ⚠ ${step.id}: not sandboxed (no sandbox.docker_image configured)`);
-      const r = await runShell({
-        command: render(step.run, ctx, SHELL_TEMPLATE_ROOTS),
-        cwd: engine.summary.workdir!,
-        env: stepEnv(scope, engine),
-        logFile,
-        timeoutMs,
-        signal: engine.signal,
-        dockerImage: step.sandbox ? image : undefined,
-      });
-      return { ok: r.ok, output: r.output, error: r.error, exitCode: r.exitCode };
+      const env = stepEnv(scope, engine, step);
+      // The push exception is a one-time token that only this step gets (see grantPush), not a plain name.
+      const grant = env.FACTORY_PUSH_ALLOW ? grantPush(env.FACTORY_PUSH_ALLOW) : undefined;
+      if (grant) Object.assign(env, grant.env);
+      try {
+        const r = await runShell({
+          command: render(step.run, ctx, SHELL_TEMPLATE_ROOTS),
+          cwd: engine.summary.workdir!,
+          env,
+          logFile,
+          timeoutMs,
+          signal: engine.signal,
+          dockerImage: step.sandbox ? image : undefined,
+        });
+        return { ok: r.ok, output: r.output, error: r.error, exitCode: r.exitCode };
+      } finally {
+        grant?.revoke();
+      }
     }
 
     case "parallel": {

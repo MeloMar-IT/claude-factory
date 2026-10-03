@@ -564,7 +564,7 @@ export function firstLine(n: Pick<NextStep, "who" | "action" | "why">): string {
 export function commentFirst(kind: CommentKind): string { return firstLine(commentRecord(kind)); }
 
 /** Comments that report something (plan, result, split, daily report): the fixed first line of each. */
-export const REPORT_KINDS = ["info", "merge_pr", "open_pr", "start_coding", "ships", "look", "merge_release", "draft", "start_parts"] as const;
+export const REPORT_KINDS = ["info", "merge_pr", "open_pr", "start_coding", "ships", "look", "merge_release", "draft", "start_parts", "fixed", "merge_back"] as const;
 export type ReportKind = (typeof REPORT_KINDS)[number];
 
 const you = (action: string) => ({ who: "You" as const, action, why: "" });
@@ -579,6 +579,8 @@ const REPORTS: Record<ReportKind, Pick<NextStep, "who" | "action" | "why">> = {
   merge_release: you("Merge the release pull request when you like"),
   draft: foundry("It stays a draft until the checks pass"),
   start_parts: you("Start the new issues when you want them built"),
+  fixed: foundry("The fix is on main and in develop"),
+  merge_back: you("Merge main into develop, because the fix is not there yet"),
 };
 
 /** firstLine() of the fixed record of a report kind. */
@@ -705,7 +707,7 @@ const stepIs = (id: string | null | undefined, ids: string[]) => !!id && ids.inc
  */
 export function runClosedIssue(run: RunSummary | undefined): boolean {
   if (!run) return false;
-  if ((run.history ?? []).some((x) => x.ok && (stepIs(x.id, ["merge", "create_split"]) || (stepIs(x.id, ["report"]) && /closed #\d+/.test(x.output ?? ""))))) return true;
+  if ((run.history ?? []).some((x) => x.ok && (stepIs(x.id, ["merge", "create_split"]) || (stepIs(x.id, ["report"]) && /closed #\d+/.test(x.output ?? "")) || (stepIs(x.id, ["push_main"]) && /^PUSHED:/m.test(x.output ?? ""))))) return true;
   const next = run.state?.next;
   if (stepIs(next, ["merge", "create_split"])) return true;
   if (stepIs(next, ["report"])) {

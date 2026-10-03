@@ -23,7 +23,7 @@ import {
 } from "./execute.js";
 import { fallbackTargets } from "../agents/targets.js";
 import { explainFailure } from "../failure-explain.js";
-import { identityEnv, protectedBranchEnv, TOOLS_DIR } from "./guards.js";
+import { hotfixState, identityEnv, protectedBranchEnv, selfEnv, TOOLS_DIR } from "./guards.js";
 import { appendLiveLog, loadRun, saveRun, spentToday, type RunStatus, type RunSummary } from "./state.js";
 import { render } from "./template.js";
 import { prepareWorkspace } from "./workspace.js";
@@ -197,6 +197,7 @@ async function drive(
       FACTORY_BASE_SHA: summary.baseSha ?? "",
       ...nextStepEnv(),
       ...protectedBranchEnv(config.protected_branches, config.secret_scan),
+      ...selfEnv(),
       ...(await identityEnv(config)),
     };
   } catch (e) {
@@ -209,6 +210,7 @@ async function drive(
     summary,
     config,
     baseEnv,
+    hotfix: hotfixState(summary.flowDef, config),
     logsDir: join(summary.runDir, "logs"),
     claudeBin: opts.claudeBin,
     codexBin: opts.codexBin,

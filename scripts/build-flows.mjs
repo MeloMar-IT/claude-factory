@@ -1071,6 +1071,24 @@ write("issue-plan", {
       'fi',
       '# (another run may have created it at the same moment — either way it must exist now)',
       'git fetch -q origin && git rev-parse -q --verify "origin/$dev" >/dev/null || { echo "there is no $dev branch and it could not be created"; exit 1; }',
+      '# Hotfix path: an issue with one of the hotfix labels is built on a hotfix branch from main (see hotfix_branch).',
+      'rm -f "{{run.dir}}/hotfix" "{{run.dir}}/hotfix-note" "{{run.dir}}/hotfix-branch"',
+      'match=""',
+      'if [ -n "$FACTORY_VAR_HOTFIX_LABELS" ]; then',
+      '  if labels=$(gh issue view "$FACTORY_VAR_ISSUE" --repo "$FACTORY_VAR_GITHUB_REPO" --json labels --jq \'.labels[].name\' 2>/dev/null); then',
+      '    oldifs=$IFS; IFS=,; for l in $FACTORY_VAR_HOTFIX_LABELS; do',
+      '      l=$(printf \'%s\' "$l" | sed \'s/^ *//; s/ *$//\'); if [ -n "$l" ] && printf \'%s\\n\' "$labels" | grep -qixF "$l"; then match="$l"; break; fi',
+      '    done; IFS=$oldifs',
+      '  elif [ "$FACTORY_HOTFIX" = on ]; then echo "could not read the labels of issue #$FACTORY_VAR_ISSUE, so it is not clear whether this is a hotfix — not starting"; exit 1; fi',
+      'fi',
+      'if [ -n "$match" ]; then',
+      '  case "$FACTORY_HOTFIX" in',
+      '    on) for f in $FACTORY_VAR_UNION_MERGE_FILES; do echo "$f merge=union" >> .git/info/attributes; done',
+      '        touch "{{run.dir}}/hotfix"; echo "HOTFIX: yes (label $match)"; exit 0 ;;',
+      '    off) printf \'%s\\n\' "ℹ This issue has the \\`$match\\` label, but hotfixes to \\`$main\\` are switched off (Settings → Safety), so it was built as a feature." > "{{run.dir}}/hotfix-note" ;;',
+      '    *) printf \'%s\\n\' "ℹ This issue has the \\`$match\\` label, but the flow is a changed copy of issue-gitflow, and only the unchanged one may push to \\`$main\\`, so it was built as a feature." > "{{run.dir}}/hotfix-note" ;;',
+      '  esac',
+      'fi',
       '# Keep develop up to date with main (merged pull requests from elsewhere, hotfixes).',
       'if [ "$(git rev-list --count "origin/$dev..origin/$main")" -gt 0 ]; then',
       '  "$FACTORY_TOOLS/area-lock" acquire "$FACTORY_RUN_ID" "{{run.dir}}" @develop --wait-sec 3600 >/dev/null || exit 1',
@@ -1091,6 +1109,240 @@ write("issue-plan", {
       '[ "$(git branch --show-current)" = "$b" ] || { echo "not on $b"; exit 1; }',
       'git log --oneline -1',
     ].join("\n"),
+    routes: [{ if: "^HOTFIX: yes", goto: "baseline_main" }],
+  };
+  // ── Hotfix path: a hotfix/<issue>-<title> branch from main, merged into main and then into develop ──
+  // Every hotfix step first checks that this run is a hotfix and that the engine allows it (FACTORY_HOTFIX=on).
+  const HOT_ONLY = [
+    '[ -f "{{run.dir}}/hotfix" ] || { echo "this run is not a hotfix — nothing is merged into $FACTORY_VAR_MAIN_BRANCH"; exit 1; }',
+    '[ "$FACTORY_HOTFIX" = on ] || { echo "hotfixes to $FACTORY_VAR_MAIN_BRANCH are not allowed for this run (the setting is off, or the flow is a changed copy) — nothing was pushed"; exit 1; }',
+  ].join("\n");
+  const baselineMain = {
+    ...byId("baseline_tests"),
+    id: "baseline_main",
+    jump_only: true,
+    description: "Hotfix: the tests must pass on the newest main before we change anything",
+    // The commit that is tested here is the one the hotfix branch starts from (see hotfix_branch).
+    run: 'git fetch -q origin && git checkout -q -B "$FACTORY_VAR_MAIN_BRANCH" "origin/$FACTORY_VAR_MAIN_BRANCH" || { echo "cannot switch to $FACTORY_VAR_MAIN_BRANCH"; exit 1; }\n' +
+      'rm -f "{{run.dir}}/baseline-sha"; git rev-parse HEAD > "{{run.dir}}/baseline-sha.new"\n' +
+      testsRunRetry.replace('exit "$code"', 'if [ "$code" -eq 0 ]; then mv "{{run.dir}}/baseline-sha.new" "{{run.dir}}/baseline-sha"; fi\nexit "$code"'),
+    on_success: "hotfix_branch",
+    on_failure: "baseline_failed",
+  };
+  const hotfixBranch = {
+    id: "hotfix_branch",
+    type: "shell",
+    jump_only: true,
+    description: "Start (or continue) this issue's hotfix branch from the newest main",
+    run: [
+      'main="$FACTORY_VAR_MAIN_BRANCH"',
+      '# Start from the commit the baseline tests passed on (main may have moved since; merge_main brings it in).',
+      'base=$(cat "{{run.dir}}/baseline-sha" 2>/dev/null) || { echo "the tests did not pass on $main before the change (no tested commit)"; exit 1; }',
+      'git fetch -q origin && git cat-file -e "$base^{commit}" || { echo "cannot find the tested commit $base"; exit 1; }',
+      'title=$(gh issue view "$FACTORY_VAR_ISSUE" --repo "$FACTORY_VAR_GITHUB_REPO" --json title -q .title 2>/dev/null)',
+      'slug=$(printf \'%s\' "$title" | tr \'[:upper:]\' \'[:lower:]\' | sed \'s/[^a-z0-9]\\{1,\\}/-/g; s/^-//; s/-$//\' | cut -c1-40 | sed \'s/-$//\')',
+      'b="$FACTORY_VAR_HOTFIX_PREFIX$FACTORY_VAR_ISSUE${slug:+-$slug}"',
+      'if git ls-remote --exit-code --heads origin "$b" >/dev/null 2>&1; then',
+      '  git checkout -q -B "$b" "origin/$b" && git merge -q --no-edit "$base" >/dev/null || { echo "could not update $b with $main"; exit 1; }',
+      '  echo "BRANCH: $b (continuing, up to date with $main)"',
+      'else git checkout -q -B "$b" "$base" || exit 1; echo "BRANCH: $b (new, from $main)"; fi',
+      '[ "$(git branch --show-current)" = "$b" ] || { echo "not on $b"; exit 1; }',
+      'echo "$b" > "{{run.dir}}/hotfix-branch"',
+      'git log --oneline -1',
+    ].join("\n"),
+    on_success: "plan",
+  };
+  const mergeMain = {
+    id: "merge_main",
+    type: "shell",
+    jump_only: true,
+    max_visits: 4,
+    timeout_sec: 7200,
+    description: "Hotfix: merge the hotfix branch into the newest main (no fast-forward); nothing is pushed yet",
+    run: [
+      HOT_ONLY,
+      'main="$FACTORY_VAR_MAIN_BRANCH"; h=$(cat "{{run.dir}}/hotfix-branch")',
+      'git merge --abort >/dev/null 2>&1 || true',
+      'if [ "$(git rev-parse --abbrev-ref HEAD)" = "$h" ] && [ -n "$(git status --porcelain)" ]; then',
+      '  git add -A && git commit -q -m "Resolve #$FACTORY_VAR_ISSUE: remaining changes" && git push -q origin "$h" && echo "committed and pushed changes left on $h"',
+      'fi',
+      'git fetch -q origin || { echo "cannot fetch from GitHub"; exit 2; }',
+      'git rev-parse "origin/$main" > "{{run.dir}}/main-before"',
+      'rm -f "{{run.dir}}/main-tested" "{{run.dir}}/main-sha"',
+      'git checkout -q -B "$main" "origin/$main" || { echo "cannot switch to $main (see above)"; exit 2; }',
+      'title=$(gh issue view "$FACTORY_VAR_ISSUE" --repo "$FACTORY_VAR_GITHUB_REPO" --json title -q .title 2>/dev/null)',
+      'if git merge --no-ff --no-edit -m "Merge #$FACTORY_VAR_ISSUE: $title ($h)" "$h" >/dev/null 2>&1; then echo "MERGED: $h into $main"; exit 0; fi',
+      'if [ -z "$(git diff --name-only --diff-filter=U)" ]; then echo "the merge failed without conflicts:"; git status --short | head -20',
+      'else echo "The fix on $h changed in the same places as $main did meanwhile:"; git diff --name-only --diff-filter=U; fi',
+      'git merge --abort >/dev/null 2>&1',
+      'echo "Nothing was pushed to $main. The branch $h is kept: delete it and start this issue again."; exit 1',
+    ].join("\n"),
+    on_success: "test_main",
+  };
+  const testMain = {
+    id: "test_main",
+    type: "shell",
+    jump_only: true,
+    timeout_sec: 3600,
+    description: "Hotfix: the merge result on main must pass the tests before it is pushed",
+    run: [
+      HOT_ONLY,
+      '[ "$(git branch --show-current)" = "$FACTORY_VAR_MAIN_BRANCH" ] || { echo "not on $FACTORY_VAR_MAIN_BRANCH"; exit 1; }',
+      'rm -f "{{run.dir}}/main-tested"; tested=$(git rev-parse HEAD)',
+      testsRunRetry.replace('exit "$code"', 'if [ "$code" -eq 0 ]; then printf \'%s\\n\' "$tested" > "{{run.dir}}/main-tested"; fi\nexit "$code"'),
+    ].join("\n"),
+    on_success: "push_main",
+    on_failure: "red_main",
+  };
+  const redMain = {
+    id: "red_main",
+    type: "shell",
+    jump_only: true,
+    run: [
+      'tail -40 "{{run.dir}}/tests.log"',
+      'echo "The tests fail on $FACTORY_VAR_MAIN_BRANCH with the fix merged in. Nothing was pushed to $FACTORY_VAR_MAIN_BRANCH."',
+      'echo "The hotfix branch is kept. Fix the problem on it, or remove the hotfix label and build this issue as a feature."; exit 1',
+    ].join("\n"),
+  };
+  const pushMain = {
+    id: "push_main",
+    type: "shell",
+    jump_only: true,
+    description: "Hotfix: push main (the only step that may); if main moved meanwhile, merge and test again",
+    run: [
+      HOT_ONLY,
+      'main="$FACTORY_VAR_MAIN_BRANCH"',
+      '[ "$(git branch --show-current)" = "$main" ] || { echo "not on $main — nothing was pushed"; exit 1; }',
+      'tested=$(cat "{{run.dir}}/main-tested" 2>/dev/null) || { echo "the merge result on $main did not pass the tests (or was not tested) — nothing was pushed to $main"; exit 1; }',
+      '[ "$tested" = "$(git rev-parse HEAD)" ] || { echo "$main is not the commit that was tested — nothing was pushed to $main"; exit 1; }',
+      '# If main moved meanwhile, merge again (the secret scan of the push could not even look at a main we do not have).',
+      'git fetch -q origin "$main" 2>/dev/null; if ! git merge-base --is-ancestor "origin/$main" HEAD; then echo "$main moved meanwhile — merging again"; echo "MOVED"; exit 0; fi',
+      'out=$(git push origin "$main" 2>&1); code=$?; printf \'%s\\n\' "$out"',
+      'if [ "$code" -eq 0 ]; then',
+      '  git rev-parse HEAD > "{{run.dir}}/main-sha"; echo "PUSHED: $main $(git rev-parse --short HEAD)"',
+      '  # The fix is on main: the issue is done now, it does not wait for the daily release.',
+      '  if [ "$FACTORY_VAR_CLOSE_WHEN_MERGED" != no ] && gh issue close "$FACTORY_VAR_ISSUE" --repo "$FACTORY_VAR_GITHUB_REPO" --reason completed >/dev/null 2>&1; then echo "closed #$FACTORY_VAR_ISSUE"; fi',
+      '  exit 0',
+      'fi',
+      'if printf \'%s\\n\' "$out" | grep -qE "GH006|GH013|Protected branch update failed|through a pull request"; then',
+      '  echo "$main on GitHub only accepts pull requests — allow direct pushes for the Foundry\'s account, or remove the hotfix label ($FACTORY_VAR_HOTFIX_LABELS) to build it as a feature. Nothing was pushed to $main."; exit 1',
+      'fi',
+      'if printf \'%s\\n\' "$out" | grep -qE "\\[rejected\\]|fetch first|non-fast-forward|Invalid revision range"; then echo "$main moved meanwhile — merging again"; echo "MOVED"; exit 0; fi',
+      'echo "pushing $main failed (see above) — nothing was pushed to $main"; exit 1',
+    ].join("\n"),
+    routes: [{ if: "^MOVED\\s*$", goto: "merge_main" }],
+    on_success: "merge_back",
+  };
+  // Then main goes into develop, with the conflict handling and tests develop always has. If that fails,
+  // the fix is still on main: the run goes on (hotfix_done) and the report says so.
+  const mergeBack = {
+    id: "merge_back",
+    type: "shell",
+    jump_only: true,
+    max_visits: 4,
+    timeout_sec: 7200,
+    description: "Hotfix: merge main into develop (one merge at a time); conflicts go to an agent",
+    run: [
+      HOT_ONLY,
+      'dev="$FACTORY_VAR_DEVELOP_BRANCH"; main="$FACTORY_VAR_MAIN_BRANCH"',
+      'behind() { echo "$1" > "{{run.dir}}/develop-behind"; echo "DEVELOP_BEHIND: $1"; exit 0; }',
+      'rm -f "{{run.dir}}/develop-behind" "{{run.dir}}/back-red" "{{run.dir}}/back-unresolved"',
+      '"$FACTORY_TOOLS/area-lock" acquire "$FACTORY_RUN_ID" "{{run.dir}}" @develop --wait-sec 7000 >/dev/null || behind "$dev stayed locked too long"',
+      'git merge --abort >/dev/null 2>&1 || true',
+      'git fetch -q origin || behind "cannot fetch from GitHub"',
+      'git rev-parse -q --verify "origin/$dev" >/dev/null || behind "there is no $dev branch"',
+      'git checkout -q -B "$dev" "origin/$dev" || behind "cannot switch to $dev"',
+      'git rev-parse HEAD > "{{run.dir}}/develop-before"',
+      'if git merge-base --is-ancestor "origin/$main" HEAD; then echo "UP_TO_DATE: $dev already has $main"; exit 0; fi',
+      'if git merge --no-edit -m "Merge $main into $dev (hotfix #$FACTORY_VAR_ISSUE)" "origin/$main" >/dev/null 2>&1; then echo "MERGED: $main into $dev"; exit 0; fi',
+      '[ -n "$(git diff --name-only --diff-filter=U)" ] || behind "the merge of $main into $dev failed without conflicts"',
+      'echo "CONFLICTS merging $main into $dev:"; git diff --name-only --diff-filter=U; echo "CONFLICTS"; exit 0',
+    ].join("\n"),
+    routes: [
+      { if: "^CONFLICTS\\s*$", goto: "resolve_back" },
+      { if: "^UP_TO_DATE:", goto: "hotfix_done" },
+      { if: "^DEVELOP_BEHIND:", goto: "hotfix_done" },
+    ],
+    on_success: "test_back",
+  };
+  const finishBack = {
+    id: "finish_back",
+    type: "shell",
+    jump_only: true,
+    run: [
+      // The first failure goes back to the agent; the second gives up: develop stays without the fix.
+      'fail() { echo "$1"; n=$(($(cat "{{run.dir}}/back-unresolved" 2>/dev/null || echo 0) + 1)); echo "$n" > "{{run.dir}}/back-unresolved"; [ "$n" -le 1 ] && exit 1',
+      '  git merge --abort >/dev/null 2>&1; echo "the conflicts could not be resolved" > "{{run.dir}}/develop-behind"; echo "DEVELOP_BEHIND: the conflicts could not be resolved"; exit 0; }',
+      'left=$(git diff --name-only --diff-filter=U); [ -z "$left" ] || fail "still unresolved: $left"',
+      'markers=""; for f in $(git diff --cached --name-only); do [ -f "$f" ] && grep -qE "^(<<<<<<< |>>>>>>> )" "$f" && markers="$markers $f"; done',
+      '[ -z "$markers" ] || fail "conflict markers left in:$markers"',
+      'if git commit -q --no-edit; then echo "merge committed after resolving conflicts"; else fail "the merge could not be committed"; fi',
+    ].join("\n"),
+    routes: [{ if: "^DEVELOP_BEHIND:", goto: "hotfix_done" }],
+    on_success: "test_back",
+    on_failure: "resolve_back",
+  };
+  const testBack = {
+    id: "test_back",
+    type: "shell",
+    jump_only: true,
+    timeout_sec: 3600,
+    description: "Hotfix: develop with main merged in must pass the tests before it is pushed",
+    run: testsRunRetry,
+    on_success: "push_back",
+    on_failure: "red_back",
+  };
+  const redBack = {
+    id: "red_back",
+    type: "shell",
+    jump_only: true,
+    run: [
+      'dev="$FACTORY_VAR_DEVELOP_BRANCH"; main="$FACTORY_VAR_MAIN_BRANCH"',
+      'n=$(($(cat "{{run.dir}}/back-red" 2>/dev/null || echo 0) + 1)); echo "$n" > "{{run.dir}}/back-red"',
+      'if [ "$n" -le 2 ]; then echo "the tests fail on the merge result — fix attempt $n of 2"; exit 0; fi',
+      'why="the tests still fail on $dev with $main merged in, after 2 fix attempts"; echo "$why" > "{{run.dir}}/develop-behind"; echo "DEVELOP_BEHIND: $why"; exit 0',
+    ].join("\n"),
+    routes: [{ if: "^DEVELOP_BEHIND:", goto: "hotfix_done" }],
+    on_success: "fix_back",
+  };
+  const pushBack = {
+    id: "push_back",
+    type: "shell",
+    jump_only: true,
+    description: "Hotfix: push develop; if it moved meanwhile, merge again",
+    run: [
+      'dev="$FACTORY_VAR_DEVELOP_BRANCH"',
+      'behind() { echo "$1" > "{{run.dir}}/develop-behind"; echo "DEVELOP_BEHIND: $1"; exit 0; }',
+      'out=$(git push origin "$dev" 2>&1); code=$?; printf \'%s\\n\' "$out"',
+      'if [ "$code" -eq 0 ]; then echo "PUSHED: $dev $(git rev-parse --short HEAD)"; exit 0; fi',
+      'if printf \'%s\\n\' "$out" | grep -qE "rejected|fetch first|non-fast-forward|Invalid revision range"; then echo "$dev moved meanwhile — merging again"; echo "MOVED"; exit 0; fi',
+      'behind "pushing $dev failed (see above)"',
+    ].join("\n"),
+    routes: [{ if: "^MOVED\\s*$", goto: "merge_back" }, { if: "^DEVELOP_BEHIND:", goto: "hotfix_done" }],
+    on_success: "hotfix_done",
+  };
+  const hotfixDone = {
+    id: "hotfix_done",
+    type: "shell",
+    jump_only: true,
+    description: "Hotfix: free the locks, delete the merged branch, check whether the running Foundry has the fix",
+    run: [
+      'main="$FACTORY_VAR_MAIN_BRANCH"; dev="$FACTORY_VAR_DEVELOP_BRANCH"; h=$(cat "{{run.dir}}/hotfix-branch"); sha=$(cat "{{run.dir}}/main-sha" 2>/dev/null) || { echo "the fix is not on $main in this run"; exit 1; }',
+      'git merge --abort >/dev/null 2>&1; "$FACTORY_TOOLS/area-lock" release "$FACTORY_RUN_ID" >/dev/null',
+      'git fetch -q origin 2>/dev/null; echo "MAIN: $sha"',
+      'if git merge-base --is-ancestor "$sha" "origin/$dev" 2>/dev/null; then echo "DEVELOP: merged"',
+      '  if [ "$FACTORY_VAR_DELETE_MERGED_BRANCHES" != no ] && git ls-remote --exit-code --heads origin "$h" >/dev/null 2>&1; then',
+      '    # Only delete what was merged: someone may have added commits to the branch after the merge.',
+      '    tip=$(git rev-parse "origin/$h" 2>/dev/null)',
+      '    if [ -z "$tip" ] || ! git merge-base --is-ancestor "$tip" "origin/$dev" 2>/dev/null; then echo "BRANCH: kept — unmerged commits on $h"',
+      '    elif git push -q --force-with-lease="refs/heads/$h:$tip" origin ":refs/heads/$h" 2>/dev/null; then echo "deleted the merged branch $h"; else echo "BRANCH: kept — $h could not be deleted"; fi; fi',
+      'else why=$(cat "{{run.dir}}/develop-behind" 2>/dev/null); echo "DEVELOP: behind — ${why:-the merge into $dev did not finish (see this run)}"; fi',
+      'if [ -n "$FACTORY_SELF_REPO" ] && [ "$FACTORY_SELF_REPO" = "$(printf \'%s\' "$FACTORY_VAR_GITHUB_REPO" | tr \'[:upper:]\' \'[:lower:]\')" ]; then',
+      '  if ! git cat-file -e "$FACTORY_SELF_SHA^{commit}" 2>/dev/null; then echo "FOUNDRY: unknown"',
+      '  elif git merge-base --is-ancestor "$sha" "$FACTORY_SELF_SHA" 2>/dev/null; then echo "FOUNDRY: has the fix"; else echo "FOUNDRY: not yet"; fi; fi',
+      'exit 0',
+    ].join("\n"),
+    on_success: "report",
   };
   const claimAreas = {
     id: "claim_areas",
@@ -1124,9 +1376,16 @@ write("issue-plan", {
     type: "shell",
     run: [
       'b=$(git branch --show-current)',
-      'case "$b" in "$FACTORY_VAR_FEATURE_PREFIX"*) ;; *) echo "refusing to push $b: not a feature branch"; exit 1;; esac',
-      'git push -q -u origin HEAD && echo "pushed $b"',
+      'if [ -f "{{run.dir}}/hotfix" ]; then',
+      '  case "$b" in "$FACTORY_VAR_HOTFIX_PREFIX"*) ;; *) echo "refusing to push $b: not a hotfix branch"; exit 1;; esac',
+      'else',
+      '  case "$b" in "$FACTORY_VAR_FEATURE_PREFIX"*) ;; *) echo "refusing to push $b: not a feature branch"; exit 1;; esac',
+      'fi',
+      'git push -q -u origin HEAD && echo "pushed $b" || exit 1',
+      '[ -f "{{run.dir}}/hotfix" ] && echo "HOTFIX: yes"; exit 0',
     ].join("\n"),
+    // A hotfix goes on to main; a feature (no HOTFIX line) to develop.
+    routes: [{ if: "^HOTFIX: yes\\s*$", goto: "merge_main" }],
   };
   const mergeDevelop = {
     id: "merge_develop",
@@ -1219,6 +1478,17 @@ write("issue-plan", {
     run: 'git add -A; if git diff --cached --quiet; then echo "the fix changed nothing — testing again"; else git commit -q -m "Fix #$FACTORY_VAR_ISSUE after merging into develop" && git log --oneline -1; fi',
     on_success: "test_develop",
   };
+  // The hotfix path's copies of the develop merge steps (same prompts, wired to merge_back / test_back).
+  const resolveBack = structuredClone(resolveConflicts);
+  Object.assign(resolveBack, { id: "resolve_back", on_success: "finish_back" });
+  resolveBack.prompt = swap(resolveBack.prompt, "{{steps.merge_develop.output}}", "{{steps.merge_back.output}}");
+  resolveBack.prompt = swap(resolveBack.prompt, "The merge has conflicts", "This was a hotfix: it is already on main, and main is now merged into develop. The merge has conflicts");
+  const fixBack = structuredClone(fixDevelop);
+  Object.assign(fixBack, { id: "fix_back", on_success: "commit_back_fix" });
+  fixBack.prompt = swap(fixBack.prompt, "{{steps.test_develop.output}}", "{{steps.test_back.output}}");
+  const commitBackFix = structuredClone(commitDevelopFix);
+  Object.assign(commitBackFix, { id: "commit_back_fix", on_success: "test_back" });
+  commitBackFix.run = swap(commitBackFix.run, "after merging into develop", "after merging main into develop");
   const pushDevelop = {
     id: "push_develop",
     type: "shell",
@@ -1241,19 +1511,73 @@ write("issue-plan", {
     // Only a develop that moved meanwhile means "merge again"; any other push error stops the run.
     routes: [{ if: "^MOVED\\s*$", goto: "merge_develop" }],
   };
-  const gitflowReport = structuredClone(report);
-  gitflowReport.run = swap(gitflowReport.run, "branch=$(git branch --show-current); sha=$(git rev-parse HEAD)", 'branch=$(cat "{{run.dir}}/feature-branch"); sha=$(git rev-parse HEAD)');
-  gitflowReport.run = swap(gitflowReport.run, "implemented this on branch \\`$branch\\` (commit", "implemented this on \\`$branch\\` and merged it into \\`$FACTORY_VAR_DEVELOP_BRANCH\\` (commit");
-  gitflowReport.run = swap(gitflowReport.run, SHIPS_DELIVER, "_It goes to \\`$FACTORY_VAR_MAIN_BRANCH\\` with the daily release pull request._");
-  gitflowReport.run = swap(gitflowReport.run, "git show --stat --format= HEAD | tail -40", 'git diff --stat "$(cat "{{run.dir}}/develop-before")" HEAD | tail -40');
-  // Gitflow: "done" means merged into develop — close the issue now (GitHub only closes issues by
-  // itself when work reaches the default branch).
-  gitflowReport.run += [
-    "",
-    'if [ "$FACTORY_VAR_CLOSE_WHEN_MERGED" != no ]; then',
-    '  gh issue close "$FACTORY_VAR_ISSUE" --repo "$FACTORY_VAR_GITHUB_REPO" --reason completed >/dev/null 2>&1 && echo "closed #$FACTORY_VAR_ISSUE"',
-    "fi",
-  ].join("\n");
+  // The report of a feature (merged into develop) or of a hotfix (on main, and in develop or not yet).
+  const commitUrl = "https://github.com/$FACTORY_VAR_GITHUB_REPO/commit/$sha";
+  const gitflowReport = {
+    id: "report",
+    type: "shell",
+    run: [
+      'main="$FACTORY_VAR_MAIN_BRANCH"; dev="$FACTORY_VAR_DEVELOP_BRANCH"; warn=""; closed=""; note=$(cat "{{run.dir}}/hotfix-note" 2>/dev/null)',
+      'if [ ! -f "{{run.dir}}/hotfix-branch" ]; then',
+      '  branch=$(cat "{{run.dir}}/feature-branch"); sha=$(git rev-parse HEAD); from=$(cat "{{run.dir}}/develop-before")',
+      '  first="$FACTORY_FIRST_SHIPS"',
+      `  did="implemented this on \\\`$branch\\\` and merged it into \\\`$dev\\\` (commit ${commitUrl})."`,
+      '  last="It goes to \\`$main\\` with the daily release pull request."',
+      'else',
+      '  h=$(cat "{{run.dir}}/hotfix-branch"); sha=$(cat "{{run.dir}}/main-sha"); from=$(cat "{{run.dir}}/main-before")',
+      '  foundry=""; fl=$(printf \'%s\\n\' "$FACTORY_OUT_HOTFIX_DONE" | sed -n \'s/^FOUNDRY: *//p\' | tail -1)',
+      '  case "$fl" in',
+      '    "has the fix") foundry=" The running Foundry already has this fix." ;;',
+      '    "not yet") foundry=" The running Foundry does not have this fix yet: it gets it when its own copy is updated, built and started again." ;;',
+      '    unknown) foundry=" Whether the running Foundry has this fix could not be checked." ;;',
+      '  esac',
+      '  if printf \'%s\\n\' "$FACTORY_OUT_HOTFIX_DONE" | grep -q "^DEVELOP: merged"; then',
+      '    first="$FACTORY_FIRST_FIXED"',
+      `    did="fixed this on \\\`$main\\\` as a hotfix (\\\`$h\\\`, commit ${commitUrl}) and merged \\\`$main\\\` into \\\`$dev\\\`."`,
+      '    last="The fix is on \\`$main\\` and in \\`$dev\\`.$foundry"',
+      '  else',
+      '    why=$(printf \'%s\\n\' "$FACTORY_OUT_HOTFIX_DONE" | sed -n \'s/^DEVELOP: behind — //p\' | tail -1)',
+      '    first="$FACTORY_FIRST_MERGE_BACK"',
+      `    did="fixed this on \\\`$main\\\` as a hotfix (\\\`$h\\\`, commit ${commitUrl})."`,
+      '    warn="⚠ **\\`$dev\\` does not have this fix yet:** $why. The Foundry tries again when it starts the next story, which works only without conflicts. To be sure, merge \\`$main\\` into \\`$dev\\` yourself — until then the daily release pull request can show conflicts."',
+      '    last="The fix is on \\`$main\\`, not yet in \\`$dev\\`.$foundry"',
+      '  fi',
+      '  if printf \'%s\\n\' "$FACTORY_OUT_HOTFIX_DONE" | grep -q "^BRANCH: kept — unmerged"; then last="$last The branch \\`$h\\` was not deleted: it has commits that are not in \\`$dev\\` — look at them first."',
+      '  elif printf \'%s\\n\' "$FACTORY_OUT_HOTFIX_DONE" | grep -q "^BRANCH: kept"; then last="$last The branch \\`$h\\` could not be deleted — delete it by hand."; fi',
+      '  # push_main closed the issue; if that did not work, try again and say so when it fails too.',
+      '  if printf \'%s\\n\' "$FACTORY_OUT_PUSH_MAIN" | grep -q "^closed #"; then closed=yes',
+      '  elif [ "$FACTORY_VAR_CLOSE_WHEN_MERGED" != no ]; then',
+      '    if gh issue close "$FACTORY_VAR_ISSUE" --repo "$FACTORY_VAR_GITHUB_REPO" --reason completed >/dev/null 2>&1; then closed=yes; else warn="${warn:+$warn }⚠ This issue could not be closed — close it by hand."; fi',
+      '  fi',
+      'fi',
+      'verdict() { printf \'%s\\n\' "$1" | sed -n \'s/^VERDICT: *//p\' | tail -1; }',
+      '{ echo "$first"; echo',
+      '  echo "🤖 **Spaghetti Code Foundry** $did"',
+      '  [ -n "$warn" ] && { echo; echo "$warn"; }',
+      '  echo; echo "### What was done"; printf \'%s\\n\' "$FACTORY_OUT_IMPLEMENT"',
+      '  echo; echo "### Review (Codex)"',
+      '  echo "- round 1: $(verdict "$FACTORY_OUT_REVIEW_1")"',
+      '  [ -n "$FACTORY_OUT_REVIEW_2" ] && echo "- round 2: $(verdict "$FACTORY_OUT_REVIEW_2")"',
+      '  echo; echo "### Tests"; echo \'```\'; cat "{{run.dir}}/last-tests.txt"; echo \'```\'',
+      '  echo; echo "### Files changed"; echo \'```\'; git diff --stat "$from" "$sha" | tail -40; echo \'```\'',
+      '  [ -n "$note" ] && { echo; echo "$note"; }',
+      '  echo; echo "_${last}_"',
+      '  echo; echo "<!-- claude-factory run=$FACTORY_RUN_ID -->"; } \\',
+      '  | gh issue comment "$FACTORY_VAR_ISSUE" --repo "$FACTORY_VAR_GITHUB_REPO" --body-file - ; posted=$?',
+      '# A hotfix is done when it is on main (already closed above); the issue is not waiting for the release.',
+      '# Without its report the run is not done: fail, and a resume from report posts it again.',
+      'if [ -f "{{run.dir}}/hotfix-branch" ]; then',
+      '  [ "$posted" -eq 0 ] || { echo "the fix is on $main, but the report could not be posted on the issue — resume this run at the report step"; exit 1; }',
+      '  [ -n "$closed" ] && echo "closed #$FACTORY_VAR_ISSUE"; exit 0',
+      'fi',
+      '# Gitflow: "done" means merged into develop — close the issue now (GitHub only closes issues by',
+      '# itself when work reaches the default branch).',
+      'if [ "$FACTORY_VAR_CLOSE_WHEN_MERGED" != no ]; then',
+      '  gh issue close "$FACTORY_VAR_ISSUE" --repo "$FACTORY_VAR_GITHUB_REPO" --reason completed >/dev/null 2>&1 && echo "closed #$FACTORY_VAR_ISSUE"',
+      'fi',
+    ].join("\n"),
+    on_success: "end",
+  };
   // A second Codex round only when round 1 found something serious, or the story is riskier.
   const reviewGate = {
     id: "review_gate",
@@ -1267,15 +1591,29 @@ write("issue-plan", {
     ].join("\n"),
     routes: [{ if: "^DONE\\s*$", goto: "docs" }],
   };
+  // A hotfix is never split by itself and its risk gate says it goes straight to main (a feature is unchanged).
+  const hotfixSplitGate = (gate) => {
+    const g = structuredClone(gate);
+    g.run = swap(g.run, '[ -z "$forced" ]; then', '[ -z "$forced" ] && [ ! -f "{{run.dir}}/hotfix" ]; then');
+    g.run = swap(g.run, '{ echo "$FACTORY_FIRST_APPROVE_SPLIT"; echo', '[ -f "{{run.dir}}/hotfix" ] && why="this is a hotfix, and a hotfix is never split by itself"\n{ echo "$FACTORY_FIRST_APPROVE_SPLIT"; echo');
+    return g;
+  };
+  const hotfixRiskGate = (gate) => {
+    const g = structuredClone(gate);
+    g.run = swap(g.run, 'reviewed=""; [ -n "$FACTORY_OUT_PLAN_REVIEW" ]', '[ "$gate" = yes ] && [ -f "{{run.dir}}/hotfix" ] && why="$why. This is a hotfix: after the reviews it goes straight to \\`$FACTORY_VAR_MAIN_BRANCH\\`, so a person should look at the plan first"\nreviewed=""; [ -n "$FACTORY_OUT_PLAN_REVIEW" ]');
+    return g;
+  };
   const gitflowSteps = [
     byId("pull_ticket"),
     featureBranch,
     byId("baseline_tests"),
+    baselineMain,
+    hotfixBranch,
     ...planPhase("size_gate", { risk: true, split: true, sized: true, reviseAbove: true }),
-    ...splitSteps,
+    ...splitSteps.map((x) => (x.id === "split_gate" ? hotfixSplitGate(x) : x)),
     sizeGate,
     forceSplit,
-    riskGate,
+    hotfixRiskGate(riskGate),
     approvePlan,
     claimAreas,
     waitForArea,
@@ -1290,6 +1628,8 @@ write("issue-plan", {
     fixDevelop,
     commitDevelopFix,
     pushDevelop,
+    mergeMain, testMain, redMain, pushMain,
+    mergeBack, resolveBack, finishBack, testBack, redBack, fixBack, commitBackFix, pushBack, hotfixDone,
     gitflowReport,
     byId("baseline_failed"),
   ];
@@ -1300,6 +1640,7 @@ write("issue-plan", {
   for (const x of gitflowSteps) if (["merge_develop", "resolve_conflicts", "finish_merge", "test_develop", "fix_develop", "commit_develop_fix"].includes(x.id)) x.jump_only = true;
   gitflowSteps.splice(gitflowSteps.findIndex((x) => x.id === "review_2"), 0, reviewGate);
   gitflowSteps.find((x) => x.id === "push_feature").on_success = "merge_develop";
+  gitflowSteps.find((x) => x.id === "push_develop").on_success = "report";
   write("issue-gitflow", {
     title: "Plan and code an issue on a feature branch, merged into develop (gitflow)",
     lines: [
@@ -1327,6 +1668,7 @@ write("issue-plan", {
       risk_threshold: "75", review_plan_label: "Factory_review_plan", auto_split_max_risk: "50", trigger_label: "",
       max_files: "15", max_code_lines: "800", delete_merged_branches: "yes", close_when_merged: "yes",
       revise_above_risk: "50", review_twice_above_risk: "50",
+      hotfix_labels: "bug", hotfix_prefix: "hotfix/",
     },
     steps: gitflowSteps,
   });
