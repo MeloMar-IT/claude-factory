@@ -78,6 +78,9 @@ export const RULES: Rule[] = [
   r("PUT", "repos/:id/auth", "yes", "change the method, user name, token or address of your repository"),
   r("DELETE", "repos/:id", "yes", "remove your repository and its stored token"),
   r("DELETE", "repos/:owner/:name", "yes", "remove a GitHub repository by name (old form)"),
+  r("GET", "admin/repos", "no", "the repositories of all accounts, with their settings"),
+  r("PUT", "admin/repos/:id/settings", "no", "set the test command, docs, protected branches and branch names of a repository"),
+  r("POST", "admin/repos/:id/transfer", "no", "move a repository to another account, by e-mail"),
 ];
 
 /** The key of a rule, e.g. "POST runs/:id/approve". */
