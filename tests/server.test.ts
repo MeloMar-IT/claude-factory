@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { createServer } from "node:http";
 import { join, resolve } from "node:path";
@@ -64,6 +64,20 @@ describe("ui server", () => {
     expect((await json("DELETE", "/api/flows/used-by-watcher")).status).toBe(200);
     expect((await json("DELETE", "/api/flows/parent")).status).toBe(200);
     expect((await json("DELETE", "/api/flows/used-by-step")).status).toBe(200);
+  });
+
+  it("won't delete refine-brief: refinement uses it", async () => {
+    expect((await json("DELETE", "/api/flows/refine-brief")).status).toBe(403);
+    for (const scope of ["repo", "global"]) {
+      const put = await json("PUT", "/api/flows/refine-brief", { yaml: readFileSync("flows/refine-brief.yaml", "utf8"), scope });
+      expect(put.status).toBe(200);
+      const { path } = (await put.json()) as { path: string };
+      const del = await json("DELETE", "/api/flows/refine-brief");
+      expect(del.status).toBe(409);
+      expect(((await del.json()) as { error: string }).error).toContain('flow "refine-brief" is in use by refinement (the architect)');
+      expect(existsSync(path)).toBe(true);
+      rmSync(path); // so other tests see the built-in flow again
+    }
   });
 
   it("runs a monitor watcher: listed as active, Check now writes the findings file, a second monitor is refused", async () => {

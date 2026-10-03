@@ -115,6 +115,7 @@ To keep it running after you close the terminal: `scf service install`.
 |---|---|
 | `epic-questions` → `issue-gitflow` → `release-daily` | **Gitflow pipeline** (one label, `Factory_go`): questions up front; per issue a plan (risk gate, size limit with automatic splitting) and code on a feature branch, merged into `develop` by the Foundry — in parallel for different code areas; once a day one PR `develop` → `main` |
 | `issue-plan` → `issue-code-daily` → `daily-pr` | **Human-in-the-loop pipeline** (two labels): the plan is posted first and you approve every plan (`Factory_code`) before any code is written; a daily PR, and no new coding while it is open |
+| `refine-brief` | **The architect's context brief** (read-only): reads a repository and its open issues and writes a five-part brief for an idea, naming the file or issue behind every claim; at most $3 a run; can't be deleted |
 
 Write your own flows in the editor or with any AI assistant ([FLOW_AUTHORING.md](docs/FLOW_AUTHORING.md)); `scf new <name>` starts from a small template. A flow that a watcher uses (also a disabled one) can't be deleted.
 

@@ -4,6 +4,16 @@ Changes that are merged but not yet in a release go under **Unreleased**. Newest
 
 ## Unreleased
 
+- Refinement 2a — the architect charter and the context-brief flow (#99).
+  - **New flow `refine-brief`.** Takes `github_repo` and an idea (the task). Clones the repository (`develop` when the remote has it, the default branch otherwise), reads the open issues with their comments, and the architect writes a context brief with five parts: what already exists, code the idea would touch, open issues that overlap, rules that apply, could not find out. A brief that misses a part, leaves one empty, has the headings in another order or holds a code block fails the run. Every claim must name its file or issue.
+  - **Read-only.** The architect step has the tools `Read`, `Glob` and `Grep`, mode `dontAsk`. No step pushes, comments or labels. The repository is cloned into `repo/`, so its `.claude/` is not loaded. The idea is only `{{task}}` in the prompt; the repository name only `$FACTORY_VAR_GITHUB_REPO`; issues go to `issues.md`.
+  - **Backlog limits.** Up to 200 open issues, newest first. Bodies are cut at 2,000 and comments at 600 characters (every comment is kept). When the backlog is larger, a step `check_brief` fails the run unless the brief says so under "Could not find out". The branch is chosen from the local clone, so a network error never passes for "no `develop`".
+  - **Charter.** The architect's role is one text in the new block `blocks/architect-charter.yaml`; the generator reads it from there.
+  - **Cost and model.** $3 per run (`limits.max_cost_usd`), model `claude-opus-5-5`; change it with a routing rule for the flow `refine-brief`.
+  - **Cannot be deleted.** `DELETE /api/flows/refine-brief` is refused: 403 for the built-in flow, 409 for a saved copy ("in use by refinement (the architect)").
+  - **Code.** New `tools/issue-digest`; `REFINE_BRIEF_FLOW` and the extra user in `flowUsers()` in `src/flow/usage.ts`; `FAKE_BRIEF` in the fake `claude`.
+  - **Not included.** Starting the flow from a refinement session.
+
 - Self-repair 2 — more monitor detectors (#86).
   - **New detectors** (each has a threshold under `monitor:` in `config.yaml`): **stuck run** (nothing written to the log for longer than the step's timeout plus 10 minutes; a step without a timeout counts 120 minutes), **same step keeps failing** (the same step of a flow ended runs as failed for 3 different issues in 24 hours), **label and run disagree** (more than 3 checks), **lock without owner** (a code-area lock or a run lock held by a run that is not running, more than 10 minutes), **queue not moving** (jobs queued, slots free, nothing started for 15 minutes), **restart overdue** (a new version waits more than 2 hours), **develop is red** (the tests after a merge into develop failed 2 times in a row, looking back 24 hours) and **slow step** (more than 3 times the usual time, 3 times in 24 hours).
   - **Normal is never a finding.** A run that waits for a person, a usage limit that resets by itself, a sign-out, a story that waits for a dependency or a release, and a `done` label are left out. Interrupted runs, rejected approvals and the run budget do not count as a failing step. A run inside a sub-flow step is not judged as stuck.
