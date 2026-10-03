@@ -7,7 +7,9 @@ pipelines of agent steps (Claude Code or OpenAI's Codex CLI), shell steps, appro
 branches — and the Foundry runs them headlessly: from a task you type, a GitHub issue that gets
 a label, a red CI build, or a schedule.
 
-![Flow editor](docs/images/flows.png)
+![Your turn: only what waits for you](docs/images/your-turn.png)
+
+![The board: where every story is](docs/images/board.png)
 
 **What it does**
 
@@ -75,6 +77,8 @@ touched. Look at the result in the UI (Runs → the run → Changes) and merge t
 like it.
 
 ## Documentation
+
+How it is built: **[docs/DESIGN.md](docs/DESIGN.md)**. What we learned building it: **[docs/LESSONS_LEARNED.md](docs/LESSONS_LEARNED.md)**.
 
 The **[user guide](docs/USER_GUIDE.md)** covers everything with screenshots: writing flows,
 running and resuming them, the GitHub watchers, models and routing, safety settings, costs,

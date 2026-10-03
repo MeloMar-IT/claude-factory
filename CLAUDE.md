@@ -28,7 +28,7 @@ node scripts/build-flows.mjs   # regenerate flows/*.yaml (see below)
 | `blocks/` | Reusable step blocks (YAML) |
 | `tools/` | Helper scripts the flows call (`$FACTORY_TOOLS/…`) |
 | `scripts/build-flows.mjs` | Generates `flows/*.yaml` from `blocks/` and code |
-| `docs/` | `USER_GUIDE.md`, `FLOW_AUTHORING.md` (flow format for AI assistants), `CHANGELOG.md` |
+| `docs/` | `USER_GUIDE.md`, `DESIGN.md` (how it is built), `LESSONS_LEARNED.md`, `FLOW_AUTHORING.md` (flow format for AI assistants), `CHANGELOG.md` |
 | `tests/` | vitest; `tests/fixtures/` has fake `claude`, `codex` and `gh` |
 
 ## Rules

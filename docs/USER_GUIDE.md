@@ -1,8 +1,17 @@
 # Spaghetti Code Foundry user guide
 
 Spaghetti Code Foundry runs **flows**: pipelines of steps that code, test, review and ship
-changes with AI coding agents on your own machine. This guide walks through the web UI, writing
-your own flows, automating work from GitHub, choosing models, and keeping it all safe.
+changes with AI coding agents on your own machine. Its main use: put one label on a GitHub
+issue, and the Foundry asks the open questions, plans, codes, tests, reviews and merges the
+story — and asks you only when it has to.
+
+This guide walks through the web UI, writing your own flows, automating work from GitHub,
+choosing models, and keeping it all safe. How it is built is in [DESIGN.md](DESIGN.md); what we
+learned building it is in [LESSONS_LEARNED.md](LESSONS_LEARNED.md).
+
+![Your turn: only what waits for you](images/your-turn.png)
+
+*The pictures in this guide show a demo repository, `acme/webshop`, with made-up stories.*
 
 Formerly **claude-factory**. The command is now `scf` (`factory` still works), the repository is `MeloMar-IT/spaghetti-code-foundry` and the data folder is `~/.spaghetti-code-foundry` (see [section 11](#11-upgrading-from-claude-factory)). The `<repo>/.claude-factory` folder, the labels (`claude-factory`, `factory:*`) and `factory/…` branches keep the old name.
 
@@ -42,6 +51,8 @@ twice). That signs you in. You can also create the admin in a terminal with
 an upgrade from a version without sign-in, do this once; nothing else changes. The CLI, the
 watchers and runs that are already going do not need an account.
 
+![Sign in](images/sign-in.png)
+
 **Sign in and out.** After that, the UI shows a sign-in form. Your name and a **Sign out**
 button are in the top bar. You stay signed in for 7 days, or until you sign out. A password
 change or a block (`scf user password`, `scf user block`) signs that account out at once. If you
@@ -66,7 +77,21 @@ admin for a new one.
 | **Dashboard** | Spend, success rate, where runs fail, eval results |
 | **Settings** | Budget, safety, notifications, bot identity, disk clean-up |
 
-An account with the role `user` sees only **Runs** and **My repositories**.
+An account with the role `user` sees only **Runs** and **My repositories**:
+
+![What a user sees: Runs and My repositories](images/user-home.png)
+
+**Under the top bar** is the health line. It says "All good", or names what is wrong with the
+Foundry itself, and on the right when each repository was last checked.
+
+#### The day in four steps
+
+1. Put the build label on your issues on GitHub (or let a watcher's schedule do the work).
+2. Open **Your turn**. Answer questions and approve risky plans; one button each.
+3. Look at **Board** when you want to know where a story is and why.
+4. Merge the daily release pull request when it shows up under Your turn.
+
+Everything else continues by itself.
 
 Everything the UI does is also available from the command line (see [section 9](#9-command-line)).
 
@@ -98,6 +123,8 @@ When a run finishes, its branch stays in your repository. Review it, merge it, o
 ## 3. Follow, approve and resume runs
 
 ### Your turn
+
+![Your turn](images/your-turn.png)
 
 **Your turn** lists only what waits for you, one button each: questions to answer, approvals, failed or stopped work, a release pull request to merge, and a watcher that has an error. It never lists work that is running, queued, paused by a limit or waiting for another story, and never evaluation runs.
 
@@ -141,6 +168,8 @@ A line under the top bar of every page says **All good**, or the number of probl
 The same data is at `GET /api/health`: `ok`, `summary` ("All good", "1 problem", "N problems"), `problems` (records like those of `GET /api/next`) and `repos`. It holds no settings, tokens or paths, and links are only `https://…` or `#/…`.
 
 ### The board
+
+![The board of a repository](images/board.png)
 
 **Board** shows where every story is, like a parcel tracker. There is one board per repository; with more than one repository you get tabs.
 
@@ -486,6 +515,9 @@ your own block with **☆ Save as block**.
 ## 5. Models, agents and routing
 
 ![Models](images/models.png)
+
+*The Models page on the demo machine, where the agents are stand-ins: on your machine the two
+coding agents show as installed.*
 
 ### Agents
 
@@ -1096,6 +1128,8 @@ show as "n runs ahead of you", without ids.
 
 **Answering a run.** On a run that waits, a user can approve or reject it with a note
 (`POST /api/runs/<id>/approve` or `/reject` with `{"note": "…"}`). The note reaches the run.
+
+![My repositories](images/repos.png)
 
 **The My repositories page.** `#/repos` is in the top bar for every account. It lists your repositories
 with the URL, how the Foundry signs in (the authentication method) and the connection status, which is
