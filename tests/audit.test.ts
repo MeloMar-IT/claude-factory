@@ -3,7 +3,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, wri
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { AuditEntrySchema, auditPath, prepareAuditLocked, type AuditEvent } from "../src/auth/audit.js";
+import { AuditEntrySchema, appendAuditLocked, auditPath, prepareAuditLocked, writeAudit, type AuditEvent } from "../src/auth/audit.js";
+import { findSession } from "../src/auth/sessions.js";
+import { createUser, setStatus, startSession } from "../src/auth/users.js";
 import { openAppendLocked, StoreError, withAuthLock } from "../src/auth/store.js";
 
 let home: string;
@@ -194,5 +196,153 @@ describe("block lines and stopWork", () => {
     expect(AuditEntrySchema.safeParse({ ...base, action: "block" }).success).toBe(true);
     expect(AuditEntrySchema.safeParse({ ...base, action: "block", stopWork: false }).success).toBe(true);
     expect(AuditEntrySchema.safeParse({ ...base, action: "unblock", stopWork: true }).success).toBe(false);
+  });
+});
+
+describe("event lines", () => {
+  const time = () => new Date().toISOString();
+  const ok = (e: Record<string, unknown>) => AuditEntrySchema.safeParse({ time: time(), by: "anonymous", action: "sign-in", result: "failed", ...e }).success;
+  const keys = (n: number) => Object.keys(JSON.parse(lines()[n]!));
+
+  it("writeAudit takes the lock itself and writes one line, mode 0600", () => {
+    const u = id();
+    writeAudit(u, { action: "sign-in", result: "ok", userId: u });
+    writeAudit("anonymous", { action: "sign-in", result: "failed" }, 0);
+    expect(lines()).toHaveLength(2);
+    expect(mode(auditPath())).toBe(0o600);
+    expect(keys(0)).toEqual(["time", "by", "action", "result", "userId"]);
+    expect(keys(1)).toEqual(["time", "by", "action", "result"]);
+    for (const l of lines()) expect(AuditEntrySchema.safeParse(JSON.parse(l)).success).toBe(true);
+  });
+
+  it("writeAudit inside the lock throws, and appendAuditLocked needs the lock", () => {
+    const event = { action: "sign-in", result: "failed" } as const;
+    expect(() => withAuthLock(() => writeAudit("anonymous", event))).toThrow();
+    expect(() => appendAuditLocked("anonymous", event)).toThrow();
+    expect(existsSync(auditPath())).toBe(false);
+    withAuthLock(() => appendAuditLocked("anonymous", event));
+    expect(lines()).toHaveLength(1);
+  });
+
+  it("writes target and detail in order", () => {
+    withAuthLock(() => {
+      const log = prepareAuditLocked(id(), { action: "sign-in", result: "ok", target: "t", detail: "d" });
+      try {
+        log.write();
+      } finally {
+        log.close();
+      }
+    });
+    expect(keys(0)).toEqual(["time", "by", "action", "result", "target", "detail"]);
+  });
+
+  it("accepts the good shapes", () => {
+    expect(ok({ by: id(), result: "ok", userId: id() })).toBe(true);
+    expect(ok({})).toBe(true);
+    expect(ok({ target: "abc" })).toBe(true);
+    expect(ok({ target: "abc", detail: "x".repeat(500) })).toBe(true);
+    expect(ok({ by: "cli" })).toBe(true);
+  });
+
+  it("refuses the bad shapes", () => {
+    const bad: Record<string, unknown>[] = [
+      { result: undefined },
+      { result: "maybe" },
+      { userId: id(), target: "t" },
+      { userId: "nope" },
+      { detail: "d" },
+      { userId: id(), detail: "d" },
+      { target: "" },
+      { target: "x".repeat(201) },
+      { target: "a\nb" },
+      { target: " a" },
+      { target: "a", detail: "x".repeat(501) },
+      { email: "a@example.com" },
+      { stopWork: true },
+      { by: "ann@example.com" },
+      { action: "sign-out" },
+    ];
+    for (const b of bad) expect(ok(b), JSON.stringify(b)).toBe(false);
+    const u = id();
+    expect(AuditEntrySchema.safeParse({ time: time(), by: u, action: "create", userId: u, result: "ok" }).success).toBe(false);
+    expect(AuditEntrySchema.safeParse({ time: time(), by: "anonymous", action: "create", userId: u }).success).toBe(false);
+  });
+
+  it("writeAudit refuses an invalid entry and writes nothing", () => {
+    expect(() => writeAudit("ann@example.com", { action: "sign-in", result: "failed" })).toThrow();
+    expect(() => writeAudit("anonymous", { action: "create", userId: id() })).toThrow();
+    expect(() => writeAudit("cli", { action: "sign-in", result: "ok", detail: "x" })).toThrow();
+    expect(existsSync(auditPath())).toBe(false);
+  });
+
+  it("reports a file that cannot be written, and a held lock with no wait", () => {
+    mkdirSync(auditPath());
+    expect(kind(() => writeAudit("anonymous", { action: "sign-in", result: "failed" }))).toMatchObject({ kind: "cannot-write", message: expect.stringContaining("audit.jsonl") });
+    rmSync(auditPath(), { recursive: true });
+    const lock = join(home, "auth.lock");
+    mkdirSync(lock);
+    writeFileSync(join(lock, "pid"), String(process.pid));
+    const started = Date.now();
+    expect(kind(() => writeAudit("anonymous", { action: "sign-in", result: "failed" }, 0))).toMatchObject({ kind: "locked" });
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+
+  it("keeps old lines valid and unchanged", () => {
+    const u = id();
+    const t = time();
+    const old = [
+      { time: t, by: "cli", action: "create", userId: u },
+      { time: t, by: u, action: "password", userId: u },
+      { time: t, by: u, action: "link", userId: u },
+      { time: t, by: u, action: "edit", userId: u },
+      { time: t, by: u, action: "unblock", userId: u },
+      { time: t, by: u, action: "delete", userId: u },
+      { time: t, by: u, action: "block", userId: u },
+      { time: t, by: u, action: "block", userId: u, stopWork: true },
+      { time: t, by: u, action: "role", userId: u, oldRole: "user", newRole: "admin" },
+    ].map((l) => JSON.stringify(l));
+    for (const l of old) expect(AuditEntrySchema.safeParse(JSON.parse(l)).success).toBe(true);
+    writeFileSync(auditPath(), old.join("\n") + "\n");
+    writeAudit("anonymous", { action: "sign-in", result: "failed" });
+    expect(lines().slice(0, old.length)).toEqual(old);
+    expect(lines()).toHaveLength(old.length + 1);
+  });
+});
+
+describe("startSession with audit", () => {
+  const make = async () => {
+    const u = await createUser({ name: "Ann", email: "ann@example.com", password: "test-password-12345" });
+    return u;
+  };
+
+  it("writes no line without the option", async () => {
+    const u = await make();
+    expect(startSession(u.id, u.passwordHash)?.token).toBeTruthy();
+    expect(existsSync(auditPath())).toBe(false);
+  });
+
+  it("writes one ok line with the option", async () => {
+    const u = await make();
+    const r = startSession(u.id, u.passwordHash, undefined, { audit: true })!;
+    expect("auditFailed" in r).toBe(false);
+    expect(lines()).toHaveLength(1);
+    expect(JSON.parse(lines()[0]!)).toMatchObject({ by: u.id, userId: u.id, action: "sign-in", result: "ok" });
+  });
+
+  it("keeps the session when the line cannot be written", async () => {
+    const u = await make();
+    mkdirSync(auditPath());
+    const r = startSession(u.id, u.passwordHash, undefined, { audit: true })!;
+    expect(r.auditFailed).toBe(true);
+    expect(findSession(r.token)).toBeTruthy();
+    expect(r.user.lastSignIn).not.toBeNull();
+  });
+
+  it("writes no line for a wrong hash or a blocked account", async () => {
+    const u = await make();
+    expect(startSession(u.id, "scrypt$wrong", undefined, { audit: true })).toBeUndefined();
+    await setStatus(u.id, "blocked");
+    expect(startSession(u.id, u.passwordHash, undefined, { audit: true })).toBeUndefined();
+    expect(existsSync(auditPath())).toBe(false);
   });
 });

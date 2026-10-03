@@ -4,6 +4,14 @@ Changes that are merged but not yet in a release go under **Unreleased**. Newest
 
 ## Unreleased
 
+- Audit log: sign-ins (#94).
+  - **Behaviour.** Every sign-in adds a line to `audit.jsonl`: `action: "sign-in"` with `result` `ok` (`by` and `userId` are the account id) or `failed` (`by` is `anonymous`; `userId` only when the e-mail belongs to an account). Wrong password, unknown e-mail and blocked account each write one line. No line holds the typed e-mail or a password. Nothing is written for a 429, a bad request, an over-long e-mail or a server error.
+  - **Safe.** A line that cannot be written does not stop the sign-in; the server log says `auth: audit.jsonl cannot-write`. A failed try never waits for `auth.lock`.
+  - **Changed.** Setup writes a `create` line with `by` set to the new admin's id, and stops with a 500 when `audit.jsonl` cannot be opened.
+  - **Format.** New event line: `time`, `by`, `action`, `result`, and `userId` or `target` (up to 200 characters), with `detail` (up to 500) only next to a `target`. `by` may be `anonymous`. Old account lines are unchanged and still parse.
+  - **Code.** `writeAudit`, `appendAuditLocked`, `EVENT_ACTIONS`, `createUser(…, { bySelf })`, `startSession(…, { audit })`.
+  - **Not included.** Other events (#95), an audit page (#96), the client address.
+
 - Fix a test that failed on a busy machine: the clean-up after the failure-explanation tests retries while a stopped model process still writes its log (it failed the tests before the change for two stories).
 - Docs: new `docs/DESIGN.md` (how the Foundry is built, with diagrams) and `docs/LESSONS_LEARNED.md`; the user guide and README have pictures of the current interface (Your turn, Board, sign-in, My repositories, the user display) and every older picture was retaken. The README is rewritten around the current way of working (one label, Your turn, gitflow, accounts) and its quick start no longer uses a flow that is not shipped.
 - Users page (#65).

@@ -2,7 +2,8 @@ import { timingSafeEqual } from "node:crypto";
 import { basename } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { adoptRuns } from "../auth/run-owner.js";
-import { createUser, checkSignIn, getUser, hasAdmin, redeemPasswordLink, startSession, UserError, type User } from "../auth/users.js";
+import { writeAudit } from "../auth/audit.js";
+import { createUser, checkSignIn, findUserByEmail, getUser, hasAdmin, redeemPasswordLink, startSession, UserError, type User } from "../auth/users.js";
 import { SESSION_TTL_MS, csrfToken, findSession, revokeSession, sessionId } from "../auth/sessions.js";
 import { StoreError } from "../auth/store.js";
 import { homeMoved } from "../home.js";
@@ -170,6 +171,18 @@ function notMoved() {
   if (homeMoved()) throw new HttpError(503, "the data folder moved; the server restarts onto it — try again in a minute");
 }
 
+/** A sign-in line that could not be written: file and kind only. The sign-in goes on. */
+const auditLost = (ctx: ApiContext) => ctx.opts.log?.("auth: audit.jsonl cannot-write");
+
+/** Adds the `failed` sign-in line. Does not wait for a held lock, and never throws. */
+function auditFailedSignIn(ctx: ApiContext, userId?: string): void {
+  try {
+    writeAudit("anonymous", { action: "sign-in", result: "failed", ...(userId ? { userId } : {}) }, 0);
+  } catch {
+    auditLost(ctx);
+  }
+}
+
 async function signIn(ctx: ApiContext, req: IncomingMessage, res: ServerResponse) {
   notMoved();
   const body = await readJson(req);
@@ -190,14 +203,22 @@ async function signIn(ctx: ApiContext, req: IncomingMessage, res: ServerResponse
   checking++;
   await guarded(ctx, async () => {
     const user = await checkSignIn(email, password).finally(() => checking--);
-    if (!user) throw new HttpError(401, BAD_LOGIN);
+    if (!user) {
+      auditFailedSignIn(ctx, findUserByEmail(email)?.id);
+      throw new HttpError(401, BAD_LOGIN);
+    }
     if (user.status === "blocked") {
       limiter.clear(email);
+      auditFailedSignIn(ctx, user.id);
       throw new HttpError(403, "this account is blocked");
     }
     const old = cookieToken(ctx, req);
-    const started = startSession(user.id, user.passwordHash, old ? sessionId(old) : undefined);
-    if (!started) throw new HttpError(401, BAD_LOGIN);
+    const started = startSession(user.id, user.passwordHash, old ? sessionId(old) : undefined, { audit: true });
+    if (!started) {
+      auditFailedSignIn(ctx, user.id);
+      throw new HttpError(401, BAD_LOGIN);
+    }
+    if (started.auditFailed) auditLost(ctx);
     limiter.clear(email);
     setCookie(ctx, req, res, started.token);
     send(res, 200, sessionBody({ token: started.token, user: started.user }));
@@ -244,7 +265,7 @@ async function setup(ctx: ApiContext, req: IncomingMessage, res: ServerResponse)
     if (hasAdmin()) throw taken;
     let user: User;
     try {
-      user = await createUser({ name, email, password, role: "admin" }, { onlyIfNoAdmin: true });
+      user = await createUser({ name, email, password, role: "admin" }, { onlyIfNoAdmin: true, bySelf: true });
     } catch (e) {
       if (e instanceof UserError) throw e.code === "admin-exists" ? taken : new HttpError(400, e.message);
       throw e;
