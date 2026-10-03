@@ -190,14 +190,14 @@ describe("the table", () => {
     expect(Object.keys(EXAMPLES).sort()).toEqual(RULES.map(ruleKey).sort());
   });
 
-  it("names every route group of the source in a rule (or session and setup)", () => {
+  it("names every route group of the source in a rule (or session, setup and set-password)", () => {
     const dir = resolve("src/server");
     const groups = new Set<string>();
     for (const f of readdirSync(dir).filter((n) => n.endsWith(".ts"))) {
       for (const m of readFileSync(join(dir, f), "utf8").matchAll(/seg\[0\]\s*(?:===|!==)\s*"([^"]+)"/g)) groups.add(m[1]!);
     }
     expect(groups.size).toBeGreaterThan(10);
-    const known = new Set([...RULES.map((r) => r.path.split("/")[0]!), "session", "setup"]);
+    const known = new Set([...RULES.map((r) => r.path.split("/")[0]!), "session", "setup", "set-password"]);
     expect([...groups].filter((g) => !known.has(g))).toEqual([]);
   });
 });

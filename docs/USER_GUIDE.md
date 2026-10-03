@@ -48,6 +48,11 @@ change or a block (`scf user password`, `scf user block`) signs that account out
 are blocked, you cannot sign in. If the session ends while a page is open, the next action
 brings you back to the sign-in form.
 
+**Set-password link.** A new account may get a link instead of a password. Open it in the
+browser's address bar, type the password twice, and press **Set password**. Then sign in with it.
+The link works once and for 7 days. If the page says "this link is not valid any more", ask your
+admin for a new one.
+
 | Page | What it is for |
 |---|---|
 | **Your turn** | Only what waits for you, one button each; the app opens here when something waits |
@@ -900,7 +905,8 @@ or with `scf clean` (branches in your repositories are kept).
 
 **Accounts.** `scf user` keeps accounts in `users.json` in the data folder. Each account has an id,
 name, e-mail, role (`admin` or `user`), status (`active` or `blocked`), password hash, created time
-and last sign-in. Only you can read the file (mode `0600`). A data folder that does not exist yet is
+and last sign-in. An account can have no password yet: it has no hash, it cannot sign in, and it may
+have a `passwordLink` (`id`, the SHA-256 of the link token, and `expires`) instead. Only you can read the file (mode `0600`). A data folder that does not exist yet is
 created with mode `0700`. Passwords are never stored: each one is hashed with scrypt, a 16-byte
 random salt per account, N=32768, r=8, p=3 and a 64-byte key. The parameters are stored with each
 hash (`scrypt$N=32768,r=8,p=3$<salt>$<key>`). A hash in any other form makes the file invalid.
@@ -909,7 +915,8 @@ Anyone who can run commands on the machine as you has admin rights: they can rea
 user. A file that cannot be read or is not valid is an error, never "no accounts".
 
 The last admin that is not blocked cannot be demoted, blocked or deleted: the command says "make
-another admin first", changes nothing and exits 1. Change a role with
+another admin first", changes nothing and exits 1. An admin that has no password yet does not count
+as another admin. Change a role with
 `scf user role <e-mail> admin|user`. `scf user list` shows the last sign-in of each account
 ("never" when there is none).
 
@@ -926,8 +933,9 @@ not handled yet. Watchers of the account keep working: disable the watcher or ch
 server log says how many runs it cancelled, with the account id only.
 
 **Audit log.** Every `scf user` action that changes something (`create`, `password`, `role`,
-`block`, `unblock`, `delete`) adds one line to `audit.jsonl` in the data folder (mode `0600`), for
+`block`, `unblock`, `delete`; also `link`, when a new set-password link replaces the old one) adds one line to `audit.jsonl` in the data folder (mode `0600`), for
 example `{"time":"2026-10-02T09:46:46.000Z","by":"cli","action":"role","userId":"<id>","oldRole":"user","newRole":"admin"}`.
+A password set through a link is a `password` line made by the account itself (`by` is its id).
 Only a role change has `oldRole` and `newRole`. A `block` line has `stopWork` (`true` when
 `--stop-work` was given). No line holds a name, e-mail, password, hash or
 token, and a failed action is not logged. If the file cannot be written, the command stops before
@@ -935,8 +943,8 @@ it changes anything. In the rare case that the line cannot be added after the ch
 full disk), the command says so and exits 1. The file is a record, not a protection: anyone who runs
 commands as you can edit it.
 
-**Sign-in and sessions.** The UI and its API need a signed-in account; only the sign-in, sign-out
-and first-admin calls and the static files are open. A session is kept on the server in
+**Sign-in and sessions.** The UI and its API need a signed-in account; only the sign-in, sign-out,
+first-admin and set-password calls and the static files are open. A session is kept on the server in
 `sessions.json` (mode `0600`): it holds only a SHA-256 of the session token, never the token. It
 lasts 7 days from sign-in and is not renewed. Sessions survive a restart and move with the data
 folder. The browser holds the token in the cookie `scf_session_<port>` (`HttpOnly`,
@@ -949,6 +957,10 @@ The cookie gets the `Secure` flag when you reach the UI over HTTPS (through a pr
 - **Wrong passwords.** After 10 wrong tries for one e-mail in 15 minutes, sign-in answers 429
   for that e-mail until the 15 minutes are over. A server restart also clears the count. The
   answer for a wrong password and for an unknown e-mail is the same.
+- **Set-password links.** Only a SHA-256 of the link token is stored. The token sits after `#` in
+  the address, so it is in no request line or log. `POST /api/set-password` shares the limits with
+  sign-in (60 tries per client in 15 minutes, 16 password checks at once), and using a link clears
+  the wrong-tries count of that e-mail.
 - **Ending sessions.** Signing out, expiry, `scf user password` and `scf user block` end sessions.
   A run log that is open in the browser stops within 5 seconds. A role change does not end
   sessions; the new role counts from the next call.
@@ -1112,7 +1124,7 @@ Change a role with `scf user role <e-mail> admin|user`, or create an admin with
 | `DELETE /api/repos/:id` | yes | yes | remove your repository and its stored token |
 | `DELETE /api/repos/:owner/:name` | yes | yes | remove a GitHub repository by name (old form) |
 
-**What comes later.** Runs that use a user's stored credentials or a repository's token, changing
+**What comes later.** Adding users in the UI (it makes the set-password link), runs that use a user's stored credentials or a repository's token, changing
 your own password in the UI, and pages for users (starting runs, repositories).
 
 ### Access from other computers
@@ -1190,7 +1202,7 @@ then cross the network unencrypted. Use it only on a network you trust.
 - The first admin can only be created on the Mac itself, not through the proxy.
 - Settings cannot be saved if the change would lock out the browser that saves it (its host name
   removed, or a `listen` value that does not cover the address it is connected to).
-- Sign-in is also limited per client address (60 tries in 15 minutes) and to 16 password checks at
+- Sign-in and set-password are also limited per client address (60 tries in 15 minutes) and to 16 password checks at
   the same time; an e-mail longer than 254 characters is a wrong sign-in.
 
 **Restart** after changing the address: stop and start `scf ui`, or run `scf service install` again.
@@ -1304,9 +1316,9 @@ The command is `scf`. `factory` still works as an alias and prints a short note.
 | `scf eval <suite.yaml> [--flows a,b] [--models …]` | Run an eval suite |
 | `scf clean [--older-than 7] [--purge] [--dry-run]` | Remove old run workspaces |
 | `scf user create [--admin] [--name n] [--email e]` | Create an account. The first one needs `--admin`. Name and e-mail are asked for on a terminal |
-| `scf user list` | List accounts with the last sign-in (never shows passwords or hashes) |
+| `scf user list` | List accounts with the last sign-in; `no password yet` for an account that has not set one (never shows passwords, hashes or links) |
 | `scf user role <e-mail> admin\|user` | Change the role of an account (not the last admin); counts from the next call |
-| `scf user password <e-mail>` | Set a new password and sign the account out |
+| `scf user password <e-mail>` | Set a new password and sign the account out; also for an account without a password (its link ends) |
 | `scf user block <e-mail> [--stop-work]` / `scf user unblock <e-mail>` | Block (and sign out) or unblock an account (not the last admin). Queued jobs are cancelled; `--stop-work` also cancels running and waiting runs |
 | `scf user delete <e-mail>` | Delete an account, its sessions and its stored credentials (not the last admin) |
 | `scf credential rotate-key` | Re-encrypt all stored credentials under a new key |
@@ -1426,7 +1438,9 @@ branch); the run then says the Foundry failed. A secret-scan finding is in the c
 output lists the file, line and kind of secret.
 
 **Forgot the password.** Run `scf user password <e-mail>` on the machine. If no admin is left, run
-`scf user create --admin`.
+`scf user create --admin`. A set-password link that ended is replaced the same way. If the page said
+"sign-in is not working" after you sent the form, first try to sign in with the password you chose:
+it may have been set already.
 
 **The credential store is not working.** Run `scf credential check`. Unlock the login keychain if
 it fails. If the key is gone (for example the data folder was copied from another Mac), delete

@@ -6,7 +6,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { PassThrough } from "node:stream";
 import { adminHint, terminalIo, userCommand, type UserIo } from "../src/auth/cli.js";
 import { readSessions } from "../src/auth/sessions.js";
-import { listUsers, startSession, verifyPassword } from "../src/auth/users.js";
+import { createUserWithLink, listUsers, startSession, verifyPassword } from "../src/auth/users.js";
 
 const CLI = resolve("dist/cli.js");
 const PW = "test-password-12345";
@@ -237,6 +237,41 @@ describe("scf user (child process)", () => {
       else process.env.FACTORY_HOME = process_;
     }
     expect(run(["user", "list"], "").out).toMatch(/last sign-in: \d{4}-\d\d-\d\dT/);
+  });
+
+  /** Creates an account without a password in-process, under the test's data folder. */
+  const createWithLink = async (email: string) => {
+    const saved = process.env.FACTORY_HOME;
+    process.env.FACTORY_HOME = home;
+    try {
+      return await createUserWithLink({ name: "Newcomer", email });
+    } finally {
+      if (saved === undefined) delete process.env.FACTORY_HOME;
+      else process.env.FACTORY_HOME = saved;
+    }
+  };
+
+  it("`list` shows an account without a password and never a link id", async () => {
+    create();
+    const { token } = await createWithLink("new@example.com");
+    const lines = run(["user", "list"], "").out.split("\n");
+    expect(lines.find((l) => l.startsWith("new@example.com"))).toContain("no password yet");
+    expect(lines.find((l) => l.startsWith("ann@example.com"))).not.toContain("no password yet");
+    const linkId = JSON.parse(readFileSync(usersFile(), "utf8")).users[1].passwordLink.id as string;
+    const out = run(["user", "list"], "").out;
+    expect(out).not.toContain(linkId);
+    expect(out).not.toContain(token);
+  });
+
+  it("`password` sets a password for an account without one and removes its link", async () => {
+    create();
+    await createWithLink("new@example.com");
+    expect(run(["user", "password", "new@example.com"], PW2 + "\n").code).toBe(0);
+    const u = JSON.parse(readFileSync(usersFile(), "utf8")).users[1] as { passwordHash: string; passwordLink?: unknown };
+    expect(await verifyPassword(PW2, u.passwordHash)).toBe(true);
+    expect(u.passwordLink).toBeUndefined();
+    const last = readFileSync(join(home, "audit.jsonl"), "utf8").trim().split("\n").pop()!;
+    expect(JSON.parse(last)).toMatchObject({ action: "password", by: "cli" });
   });
 
   it("writes one audit line per action and no personal data", () => {

@@ -20,6 +20,7 @@ const enc = encodeURIComponent;
 export const api = {
   session: () => req("GET", "/api/session"),
   signIn: (email, password) => req("POST", "/api/session", { email, password }),
+  setPassword: (token, password) => req("POST", "/api/set-password", { token, password }),
   signOut: () => req("DELETE", "/api/session"),
   setup: (name, email, password) => req("POST", "/api/setup", { name, email, password }),
   info: () => req("GET", "/api/info"),
