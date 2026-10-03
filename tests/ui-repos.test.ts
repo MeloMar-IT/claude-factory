@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { FakeElement, installFakeDom } from "./helpers/fake-dom.js";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -27,6 +27,9 @@ let heldGets: (() => void)[][]; // each entry holds one upcoming GET; the test f
 const realFetch = globalThis.fetch;
 const realConfirm = (globalThis as any).confirm;
 let nextId = 1;
+let keyCount = 0;
+/** A public key as the server shows it (built here, never a real one). */
+const nextKey = () => `ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI${String(++keyCount).padStart(43, "k")}`;
 
 beforeEach(() => {
   repos = [];
@@ -64,9 +67,20 @@ beforeEach(() => {
       return reply({ error: answer.error }, answer.status);
     }
     if (init.method === "POST") {
-      const rec = { id: `id${nextId++}`, url: body.url, method: body.method, ...(body.username ? { username: body.username } : {}) };
+      const rec = {
+        id: `id${nextId++}`,
+        url: body.url,
+        method: body.method,
+        ...(body.username ? { username: body.username } : {}),
+        ...(body.method === "ssh-deploy-key" ? { publicKey: nextKey() } : {}),
+      };
       repos.push(rec);
       return reply(rec, 201);
+    }
+    if (init.method === "PUT" && (body.newKey || body.method === "ssh-deploy-key")) {
+      const at = repos.findIndex((r) => `/api/repos/${r.id}/auth` === url);
+      repos[at] = { ...repos[at], ...(body.url ? { url: body.url } : {}), method: "ssh-deploy-key", publicKey: nextKey() };
+      return reply(repos[at]);
     }
     if (init.method === "DELETE") repos = repos.filter((r) => `/api/repos/${r.id}` !== url);
     return reply({});
@@ -106,17 +120,20 @@ const choose = (id: string) => {
 
 describe("pure functions", () => {
   it("lists the methods", () => {
-    expect(ui.METHODS.map((m: any) => m.id)).toEqual(["github-token", "https-token", "none"]);
+    expect(ui.METHODS.map((m: any) => m.id)).toEqual(["github-token", "https-token", "ssh-deploy-key", "none"]);
     for (const m of ui.METHODS) {
       expect(m.label).toBeTruthy();
       expect(Array.isArray(m.help)).toBe(true);
       expect(Array.isArray(m.fields)).toBe(true);
     }
     expect(ui.methodsFor(false).map((m: any) => m.id)).not.toContain("none");
-    expect(ui.methodsFor(true)).toHaveLength(3);
+    expect(ui.methodsFor(true)).toHaveLength(4);
     const help = ui.METHODS[0].help.join(" ");
     for (const w of ["Contents", "Issues", "Pull requests", '"Read and write"']) expect(help).toContain(w);
-    expect(ui.METHODS[2].help.join(" ")).not.toContain("GitHub");
+    expect(ui.METHODS.find((m: any) => m.id === "none").help.join(" ")).not.toContain("GitHub");
+    const deploy = ui.METHODS.find((m: any) => m.id === "ssh-deploy-key");
+    expect(deploy.help.join(" ")).toContain("deploy key with write access");
+    expect(deploy.fields).toEqual([]);
   });
 
   it("methodLabel and connectionStatus", () => {
@@ -184,7 +201,7 @@ describe("the page", () => {
     await show();
     press(button(main(), "+ Add repository"));
     expect(field(root(), "url")).toBeDefined();
-    expect(field(root(), "method")!.all("option")).toHaveLength(2);
+    expect(field(root(), "method")!.all("option")).toHaveLength(3);
     const token = field(root(), "token")!;
     expect(token.attrs.type).toBe("password");
     expect(token.value).toBe("");
@@ -209,7 +226,7 @@ describe("the page", () => {
   it("adds a repository as an admin with the server's own access", async () => {
     await show(true);
     press(button(main(), "+ Add repository"));
-    expect(field(root(), "method")!.all("option")).toHaveLength(3);
+    expect(field(root(), "method")!.all("option")).toHaveLength(4);
     choose("none");
     expect(root().all("input").map((i) => i.attrs.name)).toEqual(["url"]);
     type("url", "https://github.com/o/a");
@@ -551,6 +568,181 @@ describe("late answers", () => {
     await Promise.all([first, second]);
     expect(main().textContent).toContain("No repositories yet.");
     expect(main().textContent).not.toContain(r.url);
+  });
+});
+
+describe("the SSH deploy key", () => {
+  const SSH = "git@github.com:o/a.git";
+  const deployRec = (over: object = {}): ReturnType<typeof rec> & { publicKey?: string } => rec({ url: SSH, method: "ssh-deploy-key", publicKey: nextKey(), ...over });
+  const keyOf = (r: any) => byClass(main(), "field").flatMap((e) => e.all("code")).find((c) => c.textContent === r.publicKey);
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("adds one as a user: the placeholder changes and the row shows the key and the hint", async () => {
+    await show();
+    press(button(main(), "+ Add repository"));
+    expect(field(root(), "url")!.attrs.placeholder).toBe("https://github.com/owner/name");
+    choose("ssh-deploy-key");
+    expect(field(root(), "url")!.attrs.placeholder).toBe("git@github.com:owner/name.git");
+    expect(root().all("input").map((i) => i.attrs.name)).toEqual(["url"]);
+    choose("github-token");
+    expect(field(root(), "url")!.attrs.placeholder).toBe("https://github.com/owner/name");
+    choose("ssh-deploy-key");
+    type("url", SSH);
+    press(button(root(), "Add repository"));
+    await flush();
+    expect(sent).toEqual([{ method: "POST", url: "/api/repos", body: { url: SSH, method: "ssh-deploy-key" } }]);
+    expect(main().textContent).toContain(repos[0].publicKey);
+    expect(main().textContent).toContain(ui.DEPLOY_KEY_HINT);
+    expect(main().textContent).toContain("SSH deploy key");
+  });
+
+  it("copies the key", async () => {
+    const r = deployRec();
+    repos = [r];
+    await show();
+    const writeText = vi.fn(async () => {});
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    press(button(main(), "Copy"));
+    await flush();
+    expect(writeText).toHaveBeenCalledWith(r.publicKey);
+    expect(toastText()).toBe("Public key copied");
+    vi.stubGlobal("navigator", {});
+    press(button(main(), "Copy"));
+    await flush();
+    expect(toastText()).toBe("Could not copy. Select the key and copy it yourself.");
+    expect(keyOf(r)!.style).toMatchObject({ userSelect: "all" });
+  });
+
+  it("generates a new key only after a confirmation, and shows it", async () => {
+    const r = deployRec();
+    repos = [r];
+    await show();
+    (globalThis as any).confirm = () => false;
+    press(button(main(), "Generate a new key"));
+    await flush();
+    expect(sent).toEqual([]);
+    let asked = "";
+    (globalThis as any).confirm = (m: string) => ((asked = m), true);
+    holdNext = true;
+    const btn = button(main(), "Generate a new key")!;
+    press(btn);
+    await flush();
+    expect(asked).toBe(`Generate a new key for ${SSH}? The old key stops working. Add the new public key as a deploy key and remove the old one.`);
+    expect(btn.disabled).toBe(true);
+    expect(sent).toEqual([{ method: "PUT", url: `/api/repos/${r.id}/auth`, body: { newKey: true } }]);
+    hold!.release();
+    await flush();
+    expect(toastText()).toBe("New key generated");
+    expect(main().textContent).toContain(repos[0].publicKey);
+    expect(main().textContent).not.toContain(r.publicKey);
+  });
+
+  it("shows a failed new key above the list without a retry", async () => {
+    repos = [deployRec()];
+    await show();
+    (globalThis as any).confirm = () => true;
+    answers.push({ status: 500, error: "the SSH key could not be made; see the server log" });
+    press(button(main(), "Generate a new key"));
+    await flush();
+    expect(errLine(main())[0]!.textContent).toBe("the SSH key could not be made; see the server log");
+    expect(button(main(), "Try again")).toBeUndefined();
+  });
+
+  it("asks about the stored key when removing", async () => {
+    repos = [deployRec(), rec()];
+    await show();
+    const asked: string[] = [];
+    (globalThis as any).confirm = (m: string) => (asked.push(m), false);
+    for (const b of walk(main()).filter((e) => e.tag === "button" && e.textContent === "Remove")) press(b);
+    expect(asked[0]).toContain("Its stored key is deleted too.");
+    expect(asked[1]).toContain("Its stored token is deleted too.");
+  });
+
+  it("a token row has no key block and no new-key button", async () => {
+    repos = [rec()];
+    await show();
+    expect(button(main(), "Copy")).toBeUndefined();
+    expect(button(main(), "Generate a new key")).toBeUndefined();
+    expect(main().textContent).not.toContain("Public key");
+  });
+
+  describe("change authentication", () => {
+    const open = async (r: any) => {
+      repos = [r];
+      await show();
+      press(button(main(), "Change authentication"));
+    };
+
+    it("asks for the SSH address on an https record", async () => {
+      const r = rec();
+      await open(r);
+      expect(field(root(), "url")).toBeUndefined();
+      choose("ssh-deploy-key");
+      const url = field(root(), "url")!;
+      expect(url.attrs.class).toBe("mono");
+      expect(url.value).toBe("");
+      expect(root().textContent).toContain("SSH address");
+      press(button(root(), "Save"));
+      expect(errLine(root())[0]!.textContent).toBe("Fill in the repository URL.");
+      expect(sent).toEqual([]);
+      type("url", SSH);
+      press(button(root(), "Save"));
+      await flush();
+      expect(sent).toEqual([{ method: "PUT", url: `/api/repos/${r.id}/auth`, body: { url: SSH, method: "ssh-deploy-key" } }]);
+    });
+
+    it("keeps what was typed in the address when the method changes back and forth", async () => {
+      await open(rec());
+      choose("ssh-deploy-key");
+      type("url", SSH);
+      choose("https-token");
+      expect(field(root(), "url")).toBeUndefined();
+      choose("ssh-deploy-key");
+      expect(field(root(), "url")!.value).toBe(SSH);
+    });
+
+    it("asks for an https address when a deploy-key record changes to a token method", async () => {
+      const r = deployRec();
+      await open(r);
+      expect(field(root(), "url")).toBeUndefined();
+      choose("github-token");
+      const url = field(root(), "url")!;
+      expect(url.attrs.placeholder).toBe("https://github.com/owner/name");
+      expect(root().textContent).toContain("HTTPS address");
+      type("token", TOKEN);
+      press(button(root(), "Save"));
+      expect(errLine(root())[0]!.textContent).toBe("Fill in the repository URL.");
+      type("url", "https://github.com/o/a");
+      press(button(root(), "Save"));
+      await flush();
+      expect(sent).toEqual([{ method: "PUT", url: `/api/repos/${r.id}/auth`, body: { url: "https://github.com/o/a", method: "github-token", token: TOKEN } }]);
+    });
+
+    it("has no address input on an SSH record", async () => {
+      const r = rec({ url: SSH, method: "none" });
+      await open(r);
+      choose("ssh-deploy-key");
+      expect(field(root(), "url")).toBeUndefined();
+      press(button(root(), "Save"));
+      await flush();
+      expect(sent).toEqual([{ method: "PUT", url: `/api/repos/${r.id}/auth`, body: { method: "ssh-deploy-key" } }]);
+    });
+  });
+
+  it("shows the method name in a server error", async () => {
+    await show();
+    press(button(main(), "+ Add repository"));
+    choose("ssh-deploy-key");
+    type("url", "https://github.com/o/a");
+    answers.push({ status: 400, error: '"ssh-deploy-key" works only with an SSH address' });
+    press(button(root(), "Add repository"));
+    await flush();
+    expect(errLine(root())[0]!.textContent).toBe("SSH deploy key works only with an SSH address");
+  });
+
+  it("isSshUrl", () => {
+    for (const u of ["git@github.com:o/a.git", "ssh://git@host/a/b", " SSH://host/a", "GIT@host:a/b"]) expect(ui.isSshUrl(u), u).toBe(true);
+    for (const u of ["https://github.com/o/a", "o/a", "", undefined]) expect(ui.isSshUrl(u), String(u)).toBe(false);
   });
 });
 

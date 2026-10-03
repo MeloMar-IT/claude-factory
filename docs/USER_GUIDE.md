@@ -1163,9 +1163,19 @@ show as "n runs ahead of you", without ids.
 with the URL, how the Foundry signs in (the authentication method) and the connection status, which is
 "Not tested yet" until the connection test exists. **Add repository** asks for the URL and the method:
 a GitHub fine-grained personal access token (give it these repository permissions, each "Read and write":
-Contents, Issues and Pull requests), or an HTTPS user name + token for other git hosts. The token is typed
-in a password field and is never shown again. **Change authentication** keeps the stored token if you leave
-the token empty; a new method needs a new token. **Remove** asks first and deletes the stored token too.
+Contents, Issues and Pull requests), an HTTPS user name + token for other git hosts, or an SSH deploy key.
+The token is typed in a password field and is never shown again. **Change authentication** keeps the stored
+token if you leave the token empty; a new method needs a new token. **Remove** asks first and deletes the
+stored token or key too.
+
+With **SSH deploy key** you type the SSH address of the repository (`git@host:path` or `ssh://…`) and no
+secret. The Foundry makes a key pair, keeps the private key and shows the **public key** in the
+Authentication column, with **Copy** (it needs HTTPS or localhost; otherwise select the key and copy it
+yourself). Add the public key in the settings of the repository as a deploy key **with write access** (on
+GitHub: Settings → Deploy keys → Add deploy key, with "Allow write access"). **Generate a new key** makes
+another pair after a confirmation; the old key stops working, so add the new public key and remove the old
+one. When you change a repository with an https address to this method, the dialog also asks for its **SSH
+address**; changing a deploy-key repository to a token method asks for an **HTTPS address**.
 Errors from the server show in the dialog in plain words. A failed removal shows above the list, with
 **Try again** when the server asks for it (an old key is still in the Keychain). A repository without a
 method shows "Needs authentication" for a user. An admin can also choose "The server's own access". The page
@@ -1173,14 +1183,17 @@ has no per-repository settings.
 
 **Repositories.** Every account has its own list of GitHub repositories, kept in `repos.json` in
 the data folder (mode `0600`). A repository is a record: `id`, `owner` (account id), `url`, `method`
-and `added`. It never holds a secret. These calls manage it:
+and `added`; a deploy-key record also has `credentialId` and `publicKey`. It never holds a secret (a public
+key is not one). These calls manage it:
 
-- `GET /api/repos` lists your records.
+- `GET /api/repos` lists your records, with the `publicKey` of a deploy key.
 - `POST /api/repos {"url": …, "method": …, "username": …, "token": …}` adds one (201; 409 if you or
   another account has it; 400 for a bad URL or method; at most 50). `{"name": "owner/name"}` still works.
 - `PUT /api/repos/<id>/auth` changes the method, user name, token or address. What you do not give
   keeps its value. The old stored token is wiped. 404 for an id that is not yours.
-- `DELETE /api/repos/<id>` removes the repository and its stored token (404 if it is not yours).
+  `{"newKey": true}` makes a new deploy key (only for the method `ssh-deploy-key`; 400 otherwise); the
+  answer holds the new `publicKey`.
+- `DELETE /api/repos/<id>` removes the repository and its stored token or key (404 if it is not yours).
 - `DELETE /api/repos/<owner>/<name>` removes a GitHub repository by name (the old form).
 
 The URL is `https://host/path`, `ssh://[user@]host[:port]/path` or `git@host:path`; `owner/name`
@@ -1195,6 +1208,14 @@ Methods: `github-token` (a GitHub fine-grained token, only for `https://github.c
 as `repo:<repository id>`. `none` is the default without a method: the server's own access for an
 admin, "needs authentication" for a user, who cannot choose it. If a repository's token is removed
 with `DELETE /api/credentials/<id>`, set it again with `PUT …/auth`.
+
+`ssh-deploy-key` works only with an SSH address (400 with "SSH address" in the message for https); it takes
+no user name and no token. The Foundry makes an ed25519 pair with `/usr/bin/ssh-keygen` (no passphrase, no
+comment) in a private temporary folder that is removed again. The private key is stored as the credential
+`repo:<repository id>` of type `ssh-key` and never leaves the server; the record and `GET /api/repos` show
+the `publicKey`. If ssh-keygen fails, the call answers 500 "the SSH key could not be made; see the server
+log". If the key was removed with `DELETE /api/credentials/<id>`, generate a new key (`PUT …/auth` with
+`{"newKey": true}`, or the method `ssh-deploy-key` again, which also repairs a missing or wrong credential).
 
 If `repos.json` cannot be read, the calls answer "the repository list is not working; see the server log".
 
@@ -1291,13 +1312,13 @@ Change a role with `scf user role <e-mail> admin|user`, or create an admin with
 | `POST /api/users/:id/link` | yes | no | a new set-password token for an account without a password |
 | `DELETE /api/users/:id` | yes | no | delete an account with its sessions, repositories and stored credentials |
 | `GET /api/repos` | yes | yes | your repositories |
-| `POST /api/repos` | yes | yes | add a repository (a URL, and a token for it) |
-| `PUT /api/repos/:id/auth` | yes | yes | change the method, user name, token or address of your repository |
-| `DELETE /api/repos/:id` | yes | yes | remove your repository and its stored token |
+| `POST /api/repos` | yes | yes | add a repository (a URL, and a token or a deploy key for it) |
+| `PUT /api/repos/:id/auth` | yes | yes | change the method, user name, token or address of your repository, or make a new deploy key |
+| `DELETE /api/repos/:id` | yes | yes | remove your repository and its stored token or key |
 | `DELETE /api/repos/:owner/:name` | yes | yes | remove a GitHub repository by name (old form) |
 
 **What comes later.** Runs that use a user's stored credentials or a repository's token, changing
-your own password in the UI, a connection test for repositories, SSH deploy keys, the GitHub App, and pages for users (starting runs).
+your own password in the UI, a connection test for repositories, runs that use a deploy key, the GitHub App, and pages for users (starting runs).
 
 ### Access from other computers
 
@@ -1390,8 +1411,10 @@ in Slack and notifications still point at `http://localhost:<port>`.
 (`POST /api/credentials`); there is no UI page yet, and runs do not use them yet. They are kept in
 `credentials.json` in the data folder (mode `0600`), encrypted with AES-256-GCM. The key is not in
 the data folder: it is in the macOS Keychain, as an item of the service
-`claude-factory-credential-key`. Only macOS is supported. The token of a repository is stored here
-too, as `repo:<repository id>`; your own names must not start with `repo:`.
+`claude-factory-credential-key`. Only macOS is supported. The token or deploy key of a repository is stored here
+too, as `repo:<repository id>`; your own names must not start with `repo:`. The public key of a deploy key
+is not a secret: `/api/repos` always shows it in full, even when a stored secret is part of it (the rest of
+the answer is hidden as before).
 - **What the API shows.** Only type, name, created, last used and the fingerprint, never the
   secret. A token must be 8 to 4096 printable ASCII characters on one line. To check a fingerprint:
   `printf %s "$TOKEN" | shasum -a 256`, the first 16 digits.

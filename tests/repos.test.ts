@@ -5,8 +5,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { REPO_LIMIT, RepoError, RepoHalfSaved, addRepo, listRepos, ownsRepo, removeGithubRepo, removeRepo, removeReposLocked, reposPath, setRepoAuth } from "../src/auth/repos.js";
 import { StoreError, withAuthLock } from "../src/auth/store.js";
 import { jsonFiles } from "../src/home-migrate.js";
-import { addCredentialLocked, credentialsPath, listCredentials, readSecret } from "../src/credentials/store.js";
+import { createUser, deleteUser, hashPassword } from "../src/auth/users.js";
+import { PUBLIC_KEY_RE, KeygenError } from "../src/credentials/ssh-keygen.js";
+import { addCredentialLocked, credentialsPath, listCredentials, readSecret, removeCredential } from "../src/credentials/store.js";
 import { fakeKeychain, type FakeKeychain } from "./helpers/keychain.js";
+import { fakeKeygen, type FakeKeygen } from "./helpers/ssh-keygen.js";
 
 const ANN = "11111111-1111-4111-8111-111111111111";
 const BOB = "22222222-2222-4222-8222-222222222222";
@@ -16,14 +19,17 @@ const TOKEN2 = ["github", "pat", ""].join("_") + "Qq7".repeat(12);
 let home: string;
 let saved: string | undefined;
 let kc: FakeKeychain;
+let kg: FakeKeygen;
 
 beforeEach(() => {
   saved = process.env.FACTORY_HOME;
   home = mkdtempSync(join(tmpdir(), "repos-"));
   process.env.FACTORY_HOME = home;
   kc = fakeKeychain();
+  kg = fakeKeygen();
 });
 afterEach(() => {
+  kg.remove();
   kc.remove();
   if (saved === undefined) delete process.env.FACTORY_HOME;
   else process.env.FACTORY_HOME = saved;
@@ -490,5 +496,285 @@ describe("the data-folder move", () => {
     writeFileSync(join(home, "repos.json"), "{}");
     writeFileSync(join(home, "runs", "x", "repos.json"), "{}");
     expect(jsonFiles(home)).toEqual([join(home, "runs", "x", "repos.json")]);
+  });
+});
+
+describe("the SSH deploy key", () => {
+  const SSH = "git@github.com:acme/app.git";
+  const deploy = (user: string, url = SSH) => add(user, url, { method: "ssh-deploy-key" });
+  const lastPair = () => kg.pairs().at(-1)!;
+  const keyCreds = (user: string) => listCredentials(user).filter((c) => c.type === "ssh-key");
+
+  it.each([SSH, "ssh://git@host.example.com/a/b"])("adds one for %s: a record, a key credential, no private key in the file", (url) => {
+    const r = deploy(ANN, url);
+    expect(Object.keys(r).sort()).toEqual(["added", "credentialId", "id", "method", "owner", "publicKey", "url"]);
+    expect(r.publicKey).toMatch(PUBLIC_KEY_RE);
+    expect(listCredentials(ANN).map((c) => [c.type, c.name, c.id])).toEqual([["ssh-key", `repo:${r.id}`, r.credentialId]]);
+    expect(readSecret(ANN, r.credentialId!)).toBe(lastPair().privateKey);
+    expect(r.publicKey).toBe(lastPair().publicKey);
+    const text = readFileSync(reposPath(), "utf8");
+    expect(text).not.toContain("PRIVATE KEY");
+    expect(text).not.toContain(lastPair().privateKey.split("\n")[1]!);
+    expect(listRepos(ANN)).toEqual([r]);
+  });
+
+  const bad: [string, string, object][] = [
+    ["an https address", "https://github.com/acme/app", {}],
+    ["a name", "acme/app", {}],
+    ["a token", SSH, { token: TOKEN }],
+    ["a user name", SSH, { username: "ann" }],
+  ];
+  it.each(bad)("refuses a deploy key with %s", (_n, url, extra) => {
+    const e = (() => {
+      try {
+        add(ANN, url, { method: "ssh-deploy-key", ...extra });
+      } catch (x) {
+        return x;
+      }
+      return undefined;
+    })();
+    expect(e).toBeInstanceOf(RepoError);
+    expect((e as RepoError).code).toBe("bad-auth");
+    if (Object.keys(extra).length === 0) expect((e as RepoError).message).toContain("SSH address");
+    expect(() => statSync(reposPath())).toThrow();
+    expect(() => statSync(credentialsPath())).toThrow();
+    expect(kg.calls()).toEqual([]);
+  });
+
+  describe("changing", () => {
+    it("token to deploy key with an SSH address", () => {
+      const r = add(ANN, "acme/app", { method: "github-token", token: TOKEN });
+      const next = setRepoAuth(ANN, r.id, { method: "ssh-deploy-key", url: SSH }, OK).repo;
+      expect(next).toMatchObject({ method: "ssh-deploy-key", url: SSH });
+      expect(next.publicKey).toMatch(PUBLIC_KEY_RE);
+      expect(next).not.toHaveProperty("username");
+      expect(listCredentials(ANN).map((c) => [c.type, c.id])).toEqual([["ssh-key", next.credentialId]]);
+      expect(listRepos(ANN)).toEqual([next]);
+    });
+
+    it("an https address is refused for a deploy key", () => {
+      const r = add(ANN, "acme/app", { method: "github-token", token: TOKEN });
+      expect(code(() => setRepoAuth(ANN, r.id, { method: "ssh-deploy-key" }, OK))).toBe("bad-auth");
+      const d = deploy(BOB, "git@github.com:acme/web.git");
+      expect(code(() => setRepoAuth(BOB, d.id, { url: "https://github.com/acme/web" }, OK))).toBe("bad-auth");
+      expect(listRepos(BOB)).toEqual([d]);
+    });
+
+    it("deploy key to a token", () => {
+      const r = deploy(ANN);
+      const next = setRepoAuth(ANN, r.id, { method: "github-token", url: "https://github.com/acme/app", token: TOKEN }, OK).repo;
+      expect(next).not.toHaveProperty("publicKey");
+      expect(listCredentials(ANN).map((c) => [c.type, c.id])).toEqual([["token", next.credentialId]]);
+      expect(listRepos(ANN)).toEqual([next]);
+    });
+
+    it("deploy key to none", () => {
+      const r = deploy(ANN);
+      const next = setRepoAuth(ANN, r.id, { method: "none" }, OK).repo;
+      expect(next).toMatchObject({ method: "none" });
+      expect(next).not.toHaveProperty("publicKey");
+      expect(next).not.toHaveProperty("credentialId");
+      expect(listCredentials(ANN)).toEqual([]);
+    });
+
+    it("newKey makes a new pair and removes the old key", () => {
+      const r = deploy(ANN);
+      const keyId = Object.keys(kc.items())[0];
+      const next = setRepoAuth(ANN, r.id, { newKey: true }, OK).repo;
+      expect(next.publicKey).not.toBe(r.publicKey);
+      expect(next.publicKey).toBe(lastPair().publicKey);
+      expect(next.credentialId).not.toBe(r.credentialId);
+      expect(listCredentials(ANN).map((c) => c.id)).toEqual([next.credentialId]);
+      expect(Object.keys(kc.items())).toHaveLength(1);
+      expect(Object.keys(kc.items())[0]).not.toBe(keyId);
+      expect(readSecret(ANN, next.credentialId!)).toBe(lastPair().privateKey);
+      expect(kg.pairs()).toHaveLength(2);
+    });
+
+    it("the same method again makes no key and touches no file", () => {
+      const r = deploy(ANN);
+      const before = [readFileSync(reposPath(), "utf8"), readFileSync(credentialsPath(), "utf8")];
+      kc.clearLog();
+      const out = setRepoAuth(ANN, r.id, { method: "ssh-deploy-key" }, OK);
+      expect(out).toEqual({ repo: r, oldKeysLeft: 0 });
+      expect(kg.calls()).toHaveLength(1);
+      expect(kc.calls()).toEqual([]);
+      expect([readFileSync(reposPath(), "utf8"), readFileSync(credentialsPath(), "utf8")]).toEqual(before);
+    });
+
+    it("refuses newKey on a token record and a newKey that is not true", () => {
+      const t = add(ANN, "acme/app", { method: "github-token", token: TOKEN });
+      expect(code(() => setRepoAuth(ANN, t.id, { newKey: true }, OK))).toBe("bad-auth");
+      const d = deploy(BOB, "git@github.com:acme/web.git");
+      expect(code(() => setRepoAuth(BOB, d.id, { newKey: "yes" }, OK))).toBe("bad-auth");
+      expect(code(() => setRepoAuth(BOB, d.id, { newKey: false }, OK))).toBe("bad-auth");
+      expect(kg.calls()).toHaveLength(1);
+    });
+
+    it("an SSH to SSH address change keeps the key", () => {
+      const r = deploy(ANN);
+      const next = setRepoAuth(ANN, r.id, { url: "ssh://git@github.com/acme/app" }, OK).repo;
+      expect(next).toMatchObject({ url: "ssh://git@github.com/acme/app", publicKey: r.publicKey, credentialId: r.credentialId });
+      expect(kg.calls()).toHaveLength(1);
+      expect(readSecret(ANN, r.credentialId!)).toBe(lastPair().privateKey);
+    });
+  });
+
+  describe("repair with the method again", () => {
+    const repaired = (id: string, user = ANN) => {
+      const before = kg.pairs().length;
+      const next = setRepoAuth(user, id, { method: "ssh-deploy-key" }, OK).repo;
+      expect(kg.pairs()).toHaveLength(before + 1);
+      expect(next.publicKey).toBe(lastPair().publicKey);
+      expect(readSecret(user, next.credentialId!)).toBe(lastPair().privateKey);
+      return next;
+    };
+
+    it("a key that is missing", () => {
+      const r = deploy(ANN);
+      removeCredential(ANN, r.credentialId!);
+      const next = repaired(r.id);
+      expect(keyCreds(ANN)).toHaveLength(1);
+      expect(orphans(ANN)).toEqual([]);
+      expect(next.credentialId).not.toBe(r.credentialId);
+    });
+
+    it("a credential of the wrong type under the same id and name", () => {
+      const r = deploy(ANN);
+      removeCredential(ANN, r.credentialId!);
+      withAuthLock(() => addCredentialLocked({ id: r.credentialId!, userId: ANN, type: "token", name: `repo:${r.id}`, secret: TOKEN }));
+      repaired(r.id);
+      expect(listCredentials(ANN).map((c) => c.type)).toEqual(["ssh-key"]);
+      expect(orphans(ANN)).toEqual([]);
+    });
+
+    it("a record that points at a credential with another name", () => {
+      const r = deploy(ANN);
+      removeCredential(ANN, r.credentialId!);
+      const own = withAuthLock(() => addCredentialLocked({ id: "55555555-5555-4555-8555-555555555555", userId: ANN, type: "token", name: "mine", secret: TOKEN2 }));
+      const file = JSON.parse(readFileSync(reposPath(), "utf8"));
+      file.repos[0].credentialId = own.id;
+      writeFileSync(reposPath(), JSON.stringify(file));
+      repaired(r.id);
+      expect(listCredentials(ANN).map((c) => c.name).sort()).toEqual(["mine", `repo:${r.id}`]);
+      expect(orphans(ANN).map((c) => c.name)).toEqual(["mine"]);
+    });
+  });
+
+  describe("removing and deleting", () => {
+    it("removeRepo deletes the key and leaves another account's secret", () => {
+      const mine = deploy(ANN);
+      const bob = add(BOB, "acme/web", { method: "github-token", token: TOKEN });
+      removeRepo(ANN, mine.id);
+      expect(listCredentials(ANN)).toEqual([]);
+      expect(readSecret(BOB, bob.credentialId!)).toBe(TOKEN);
+    });
+
+    it("deleting the account removes its records and keys, not Bob's", async () => {
+      const pw = "test-password-12345";
+      await hashPassword(pw);
+      await createUser({ name: "Root", email: "root@example.com", password: pw, role: "admin" });
+      const user = await createUser({ name: "Ann", email: "ann@example.com", password: pw });
+      deploy(user.id);
+      const bob = deploy(BOB, "git@github.com:acme/web.git");
+      deleteUser(user.id);
+      expect(listRepos(user.id)).toEqual([]);
+      expect(listCredentials(user.id)).toEqual([]);
+      expect(readSecret(BOB, bob.credentialId!)).toBe(lastPair().privateKey);
+    });
+  });
+
+  describe("failures", () => {
+    const tmpAsFolder = () => mkdirSync(`${reposPath()}.tmp`);
+    const clearTmp = () => rmSync(`${reposPath()}.tmp`, { recursive: true, force: true });
+    const files = () => [readFileSync(reposPath(), "utf8"), readFileSync(credentialsPath(), "utf8")];
+
+    it("a failed keygen on add changes nothing", () => {
+      kg.fail("exit");
+      expect(code(() => deploy(ANN))).toBeInstanceOf(KeygenError);
+      expect(() => statSync(reposPath())).toThrow();
+      expect(() => statSync(credentialsPath())).toThrow();
+      expect(kc.calls()).toEqual([]);
+    });
+
+    it("a failed keygen on change changes nothing", () => {
+      const r = deploy(ANN);
+      const before = files();
+      kc.clearLog();
+      kg.fail("no-public");
+      expect(code(() => setRepoAuth(ANN, r.id, { newKey: true }, OK))).toBeInstanceOf(KeygenError);
+      expect(files()).toEqual(before);
+      expect(kc.calls()).toEqual([]);
+    });
+
+    it("saving the key fails on add: the record is taken back", () => {
+      kc.fail("add");
+      expect(code(() => deploy(ANN))).toBeTruthy();
+      kc.fail();
+      expect(listRepos(ANN)).toEqual([]);
+      expect(() => statSync(credentialsPath())).toThrow();
+    });
+
+    it("saving the new key fails: the record names a missing key and the repeat stores one", () => {
+      const r = deploy(ANN);
+      kc.fail("add");
+      expect(code(() => setRepoAuth(ANN, r.id, { newKey: true }, OK))).toBeTruthy();
+      kc.fail();
+      expect(listCredentials(ANN)).toEqual([]);
+      const next = setRepoAuth(ANN, r.id, { method: "ssh-deploy-key" }, OK).repo;
+      expect(readSecret(ANN, next.credentialId!)).toBe(lastPair().privateKey);
+      expect(keyCreds(ANN)).toHaveLength(1);
+    });
+
+    it("an old Keychain key that cannot be deleted is reported and cleaned by the repeat", () => {
+      const r = deploy(ANN);
+      deploy(ANN, "git@github.com:acme/web.git");
+      kc.fail("delete");
+      const out = setRepoAuth(ANN, r.id, { newKey: true }, OK);
+      kc.fail();
+      expect(out.oldKeysLeft).toBe(1);
+      const pairs = kg.pairs().length;
+      expect(setRepoAuth(ANN, r.id, { method: "ssh-deploy-key" }, OK).oldKeysLeft).toBe(0);
+      expect(kg.pairs()).toHaveLength(pairs);
+    });
+
+    it("the record write fails after the wipe: the old record stays and the repeat makes a new key", () => {
+      const r = deploy(ANN);
+      tmpAsFolder();
+      expect(code(() => setRepoAuth(ANN, r.id, { newKey: true }, OK))).toBeInstanceOf(StoreError);
+      clearTmp();
+      expect(listCredentials(ANN)).toEqual([]);
+      expect(listRepos(ANN)).toEqual([r]);
+      expect(orphans(ANN)).toEqual([]);
+      const next = setRepoAuth(ANN, r.id, { method: "ssh-deploy-key" }, OK).repo;
+      expect(keyCreds(ANN)).toHaveLength(1);
+      expect(readSecret(ANN, next.credentialId!)).toBe(lastPair().privateKey);
+    });
+  });
+
+  describe("a broken file", () => {
+    const PUB = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI" + "k".repeat(43);
+    const base = { id: BOB, owner: ANN, added: "2026-10-01T10:00:00.000Z" };
+    const dk = (extra: object = {}) => ({ ...base, url: SSH, method: "ssh-deploy-key", credentialId: ANN, publicKey: PUB, ...extra });
+    const wrong: [string, object][] = [
+      ["no public key", dk({ publicKey: undefined })],
+      ["a bad public key", dk({ publicKey: "ssh-rsa AAAA" })],
+      ["an https address", dk({ url: "https://github.com/acme/app" })],
+      ["a user name", dk({ username: "ann" })],
+      ["no credential", dk({ credentialId: undefined })],
+      ["a public key on a token record", { ...base, url: "https://github.com/acme/app", method: "github-token", credentialId: ANN, publicKey: PUB }],
+      ["a public key on a none record", { ...base, url: "https://github.com/acme/app", method: "none", publicKey: PUB }],
+    ];
+    it.each(wrong)("gives wrong-format for %s", (_n, record) => {
+      writeFileSync(reposPath(), JSON.stringify({ version: 2, repos: [record] }));
+      const e = code(() => listRepos(ANN));
+      expect(e).toBeInstanceOf(StoreError);
+      expect((e as StoreError).kind).toBe("wrong-format");
+    });
+
+    it("reads a good record", () => {
+      writeFileSync(reposPath(), JSON.stringify({ version: 2, repos: [dk()] }));
+      expect(listRepos(ANN)[0]).toMatchObject({ method: "ssh-deploy-key", publicKey: PUB });
+    });
   });
 });

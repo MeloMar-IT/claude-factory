@@ -24,10 +24,11 @@ export class HttpError extends Error {
 
 /**
  * Answers with JSON. Every API answer passes through here, so the stored secrets are hidden now, even in text that
- * was saved before they were stored. When the store cannot be read nothing is shown (fail closed).
+ * was saved before they were stored. When the store cannot be read nothing is shown (fail closed). `keep` lists public
+ * keys that stay readable as whole values (only the repository routes pass them).
  */
-export function send(res: ServerResponse, status: number, body: unknown) {
-  const text = redactedJson(body);
+export function send(res: ServerResponse, status: number, body: unknown, keep: string[] = []) {
+  const text = redactedJson(body, keep);
   if (text === undefined) {
     res.writeHead(500, { "content-type": "application/json", "cache-control": "no-store" });
     res.end(JSON.stringify({ error: CANNOT_READ }));

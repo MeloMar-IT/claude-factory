@@ -3,8 +3,10 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startServer } from "../src/server/server.js";
+import { PUBLIC_KEY_RE } from "../src/credentials/ssh-keygen.js";
 import { fakeKeychain, type FakeKeychain } from "./helpers/keychain.js";
 import { signInAs, type TestSession } from "./helpers/session.js";
+import { fakeKeygen, type FakeKeygen } from "./helpers/ssh-keygen.js";
 
 const port = 20000 + Math.floor(Math.random() * 20000);
 const base = `http://127.0.0.1:${port}`;
@@ -13,6 +15,7 @@ const TOKEN2 = ["github", "pat", ""].join("_") + "Qq7".repeat(12);
 let tmp: string;
 let close: () => void;
 let kc: FakeKeychain;
+let kg: FakeKeygen;
 let saved: string | undefined;
 let admin: TestSession;
 let ann: TestSession;
@@ -25,6 +28,7 @@ beforeAll(async () => {
   tmp = mkdtempSync(join(tmpdir(), "repos-api-"));
   process.env.FACTORY_HOME = join(tmp, "home");
   kc = fakeKeychain();
+  kg = fakeKeygen();
   ({ close } = await startServer({ repo: tmp, runsDir: join(tmp, "runs"), port, claudeBin: resolve("tests/fixtures/fake-claude.mjs"), watchers: false, log: (m) => void logs.push(m) }));
   admin = await signInAs(base);
   ann = await signInAs(base, { name: "Ann", email: "ann@example.com", role: "user" });
@@ -32,6 +36,7 @@ beforeAll(async () => {
 });
 afterAll(() => {
   close();
+  kg.remove();
   kc.remove();
   if (saved === undefined) delete process.env.FACTORY_HOME;
   else process.env.FACTORY_HOME = saved;
@@ -172,6 +177,112 @@ describe("repositories API", () => {
     for (const t of [TOKEN, TOKEN2]) {
       expect(all).not.toContain(t);
       expect(all).not.toContain(Buffer.from(t).toString("base64"));
+    }
+  });
+});
+
+describe("SSH deploy key API", () => {
+  type Rec = { id: string; url: string; method: string; credentialId?: string; publicKey?: string };
+  const SSH = "git@github.com:Acme/Key.git";
+  const repoCreds = async (who: TestSession) => ((await call(who, "GET", "/api/credentials")).json() as { id: string; name: string; type: string }[]).filter((c) => c.name.startsWith("repo:"));
+  const put = (who: TestSession, id: string, body: unknown) => call(who, "PUT", `/api/repos/${id}/auth`, body);
+  let key: Rec;
+
+  it("adds one: the public key is shown, in the list too, and no private key", async () => {
+    const r = await call(ann, "POST", "/api/repos", { url: SSH, method: "ssh-deploy-key" });
+    expect(r.status).toBe(201);
+    key = r.json();
+    expect(key.publicKey).toMatch(PUBLIC_KEY_RE);
+    expect(key.publicKey).toBe(kg.pairs().at(-1)!.publicKey);
+    const mine = (await list(ann)).find((x) => x.id === key.id) as Rec;
+    expect(mine.publicKey).toBe(key.publicKey);
+    expect(seen.slice(-2).join("")).not.toContain("[redacted]");
+    expect((await repoCreds(ann)).map((c) => [c.id, c.type])).toEqual([[key.credentialId, "ssh-key"]]);
+    expect((await list(bob)).find((x) => x.id === key.id)).toBeUndefined();
+  });
+
+  it("refuses an https address with a plain message", async () => {
+    const add = await call(bob, "POST", "/api/repos", { url: "https://github.com/acme/https-key", method: "ssh-deploy-key" });
+    expect([add.status, add.error()]).toEqual([400, expect.stringContaining("SSH address")]);
+    const change = await put(ann, key.id, { method: "ssh-deploy-key", url: "https://github.com/Acme/Key" });
+    expect([change.status, change.error()]).toEqual([400, expect.stringContaining("SSH address")]);
+  });
+
+  it("makes a new key on request, for the owner only", async () => {
+    expect((await put(bob, key.id, { newKey: true })).status).toBe(404);
+    const r = await put(ann, key.id, { newKey: true });
+    expect(r.status).toBe(200);
+    expect(r.json().publicKey).toMatch(PUBLIC_KEY_RE);
+    expect(r.json().publicKey).not.toBe(key.publicKey);
+    expect((await repoCreds(ann)).map((c) => c.id)).toEqual([r.json().credentialId]);
+    key = r.json();
+  });
+
+  it("changes to a token and back, and removes the key with the repository", async () => {
+    const t = await put(ann, key.id, { method: "github-token", url: "https://github.com/Acme/Key", token: TOKEN });
+    expect(t.status).toBe(200);
+    expect(t.json().publicKey).toBeUndefined();
+    expect((await repoCreds(ann)).map((c) => c.type)).toEqual(["token"]);
+    const back = await put(ann, key.id, { method: "ssh-deploy-key", url: SSH });
+    expect(back.json().publicKey).toMatch(PUBLIC_KEY_RE);
+    key = back.json();
+    expect((await call(ann, "DELETE", `/api/repos/${key.id}`)).status).toBe(200);
+    expect(await repoCreds(ann)).toEqual([]);
+  });
+
+  it("answers a failed ssh-keygen with a plain message and no record", async () => {
+    const before = await list(bob);
+    for (const mode of ["exit", "no-public"] as const) {
+      logs.length = 0;
+      kg.fail(mode);
+      const r = await call(bob, "POST", "/api/repos", { url: "git@github.com:acme/broken.git", method: "ssh-deploy-key" });
+      kg.fail();
+      expect([r.status, r.error()]).toEqual([500, "the SSH key could not be made; see the server log"]);
+      expect(logs).toContain("repos: ssh-keygen failed");
+      expect(logs.some((l) => l.startsWith("repos: unexpected"))).toBe(false);
+      expect(await list(bob)).toEqual(before);
+    }
+  });
+
+  describe("when a stored secret is part of a public key", () => {
+    const ids: [TestSession, string][] = [];
+    const store = async (who: TestSession, name: string, secret: string) => {
+      const r = await call(who, "POST", "/api/credentials", { type: "token", name, secret });
+      expect(r.status).toBe(201);
+      ids.push([who, r.json().id]);
+    };
+
+    it("still shows the key whole", async () => {
+      const own = (await call(ann, "POST", "/api/repos", { url: "git@github.com:acme/plain-kit.git", method: "ssh-deploy-key" })).json() as Rec;
+      await store(bob, "p1", "ssh-ed25519");
+      await store(bob, "p2", "AAAAC3NzaC1lZDI1NTE5AAAAI");
+      await store(ann, "p3", own.publicKey!.slice(40, 52));
+      expect(((await list(ann)).find((x) => x.id === own.id) as Rec).publicKey).toBe(own.publicKey);
+      expect(own.publicKey).toMatch(PUBLIC_KEY_RE);
+
+      const added = await call(ann, "POST", "/api/repos", { url: "git@github.com:acme/ssh-ed25519-kit.git", method: "ssh-deploy-key" });
+      expect(added.status).toBe(201);
+      expect(added.json().publicKey).toMatch(PUBLIC_KEY_RE);
+      expect(added.json().url).toContain("[redacted]");
+
+      const changed = await put(ann, own.id, { newKey: true });
+      expect(changed.status).toBe(200);
+      expect(changed.json().publicKey).toMatch(PUBLIC_KEY_RE);
+      expect(changed.json().publicKey).not.toBe(own.publicKey);
+    });
+
+    it("cleans up", async () => {
+      for (const [who, id] of ids) expect((await call(who, "DELETE", `/api/credentials/${id}`)).status).toBe(200);
+    });
+  });
+
+  it("never shows a private key", () => {
+    const pairs = kg.pairs();
+    expect(pairs.length).toBeGreaterThan(3);
+    const all = seen.join("\n") + logs.join("\n");
+    expect(all).not.toContain("PRIVATE KEY");
+    for (const p of pairs) {
+      for (const line of p.privateKey.split("\n").filter((l) => l.length > 20 && !l.includes("-----"))) expect(all).not.toContain(line);
     }
   });
 });

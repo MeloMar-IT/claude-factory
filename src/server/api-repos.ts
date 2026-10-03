@@ -1,7 +1,8 @@
 import { basename } from "node:path";
-import { RepoError, addRepo, listRepos, removeGithubRepo, removeRepo, setRepoAuth } from "../auth/repos.js";
+import { type RepoRecord, RepoError, addRepo, listRepos, removeGithubRepo, removeRepo, setRepoAuth } from "../auth/repos.js";
 import { StoreError } from "../auth/store.js";
 import { KeyError } from "../credentials/keychain.js";
+import { KeygenError } from "../credentials/ssh-keygen.js";
 import { HttpError, readJson, send } from "./http.js";
 import type { ApiContext, Route } from "./server.js";
 import { sessionUser } from "./api-auth.js";
@@ -20,6 +21,10 @@ export function guardedRepos<T>(ctx: ApiContext, fn: () => T): T {
     if (e instanceof RepoError) throw new HttpError(STATUS[e.code], e.message);
     if (e instanceof HttpError) throw e;
     const log = ctx.diagLog;
+    if (e instanceof KeygenError) {
+      log?.(`repos: ssh-keygen ${e.code}`);
+      throw new HttpError(500, "the SSH key could not be made; see the server log");
+    }
     if (e instanceof StoreError) log?.(`repos: ${basename(e.file)} ${e.kind}`);
     else if (e instanceof KeyError) log?.(`repos: keychain ${e.code === "wrong-key" ? "wrong-key" : "failed"}`);
     else log?.(`repos: unexpected ${e instanceof Error ? e.name : "error"}`);
@@ -37,30 +42,36 @@ function oldKeys(ctx: ApiContext, left: number, done: string): void {
   throw new HttpError(500, `${done}, but an old key is still in the Keychain, so older copies of the data could be read; try again, or run scf credential rotate-key`);
 }
 
-/** The caller's own repositories: list, add, change how to reach one, remove. A token is only ever accepted, never returned. */
+/** The public keys of deploy-key records; `send` keeps them readable (a public key is not a secret). */
+const publicKeys = (repos: RepoRecord[]) => repos.flatMap((r) => (r.publicKey ? [r.publicKey] : []));
+
+/** The caller's own repositories: list, add, change how to reach one, remove. A token is only ever accepted, a private key never leaves the server. */
 export const repoRoutes: Route = async (ctx, req, res, seg, method) => {
   if (seg[0] !== "repos") return false;
   const user = sessionUser(ctx, req);
   const noServerAccess = (m: unknown) => {
     if (m === "none" && user.role !== "admin") throw new HttpError(403, 'only an admin may choose "none" (the server\'s own access)');
   };
-  if (seg.length === 1 && method === "GET") return send(res, 200, guardedRepos(ctx, () => listRepos(user.id))), true;
+  if (seg.length === 1 && method === "GET") {
+    const repos = guardedRepos(ctx, () => listRepos(user.id));
+    return send(res, 200, repos, publicKeys(repos)), true;
+  }
   if (seg.length === 1 && method === "POST") {
     const body = await readJson(req);
     noServerAccess(body.method);
     const repo = guardedRepos(ctx, () =>
       addRepo(user.id, { url: given(body, "url") ?? given(body, "name"), method: given(body, "method"), username: given(body, "username"), token: given(body, "token") }),
     );
-    return send(res, 201, repo), true;
+    return send(res, 201, repo, publicKeys([repo])), true;
   }
   if (seg.length === 3 && seg[2] === "auth" && method === "PUT") {
     const body = await readJson(req);
     noServerAccess(body.method);
     const r = guardedRepos(ctx, () =>
-      setRepoAuth(user.id, seg[1]!, { method: given(body, "method"), username: given(body, "username"), token: given(body, "token"), url: given(body, "url") }),
+      setRepoAuth(user.id, seg[1]!, { method: given(body, "method"), username: given(body, "username"), token: given(body, "token"), url: given(body, "url"), newKey: given(body, "newKey") }),
     );
     oldKeys(ctx, r.oldKeysLeft, "the repository was changed");
-    return send(res, 200, r.repo), true;
+    return send(res, 200, r.repo, publicKeys([r.repo])), true;
   }
   if (seg.length === 2 && method === "DELETE") {
     oldKeys(ctx, guardedRepos(ctx, () => removeRepo(user.id, seg[1]!)).oldKeysLeft, "the repository was removed");

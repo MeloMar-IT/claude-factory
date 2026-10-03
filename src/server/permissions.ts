@@ -74,9 +74,9 @@ export const RULES: Rule[] = [
   r("POST", "users/:id/link", "no", "a new set-password token for an account without a password"),
   r("DELETE", "users/:id", "no", "delete an account with its sessions, repositories and stored credentials"),
   r("GET", "repos", "yes", "your repositories"),
-  r("POST", "repos", "yes", "add a repository (a URL, and a token for it)"),
-  r("PUT", "repos/:id/auth", "yes", "change the method, user name, token or address of your repository"),
-  r("DELETE", "repos/:id", "yes", "remove your repository and its stored token"),
+  r("POST", "repos", "yes", "add a repository (a URL, and a token or a deploy key for it)"),
+  r("PUT", "repos/:id/auth", "yes", "change the method, user name, token or address of your repository, or make a new deploy key"),
+  r("DELETE", "repos/:id", "yes", "remove your repository and its stored token or key"),
   r("DELETE", "repos/:owner/:name", "yes", "remove a GitHub repository by name (old form)"),
 ];
 
