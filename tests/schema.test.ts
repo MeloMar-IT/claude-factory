@@ -8,7 +8,7 @@ const minimal = (steps: string) => `name: t\nsteps:\n${steps}`;
 describe("flow schema", () => {
   it("parses the built-in flows", () => {
     const shipped = readdirSync("flows").filter((f) => f.endsWith(".yaml")).map((f) => f.replace(/\.yaml$/, ""));
-    expect(shipped.sort()).toEqual(["daily-pr", "epic-questions", "issue-code-daily", "issue-gitflow", "issue-plan", "release-daily"]);
+    expect(shipped.sort()).toEqual(["daily-pr", "epic-questions", "issue-code-daily", "issue-gitflow", "issue-plan", "refine-brief", "release-daily"]);
     for (const f of shipped) {
       const flow = parseFlow(readFileSync(`flows/${f}.yaml`, "utf8"), f);
       expect(flow.name).toBe(f);

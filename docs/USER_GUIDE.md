@@ -527,7 +527,8 @@ The editor keeps empty values (`issue: ""`), so a variable you have just added s
 
 Blocks are ready-made groups of steps: pull a GitHub issue, plan, code, run tests with a fix
 loop, code review, cross-review by Codex, commit, push, open a PR, wait for CI, secret scan,
-Jira and Linear, and more. Insert one with **+ From library** in the editor. Turn any step into
+Jira and Linear, and more. The block **Architect (charter)** holds the architect's role as one
+text; the architect steps of Refinement take it from there. Insert one with **+ From library** in the editor. Turn any step into
 your own block with **☆ Save as block**.
 
 ---
@@ -1068,9 +1069,10 @@ request to `main` at 17:00, and no new coding starts while it is open.
 
 #### Which flows ship
 
-Only the two pipelines and what supports them: `epic-questions`, `issue-gitflow` and
-`release-daily` (gitflow), and `issue-plan`, `issue-code-daily` and `daily-pr` (human in the
-loop). Build anything else yourself in the editor, with **✨ Draft flow with Claude**, or with any
+Two delivery pipelines, what supports them, and the standalone refinement flow: `epic-questions`,
+`issue-gitflow` and `release-daily` (gitflow), `issue-plan`, `issue-code-daily` and `daily-pr`
+(human in the loop), and `refine-brief` (the architect's context brief, see
+[Refinement](#12-refinement); it can't be deleted, because Refinement uses it). Build anything else yourself in the editor, with **✨ Draft flow with Claude**, or with any
 AI assistant ([Let any AI write a flow](#let-any-ai-write-a-flow)). **A flow that a watcher uses —
 enabled or disabled, or as its questions check — or that another flow runs as a step can't be
 deleted**; the Foundry says which watchers or flows use it.
@@ -1907,3 +1909,21 @@ The folder of your clone can keep its name.
 **Limits.** 200 sessions per account; dropped sessions count until they are removed. 1,000 log entries per session; after that the session can only be dropped. Nothing is removed to make room.
 
 **Where it is kept.** In `refinements.json` in the data folder (mode 0600). It survives a restart and is copied unchanged when the data folder moves. If the file cannot be read, the calls answer "the refinement sessions are not working; see the server log", and an account cannot be deleted until the file is repaired.
+
+### The architect's context brief
+
+The flow `refine-brief` lets the architect read a repository and its open issues and write a **context brief** for an idea, so that refining starts from the code and the backlog instead of guesses. The Refinement page does not start it yet; for now run it by hand:
+
+```
+scf run refine-brief --task "your idea" --var github_repo=owner/name
+```
+
+**What it reads.** It clones the repository (the `develop` branch when the remote has one, the default branch otherwise) and reads the open issues with all their comments. Up to 200 open issues are read, the newest first. A body is cut at 2,000 characters and a comment at 600; the cut is marked. When the backlog is larger than 200, the brief must say so under "Could not find out", or the run fails.
+
+**The five parts.** Each has its own heading, in this order: *What already exists*, *Code the idea would touch*, *Open issues that overlap*, *Rules that apply* (from `CLAUDE.md`, the README and architecture documents) and *Could not find out*. Every claim about the code names its file; every claim about the backlog names its issue number. A brief that misses a part, leaves one empty, puts the headings in another order or holds a code block fails the run. A part with nothing says "Nothing found."
+
+**It only reads.** The architect has the tools `Read`, `Glob` and `Grep` and nothing else. No step pushes, comments, labels or changes anything on GitHub. The repository is cloned into a subfolder, so its own `.claude/` settings and hooks are not loaded. Your idea and the issue text are never put into a shell command, and the architect treats them as text to read, never as instructions. Its role is written once, in the block **Architect (charter)**: it asks, explains, warns and suggests; it never decides, never writes a plan or code, and says "I don't know" instead of guessing.
+
+**Cost and model.** One run costs at most $3. It uses the planning model of the build flow (`claude-opus-5-5`); an admin changes it with a routing rule for the flow `refine-brief` on the Models page.
+
+**Cannot be deleted.** Refinement uses the flow, so `DELETE /api/flows/refine-brief` is refused (also for a copy an admin saved).

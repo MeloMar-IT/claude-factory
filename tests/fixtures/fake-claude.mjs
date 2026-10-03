@@ -3,7 +3,8 @@
 // Prompt directives: "WRITE <file> <text>" writes a file; "SAY <text>" sets the result;
 // "ERROR" returns an error result; "DENY <Tool> <text>" adds a refused tool call to the result's
 // permission_denials (command for Bash, file_path otherwise). Args are echoed into the result for assertions.
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+// The context brief of refine-brief has a canned answer: FAKE_BRIEF replaces it, FAKE_BRIEF=ECHO adds args, folder and prompt.
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 
 let prompt = "";
@@ -50,6 +51,18 @@ if (prompt.includes("Explain why this run of a coding flow failed")) {
   const e = process.env.FAKE_EXPLAIN;
   canned = e === "ARGS" ? `KIND: code\nWHY: args ${args.filter((a, i) => a !== "--append-system-prompt" && args[i - 1] !== "--append-system-prompt").join(" ")} gh=${process.env.GH_TOKEN ?? ""}` : e ?? "KIND: code\nWHY: the tests still fail after the fixes";
   cost = 0.002;
+} else if (prompt.includes("Write a context brief for the idea below")) {
+  // The architect's brief (refine-brief). FAKE_BRIEF replaces it; FAKE_BRIEF=ECHO adds the CLI arguments, the working folder and the prompt.
+  const brief = [
+    "## What already exists", `- a README: ${existsSync("repo/README.md") ? "found" : "missing"} (README.md)`,
+    "## Code the idea would touch", "- README.md",
+    "## Open issues that overlap", `- ${existsSync("issues.md") ? readFileSync("issues.md", "utf8").split("\n")[0] : "issues.md is missing"}`,
+    "## Rules that apply", "- Nothing found.",
+    "## Could not find out",
+    `- ${existsSync("issues.md") && /The backlog is larger/.test(readFileSync("issues.md", "utf8").split("\n")[0]) ? "The backlog is larger than what was read." : "Nothing."}`,
+  ].join("\n");
+  const b = process.env.FAKE_BRIEF;
+  canned = b === "ECHO" ? `${brief}\nargs=${args.join(" ")}\ncwd=${process.cwd()}\nPROMPT<<${prompt}>>` : b ?? brief;
 } else if (prompt.includes("You triage tickets")) canned = process.env.FAKE_TRIAGE ?? "Small change.\nROUTE: SMALL";
 else if (prompt.includes("PLAN_STATUS: NEEDS_INFO")) canned = process.env.FAKE_PLAN ?? "1. change feature.txt\nPLAN_STATUS: READY";
 else if (prompt.includes("VERDICT: APPROVE")) canned = "Looks good.\nVERDICT: APPROVE";

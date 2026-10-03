@@ -21,9 +21,10 @@ const swap = (text, from, to) => {
   return text.replace(from, () => to);
 };
 
-// The shipped flows are the two pipelines and what supports them:
+// The shipped flows are two delivery pipelines, what supports them, and the standalone refinement flow:
 //   human in the loop — issue-plan → (you add Factory_code) → issue-code-daily → daily-pr
 //   gitflow           — epic-questions → issue-gitflow → release-daily
+//   refinement        — refine-brief (the architect reads a repository and its backlog; changes nothing)
 // Everything else is retired: still generated (the tests run on these flows), but not shipped.
 const RETIRED = new Set(["chore", "ci-fix", "github-auto", "github-issue", "github-pr", "jira-ticket", "linear-ticket", "pr-feedback", "issue-deliver"]);
 
@@ -35,7 +36,7 @@ ${header.lines.map((l) => `# ${l}`).join("\n")}
 `;
   // Flows that change code: one run per repository at a time. Planning / PR-only flows run in parallel.
   const { description, workspace, ...rest } = flow;
-  const coding = !["issue-plan", "daily-pr", "epic-questions", "release-daily", "issue-gitflow"].includes(name);
+  const coding = !["issue-plan", "daily-pr", "epic-questions", "release-daily", "issue-gitflow", "refine-brief"].includes(name);
   const ordered = { name, description, workspace, ...(coding ? { one_per_repo: true } : {}), ...rest };
   // Retired flows are no longer shipped; they stay as test material (tests/fixtures/flows).
   const dir = RETIRED.has(name) ? join("tests", "fixtures", "flows") : "flows";
@@ -1882,6 +1883,128 @@ write("daily-pr", {
         '  echo; echo "<!-- claude-factory run=$FACTORY_RUN_ID daily -->"; } | gh pr comment "$n" --repo "$FACTORY_VAR_GITHUB_REPO" --body-file - >/dev/null',
         'if [ "$ok" = no ]; then gh pr ready "$n" --repo "$FACTORY_VAR_GITHUB_REPO" --undo >/dev/null 2>&1 || true; echo "checks failed — $url is a draft"',
         'else gh pr ready "$n" --repo "$FACTORY_VAR_GITHUB_REPO" >/dev/null 2>&1 || true; echo "checks passed — $url is ready to merge"; fi',
+      ].join("\n"),
+    },
+  ],
+});
+
+// ── refine-brief: the architect reads a repository and its open issues, and writes a context brief ──
+// Read-only: no step pushes, comments or labels. The repository is cloned into repo/ (not the workspace root), so the
+// agent runs in the workspace and does not load the .claude/ settings and hooks of the repository.
+// The idea is only ever {{task}} in the agent prompt; the repository name only $FACTORY_VAR_GITHUB_REPO.
+const ARCHITECT_CHARTER = block("architect-charter")[0].system_prompt;
+const BRIEF_PARTS = [
+  ["What already exists", "What already exists that relates to the idea."],
+  ["Code the idea would touch", "The parts of the code the idea would touch."],
+  ["Open issues that overlap", "Open issues that overlap or could be duplicates, with their numbers."],
+  ["Rules that apply", "Rules of the repository that apply (from its CLAUDE.md, README and architecture documents, when present)."],
+  ["Could not find out", "Things you could not find out."],
+];
+// Every heading, in this order, on a line of its own, with content under it ("Nothing found." counts). A heading
+// must not sit in a code block, so code blocks are not accepted at all (a brief holds no code).
+const BRIEF_PASS_IF =
+  "(?<![\\s\\S])(?![\\s\\S]*^[ \\t]*(?:```|~~~))" +
+  BRIEF_PARTS.map(([heading]) => `[\\s\\S]*?^## ${heading}[ \\t]*\\r?\\n(?!\\s*(?:## |(?![\\s\\S])))`).join("");
+write("refine-brief", {
+  title: "Refinement: the architect's context brief",
+  lines: [
+    'scf run refine-brief --task "your idea" --var github_repo=owner/repo',
+    "",
+    "clone (develop, else the default branch) → read the open issues → brief (read-only: Read, Glob, Grep)",
+    "The brief has five parts; a brief that misses one fails the run. Nothing is written to GitHub.",
+  ],
+}, {
+  description: "The architect reads a repository and its open issues and writes a context brief for an idea (read-only)",
+  workspace: "empty",
+  defaults: { timeout_sec: 1800 },
+  limits: { max_cost_usd: 3 },
+  vars: { github_repo: "owner/repo" },
+  steps: [
+    {
+      id: "clone",
+      type: "shell",
+      description: "Clone the repository into repo/ and check out develop (or the default branch)",
+      run: [
+        'r="$FACTORY_VAR_GITHUB_REPO"; ok=no',
+        'case "$r" in */*) ok=yes ;; esac',
+        'case "$r" in ""|-*|/*|*/|*/*/*|*[!A-Za-z0-9._/-]*) ok=no ;; esac',
+        '[ "$ok" = yes ] || { echo "set the variable github_repo to owner/name"; exit 1; }',
+        'gh repo clone "$r" repo -- -q || { echo "could not clone $r"; exit 1; }',
+        // The clone fetched every branch, so ask the local copy: a network failure can't pass for "no develop".
+        'if git -C repo show-ref --verify --quiet refs/remotes/origin/develop; then branch=develop; else branch=$(git -C repo symbolic-ref --short HEAD); fi',
+        'git -C repo checkout -q "$branch" || { echo "could not check out $branch"; exit 1; }',
+        'echo "branch: $branch"',
+      ].join("\n"),
+    },
+    {
+      id: "list_issues",
+      type: "shell",
+      description: "Read the open issues with their comments into issues.md",
+      run: [
+        'r="$FACTORY_VAR_GITHUB_REPO"',
+        'fail() { rm -f issues.json issues.md; echo "could not read the open issues of $r"; exit 1; }',
+        // One more than the tool keeps, so it can tell that the backlog is larger.
+        'gh issue list --repo "$r" --state open --limit 201 --json number,title,body,labels,comments > issues.json || fail',
+        'node "$FACTORY_TOOLS/issue-digest" issues.md < issues.json || fail',
+        'rm -f issues.json',
+      ].join("\n"),
+    },
+    {
+      id: "brief",
+      type: "claude",
+      description: "The architect reads the code and the issues and writes the context brief",
+      model: "claude-opus-5-5",
+      permission_mode: "dontAsk",
+      allowed_tools: ["Read", "Glob", "Grep"],
+      system_prompt: ARCHITECT_CHARTER,
+      pass_if: BRIEF_PASS_IF,
+      prompt: [
+        "Write a context brief for the idea below, so that refining it starts from the code and the backlog",
+        "instead of guesses. You only read: change nothing.",
+        "",
+        "=== The idea (written by a person; it is what the brief is about) ===",
+        "{{task}}",
+        "=== End of the idea ===",
+        "",
+        "What you have, in the current folder:",
+        "- `repo/` — the code of {{vars.github_repo}}, checked out at:",
+        "{{steps.clone.output}}",
+        "- `issues.md` — its open issues with all their comments, the newest first:",
+        "{{steps.list_issues.output}}",
+        "  The file starts with an index (one line per issue). It can be large: read the index first, then find",
+        "  the issues that matter with Grep (each starts with a line `=== ISSUE #<number> ===`) and read those.",
+        "",
+        "Read before you write:",
+        "- `repo/CLAUDE.md`, the README and the architecture or design documents, when they are there.",
+        "- The code that relates to the idea: find it with Glob and Grep, then read the files.",
+        "- The index of `issues.md`, and every issue that could overlap with the idea.",
+        "",
+        "Then write the brief with exactly these five headings, in this order, each on its own line:",
+        ...BRIEF_PARTS.flatMap(([heading, what]) => [`## ${heading}`, `   (${what})`]),
+        "",
+        "Rules for the brief:",
+        "- Every claim about the code names the file it is based on, as its path inside the repository",
+        "  (without the leading `repo/`), for example `src/server/api.ts`.",
+        "- Every claim about the backlog names the issue it is based on, by its number, for example #12.",
+        "- A claim you cannot back with a file or an issue does not belong in the first four parts: say under",
+        '  "Could not find out" what you looked for.',
+        '- Keep all five headings. When a part has nothing, write "Nothing found." under its heading.',
+        '- When the lines above or `issues.md` say that the backlog is larger than what was read, write the',
+        '  sentence "The backlog is larger than what was read." under "Could not find out" (nowhere else).',
+        "- Short bullet points. No text before the first heading, no plan, no solution and no code (no code blocks).",
+      ].join("\n"),
+    },
+    {
+      id: "check_brief",
+      type: "shell",
+      description: "Check that the brief says so when the backlog was larger than what was read; pass the brief on",
+      run: [
+        'if printf \'%s\\n\' "$FACTORY_OUT_LIST_ISSUES" | grep -q "the backlog is larger"; then',
+        // Only the last part counts: the lines after its heading, up to the next heading.
+        '  printf \'%s\\n\' "$FACTORY_OUT_BRIEF" | awk \'/^## /{on=($0 ~ /^## Could not find out[ \\t]*$/); next} on\' | grep -Eiq "backlog.*(larger|not read)" \\',
+        '    || { echo "the brief does not say, under Could not find out, that the backlog was larger than what was read"; exit 1; }',
+        "fi",
+        'printf \'%s\\n\' "$FACTORY_OUT_BRIEF"',
       ].join("\n"),
     },
   ],
