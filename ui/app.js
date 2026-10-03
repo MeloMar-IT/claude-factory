@@ -1,6 +1,6 @@
 import YAML from "/vendor/yaml/index.js";
 import { api } from "./api.js";
-import { allowedHash, ensureSignedIn, isAdmin, startApp } from "./auth.js";
+import { allowedHash, ensureSignedIn, isAdmin, linkToken, startApp } from "./auth.js";
 import { debounce, h, modal, mount, toast } from "./dom.js";
 import { cleanFlow, renderEditor } from "./editor.js";
 import { renderGraph } from "./graph.js";
@@ -364,6 +364,8 @@ function welcome() {
 }
 
 async function route() {
+  // A set-password link is only for the sign-in page: load it again to show that page.
+  if (linkToken(location.hash)) return location.reload();
   // A page a user may not open is never drawn.
   const hash = allowedHash(S.admin, location.hash || (S.admin ? "#/flows" : "#/runs"), (to) => history.replaceState(null, "", to));
   const [, section, arg] = hash.split("/").map(decodeURIComponent);

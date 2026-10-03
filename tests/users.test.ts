@@ -182,8 +182,8 @@ describe("accounts", () => {
     const u = await createUser(ann());
     await setPassword(u.id, "test-other-password");
     const now = getUser(u.id)!;
-    expect(await verifyPassword(PW, now.passwordHash)).toBe(false);
-    expect(await verifyPassword("test-other-password", now.passwordHash)).toBe(true);
+    expect(await verifyPassword(PW, now.passwordHash!)).toBe(false);
+    expect(await verifyPassword("test-other-password", now.passwordHash!)).toBe(true);
     await setStatus(u.id, "blocked");
     expect(getUser(u.id)!.status).toBe("blocked");
     expect(await code(setStatus(randomUUID(), "blocked"))).toBe("not-found");

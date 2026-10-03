@@ -106,9 +106,9 @@ describe("every route needs a session", () => {
   let who: TestSession;
   beforeAll(async () => void (who = await signInAs(s.base)));
 
-  const GETS = ["/api/credentials", "/api/repos", "/api/info", "/api/config", "/api/watchers", "/api/providers", "/api/evals", "/api/stats", "/api/flows", "/api/flows/x", "/api/blocks", "/api/queue", "/api/runs", "/api/runs/x", "/api/runs/x/events", "/api/runs/x/diff", "/api/runs/x/transcript/0", "/api/next", "/api/your-turn", "/api/since", "/api/board", "/api/nope", "/api/setup"];
-  const PUTS = ["/api/config", "/api/flows/x", "/api/blocks/x", "/api/session", "/api/repos/x/auth"];
-  const DELETES = ["/api/credentials/x", "/api/repos/a/b", "/api/repos/x", "/api/flows/x", "/api/blocks/x"];
+  const GETS = ["/api/credentials", "/api/repos", "/api/info", "/api/config", "/api/watchers", "/api/providers", "/api/evals", "/api/stats", "/api/flows", "/api/flows/x", "/api/blocks", "/api/queue", "/api/runs", "/api/runs/x", "/api/runs/x/events", "/api/runs/x/diff", "/api/runs/x/transcript/0", "/api/next", "/api/your-turn", "/api/since", "/api/board", "/api/nope", "/api/setup", "/api/set-password"];
+  const PUTS = ["/api/config", "/api/flows/x", "/api/blocks/x", "/api/session", "/api/repos/x/auth", "/api/set-password"];
+  const DELETES = ["/api/credentials/x", "/api/repos/a/b", "/api/repos/x", "/api/flows/x", "/api/blocks/x", "/api/set-password"];
   const POSTS = ["/api/credentials", "/api/repos", "/api/watchers/x/tick", "/api/clean", "/api/providers/test", "/api/validate", "/api/generate", "/api/runs", "/api/runs/x/cancel", "/api/runs/x/resume", "/api/runs/x/approve", "/api/runs/x/reject", "/api/your-turn/dismiss", "/api/your-turn/restore", "/api/nope"];
   const table = [...GETS.map((p) => ["GET", p]), ...PUTS.map((p) => ["PUT", p]), ...DELETES.map((p) => ["DELETE", p]), ...POSTS.map((p) => ["POST", p])] as [string, string][];
 
@@ -244,7 +244,7 @@ describe("sign-in", () => {
   });
 
   it("refuses a foreign origin on sign-in and setup", async () => {
-    for (const path of ["/api/session", "/api/setup"]) {
+    for (const path of ["/api/session", "/api/setup", "/api/set-password"]) {
       const r = await post(s, path, { email: who.user.email, password: PW, name: "x" }, { origin: "http://evil.example" });
       expect(r.status, path).toBe(403);
       expect(r.headers.getSetCookie()).toEqual([]);
@@ -628,7 +628,7 @@ describe("no secret in a response or a log line", () => {
       replaceWithFolder();
       await keep(await login(s, "ann@example.com", PW));
 
-      const stored = listUsers()[0]!.passwordHash;
+      const stored = listUsers()[0]!.passwordHash!;
       for (const text of [...seen, ...s.logs]) {
         expect(text).not.toContain(PW);
         expect(text).not.toContain("wrong-password-123");

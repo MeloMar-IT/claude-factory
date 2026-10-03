@@ -6,7 +6,7 @@ import type { ApiContext } from "./server.js";
 /**
  * Who may make which API call. An admin may make every call in the table; a user only the calls marked `yes`,
  * and the calls marked `own` on runs the user started (any other run answers 404, like an unknown one). A call that is not in the table is answered with 404.
- * The routes /api/session and /api/setup need no session and are not in the table.
+ * The routes /api/session, /api/setup and /api/set-password need no session and are not in the table.
  */
 export type UserAccess = "yes" | "no" | "own";
 

@@ -153,7 +153,7 @@ export async function userCommand(args: { positionals: string[]; values: Record<
     case "list": {
       const users = listUsers();
       if (!users.length) io.out("no accounts");
-      for (const u of users) io.out(`${u.email}  ${u.name}  ${u.role}  ${u.status}  last sign-in: ${u.lastSignIn ?? "never"}`);
+      for (const u of users) io.out(`${u.email}  ${u.name}  ${u.role}  ${u.status}  last sign-in: ${u.lastSignIn ?? "never"}${u.passwordHash === undefined ? "  no password yet" : ""}`);
       return 0;
     }
     case "password": {
