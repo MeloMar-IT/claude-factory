@@ -13,6 +13,7 @@ import { renderAllRepos } from "./admin-repos.js";
 import { renderRefinement } from "./refinement.js";
 import { renderRepos } from "./repos.js";
 import { renderUsers } from "./users.js";
+import { renderAudit } from "./audit.js";
 import { renderBoard } from "./board.js";
 import { loadHealth, startHealth } from "./health.js";
 import { startSince } from "./since.js";
@@ -395,6 +396,7 @@ async function route() {
     else if (section === "refinement") S.cleanup = await renderRefinement(main, { admin: S.admin, id: arg });
     else if (section === "repos") S.cleanup = await renderRepos(main, { admin: S.admin });
     else if (section === "users") S.cleanup = await renderUsers(main, { me: S.me });
+    else if (section === "audit") S.cleanup = await renderAudit(main);
     else if (section === "runs" && arg) S.cleanup = renderRunDetail(main, arg, { admin: S.admin });
     else if (section === "runs") S.cleanup = await renderRunsList(main, { admin: S.admin });
     else if (section === "new") S.cur && !S.cur.name ? renderFlowView() : openNew();

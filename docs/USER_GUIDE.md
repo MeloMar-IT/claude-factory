@@ -79,6 +79,7 @@ admin for a new one.
 | **Models** | Which agents and models are available, and which model runs which step |
 | **Dashboard** | Spend, success rate, where runs fail, eval results |
 | **Users** | The accounts: add, edit, block and delete them (admins only) |
+| **Audit** | Who did what, with filters and a CSV export (admins only) |
 | **Settings** | Budget, safety, notifications, bot identity, disk clean-up |
 
 An account with the role `user` sees only **Refinement**, **Runs** and **My repositories**:
@@ -1336,6 +1337,18 @@ notes, task text, credential names and setting values are never written. A line 
 action, and a line is not written while another `scf` command holds the lock; the server log then says
 `audit: <file> <kind> (<action>)`. Runs that a watcher starts, `scf run`, `scf approve`, `scf reject`, evals, deleting or
 unpublishing a flow, blocks, clean-up and running a watcher now are not logged. A `target` can be up to 255 characters.
+
+**The Audit page.** Admins only: **Audit** in the top bar (`#/audit`). It shows who did what, newest first: time, who, action,
+target and result. "Who" is the account's name, "command line" for `scf`, or "not signed in" for a failed sign-in. An account
+that is gone shows as "deleted user". A detail, such as `user -> admin` for a role change, is under the target.
+
+- **Filters.** User (a list of the accounts; it finds what the account did and what was done to it), action, and a from and a
+  to date. The dates are days in your browser's time zone; both days are included. Changing a filter reloads the list.
+- **Export CSV** downloads every line that matches the filters shown, oldest first.
+- The page shows the newest 500 lines. When there are more, it says so: narrow the filters or use **Export CSV**.
+- An empty result says "No entries." An error, such as a log that cannot be read, shows on the page.
+
+An account with the role `user` never sees the link or the page; `#/audit` goes to `#/runs`.
 
 **Reading the audit log over the API.** Admins only; a user gets 403. `GET /api/audit` answers `{entries, more}`. An `actor` is `{type: "cli"}`, `{type: "anonymous"}` or `{type: "account", id, name}`; a `target` is an account in the same form, `{type: "text", text}`, or `null`. Account lines show `result: "ok"` and the account as target; a role change has `detail` like `user -> admin`, and a block that stops work has `stop work`. `name` is the current name, or `deleted user`; the file keeps ids only. Filters: `user` (the account id exactly as stored; it matches the actor or the target account), `action`, `from` and `to` (ISO times with seconds, such as `2026-10-02T09:00:00Z`; both are included). A `+` in an offset must be written `%2B`. An unknown, empty or repeated filter, a `user` that is not an id, an `action` that is not an audit action, a bad time, or `from` after `to` answers 400. At most 500 entries come back, newest first by the order of the lines; when `more` is true, narrow the filters or use the export. `GET /api/audit/export` takes the same filters and downloads every matching line as `audit.csv`, in the order of the file (oldest first), with the header row `time,actor,actor_name,action,target,target_name,result,detail`. A cell that starts with `=`, `+`, `-` or `@` gets a `'` in front. Stored secrets are hidden as in every other answer; a CSV row that would show one is hidden whole. Lines that do not parse are left out. An unreadable file answers a plain 500, and the log says `audit: audit.jsonl unreadable`. A download that breaks half-way is cut off, not ended early.
 

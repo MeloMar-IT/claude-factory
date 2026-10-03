@@ -17,6 +17,12 @@ async function req(method, url, body) {
 
 const enc = encodeURIComponent;
 
+/** The audit filters as a query: only the ones that are set, in the order user, action, from, to. "" for none. */
+const auditQuery = (f = {}) => {
+  const q = ["user", "action", "from", "to"].filter((k) => f[k]).map((k) => `${k}=${enc(f[k])}`).join("&");
+  return q ? `?${q}` : "";
+};
+
 export const api = {
   session: () => req("GET", "/api/session"),
   signIn: (email, password) => req("POST", "/api/session", { email, password }),
@@ -54,6 +60,8 @@ export const api = {
   unblockUser: (id) => req("POST", `/api/users/${enc(id)}/unblock`, {}),
   userLink: (id) => req("POST", `/api/users/${enc(id)}/link`, {}),
   deleteUser: (id) => req("DELETE", `/api/users/${enc(id)}`),
+  audit: (filters) => req("GET", `/api/audit${auditQuery(filters)}`),
+  auditExportUrl: (filters) => `/api/audit/export${auditQuery(filters)}`,
   allRepos: () => req("GET", "/api/admin/repos"),
   setRepoSettings: (id, body) => req("PUT", `/api/admin/repos/${enc(id)}/settings`, body),
   transferRepo: (id, email) => req("POST", `/api/admin/repos/${enc(id)}/transfer`, { email }),
