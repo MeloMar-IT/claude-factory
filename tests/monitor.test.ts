@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ConfigSchema, WatcherSchema } from "../src/config.js";
@@ -196,8 +196,8 @@ describe("the monitor in the WatcherManager", () => {
 
   const watcher = (id: string) => ({ id, github_repo: "acme/app", flow: "issue-gitflow", every: "1h" });
   const mon = { id: "mon", source: "monitor", every: "1h" };
-  const setup = (watchers: unknown[]) => {
-    cfg = ConfigSchema.parse({ watchers });
+  const setup = (watchers: unknown[], monitor: unknown = {}) => {
+    cfg = ConfigSchema.parse({ watchers, monitor });
     const scheduler = new Scheduler({ runsDir: join(gh.tmp, "runs"), config: () => cfg });
     manager = new WatcherManager({ scheduler, runsDir: join(gh.tmp, "runs"), repo: gh.tmp, config: () => cfg, log: () => {} });
     manager.sync();
@@ -273,5 +273,47 @@ describe("the monitor in the WatcherManager", () => {
     await settled(m, ["w"]);
     await m.runNow("w");
     expect(rateCalls()).toBe(0);
+  });
+
+  describe("bug stories", () => {
+    const findingsPath = () => join(process.env.FACTORY_HOME!, "monitor-findings.json");
+    const storyCalls = () => gh.ghLog().split("\n").filter((l) => /^gh (api repos|label create|issue comment)/.test(l));
+    beforeEach(() => rmSync(findingsPath(), { force: true }));
+    afterEach(() => rmSync(findingsPath(), { force: true }));
+
+    it("a monitor with report_to and an issue watcher make one story with the watcher's label from two checks", async () => {
+      const runDir = join(gh.tmp, "runs", "20261001-120000-abcd");
+      mkdirSync(runDir, { recursive: true });
+      const now = Date.now();
+      saveRun({
+        runId: "20261001-120000-abcd", flow: "issue-gitflow", task: "t", status: "stopped", reason: 'stopped at step "wait_for_area"', startedAt: new Date(now - 60_000).toISOString(),
+        vars: { github_repo: "acme/app" }, history: [], totalCostUsd: 0, state: { next: null, steps: {}, visits: {} }, runDir,
+        resumeLog: Array.from({ length: 24 }, (_, i) => ({ at: new Date(now - (23 - i) * 5_000).toISOString(), from: "claim_areas" })),
+      } as unknown as RunSummary);
+      const m = setup([{ ...watcher("w"), label: "go" }, mon], { report_to: "acme/app" });
+      await settled(m, ["w", "mon"]);
+      await m.runNow("mon");
+      await m.runNow("mon");
+      const made = gh.createdBodies();
+      expect(made).toHaveLength(1);
+      expect(made[0]!.labels).toEqual(["bug", "go"]);
+      expect(m.statuses().find((s) => s.id === "mon")!.status).toHaveProperty("lastActions");
+    });
+
+    it("one check with three owed stories makes at most 6 story calls and 2 reads of the request limit; the status shows its notes", async () => {
+      const iso = new Date().toISOString();
+      const owed = ["a", "b", "c"].map((id) => ({
+        detector: "restart-loop", fingerprint: `restart-loop|${id}`, severity: "critical", summary: "s", evidence: { counts: { runs: 2 } }, about: "foundry",
+        firstSeen: iso, lastSeen: iso, count: 2, gone: false, due: iso,
+      }));
+      mkdirSync(process.env.FACTORY_HOME!, { recursive: true });
+      writeFileSync(findingsPath(), JSON.stringify({ version: 1, findings: owed }));
+      const m = setup([mon], { report_to: "acme/app", report_limits: { per_day: 10, per_check: 3 } });
+      await settled(m, ["mon"]);
+      expect(gh.createdBodies()).toHaveLength(3);
+      expect(storyCalls().length).toBeLessThanOrEqual(6);
+      expect(rateCalls()).toBeLessThanOrEqual(2);
+      expect(m.statuses()[0]!.status?.notes?.join(" ")).toContain("No watcher builds bug stories");
+    });
   });
 });

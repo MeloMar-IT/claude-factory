@@ -90,6 +90,10 @@ const MonitorSchema = z
     watcher_silent: z.object({ intervals: z.number().min(1).max(1000).default(5) }).strict().prefault({}),
     /** At least `runs` failed runs with an error the Foundry cannot explain, within `within_hours`. */
     unexplained_failure: z.object({ runs: z.number().int().min(1).max(1000).default(1), within_hours: z.number().int().min(1).max(720).default(24) }).strict().prefault({}),
+    /** The repository (owner/repo) where the monitor writes bug stories. Without it, findings are only shown. */
+    report_to: z.string().regex(/^[\w.-]+\/[\w.-]+$/, "owner/repo").optional(),
+    /** At most `per_day` new bug stories a day and `per_check` in one check (at most 3: it bounds the GitHub calls of a check). */
+    report_limits: z.object({ per_day: z.number().int().min(1).max(50).default(3), per_check: z.number().int().min(1).max(3).default(1) }).strict().prefault({}),
   })
   .strict();
 

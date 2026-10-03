@@ -68,6 +68,18 @@ describe("secret-scan", () => {
     expect(scan("HEAD~2..HEAD").status).toBe(0);
   });
 
+  it("--text replaces secrets in text from stdin, keeps the rest and needs no git repository", () => {
+    const pem = ["-----BEGIN RSA " + "PRIVATE KEY-----", "A".repeat(64), "-----END RSA " + "PRIVATE KEY-----"].join("\n");
+    const input = `token ${GH_TOKEN} and ${AWS_KEY} fine words\n${pem}\nafter`;
+    const r = spawnSync(SCAN, ["--text"], { cwd: tmp, input, encoding: "utf8" });
+    expect(r.status).toBe(0);
+    expect(r.stdout).not.toContain(GH_TOKEN);
+    expect(r.stdout).not.toContain(AWS_KEY);
+    expect(r.stdout).not.toContain("AAAAAAAA");
+    expect(r.stdout).toContain("fine words");
+    expect(r.stdout).toContain("after");
+  });
+
   it("blocks a push through the pre-push hook", () => {
     const remote = join(tmp, "remote.git");
     execFileSync("git", ["init", "-q", "--bare", remote]);

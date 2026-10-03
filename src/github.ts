@@ -229,3 +229,55 @@ export async function setLabels(repo: string, issue: number, add: string | undef
 export async function ensureLabel(repo: string, name: string, color: string, description: string) {
   await gh(["label", "create", name, "--repo", repo, "--color", color, "--description", description, "--force"]);
 }
+
+/** An issue as the REST API reports it. */
+export interface RestIssue {
+  number: number;
+  state: string;
+  /** "completed", "not_planned" or "reopened" once the issue was closed or reopened. */
+  state_reason?: string | null;
+  title: string;
+  body?: string | null;
+  html_url: string;
+  created_at: string;
+  closed_at?: string | null;
+  labels: ({ name?: string } | string)[];
+}
+
+const errorText = (e: unknown) => `${String((e as { stderr?: string }).stderr ?? "")} ${String((e as Error).message)}`;
+
+/** The newest issues (not pull requests) with a label, open and closed: one call, at most 100. */
+export async function listIssuesByLabel(repo: string, label: string, timeoutMs?: number): Promise<RestIssue[]> {
+  const out = (await gh(["api", `repos/${repo}/issues?labels=${encodeURIComponent(label)}&state=all&per_page=100&sort=created&direction=desc`], undefined, timeoutMs)).trim();
+  const list = (out ? JSON.parse(out) : []) as (RestIssue & { pull_request?: unknown })[];
+  if (!Array.isArray(list)) throw new Error("GitHub gave an answer that is not a list of issues");
+  return list.filter((i) => !i.pull_request);
+}
+
+/** One issue by number; undefined when GitHub says it does not exist. */
+export async function restIssue(repo: string, issue: number, timeoutMs?: number): Promise<RestIssue | undefined> {
+  try {
+    return JSON.parse((await gh(["api", `repos/${repo}/issues/${issue}`], undefined, timeoutMs)).trim()) as RestIssue;
+  } catch (e) {
+    if (/not found|HTTP 404/i.test(errorText(e))) return undefined;
+    throw e;
+  }
+}
+
+/** Makes an issue. Title and text go through stdin as JSON, never into the command line. */
+export async function createIssue(repo: string, o: { title: string; body: string; labels: string[] }, timeoutMs?: number): Promise<RestIssue> {
+  const out = await gh(["api", `repos/${repo}/issues`, "-X", "POST", "--input", "-"], undefined, timeoutMs, JSON.stringify(o));
+  const made = JSON.parse(out.trim()) as RestIssue;
+  if (!made || !Number.isInteger(made.number)) throw new Error("GitHub did not report the new issue");
+  return made;
+}
+
+/** Makes a label when it is missing; an existing one is left as it is (no --force). Rejects on any other error. */
+export async function createLabelIfMissing(repo: string, name: string, color: string, description: string, timeoutMs?: number): Promise<void> {
+  try {
+    await gh(["label", "create", name, "--repo", repo, "--color", color, "--description", description], undefined, timeoutMs);
+  } catch (e) {
+    if (/already exists/i.test(errorText(e))) return;
+    throw e;
+  }
+}

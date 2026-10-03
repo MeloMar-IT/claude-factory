@@ -10,6 +10,9 @@ const check = (checked, label) => {
 };
 const num = (el) => (el.value.trim() === "" ? undefined : Number(el.value));
 
+/** The notes of a watcher's status (what waits or is wrong with the monitor's bug stories) as a list, or null when there are none. */
+export const watcherNotes = (st) => (st?.notes?.length ? h("ul", { class: "holds" }, st.notes.map((n) => h("li", {}, n))) : null);
+
 /** The `notify` setting from the raw values of the Settings controls (strings for text, booleans for checkboxes). */
 export function notifyFrom(v) {
   const t = (x) => String(x ?? "").trim();
@@ -202,6 +205,7 @@ export async function renderWatchers(main) {
           w.enabled ? lastOkText(st) : "",
           st?.nextTick ? ` · next ${new Date(st.nextTick).toLocaleTimeString()}` : ""),
         w.enabled && watcherNext(w).length ? h("div", {}, h("div", { class: "muted", style: { fontSize: "12.5px", marginTop: "6px" } }, "What happens next:"), nextList(watcherNext(w))) : null,
+        watcherNotes(st),
         st?.lastError ? h("details", {}, h("summary", {}, "Error details"), h("pre", { class: "mono" }, st.lastError)) : null,
         st?.lastActions?.length ? h("details", {}, h("summary", {}, `Recent activity (${st.lastActions.length})`), h("pre", { class: "mono" }, st.lastActions.join("\n"))) : null);
     })) : h("div", { class: "empty" },
