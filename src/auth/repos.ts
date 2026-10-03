@@ -2,7 +2,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
-import { CredentialError, addCredentialLocked, checkSecret, listCredentials, moveCredentialLocked, oldKeysLeft as credentialKeysLeft, removeCredentialsLocked } from "../credentials/store.js";
+import { CredentialError, type CredentialType, addCredentialLocked, checkSecret, listCredentials, moveCredentialLocked, oldKeysLeft as credentialKeysLeft, removeCredentialsLocked } from "../credentials/store.js";
+import { PUBLIC_KEY_RE, generateKeyPair } from "../credentials/ssh-keygen.js";
 import { RepoSettingsSchema, checkRepoSettings } from "./repo-settings.js";
 import { type ParsedRepoUrl, RepoError, type RepoErrorCode, githubKey, parseRepoUrl, tryParseRepoUrl, validGithubName } from "./repo-url.js";
 import { authLockHeld, dataHome, readJsonFile, withAuthLock, writeJsonFile } from "./store.js";
@@ -24,7 +25,7 @@ export const reposPath = () => join(dataHome(), "repos.json");
 /** At most this many repositories per account. */
 export const REPO_LIMIT = 50;
 
-export const REPO_METHODS = ["none", "github-token", "https-token"] as const;
+export const REPO_METHODS = ["none", "github-token", "https-token", "ssh-deploy-key"] as const;
 export type RepoMethod = (typeof REPO_METHODS)[number];
 
 const USERNAME_RE = /^[A-Za-z0-9._@+-]{1,100}$/;
@@ -42,6 +43,7 @@ const RecordSchema = z
     url: z.string(),
     method: z.enum(REPO_METHODS),
     credentialId: z.uuid().optional(),
+    publicKey: z.string().optional(),
     username: z.string().optional(),
     added: z.iso.datetime(),
     settings: RepoSettingsSchema.optional(),
@@ -51,12 +53,19 @@ const RecordSchema = z
     const issue = (path: string) => ctx.addIssue({ code: "custom", message: "invalid", path: [path] });
     const p = tryParseRepoUrl(r.url);
     if (!p || (p.url !== r.url && !legacyUrl(r.url))) issue("url");
+    if (r.method !== "ssh-deploy-key" && r.publicKey !== undefined) issue("publicKey");
     if (r.method === "none") {
       if (r.credentialId !== undefined) issue("credentialId");
       if (r.username !== undefined) issue("username");
       return;
     }
     if (!r.credentialId) issue("credentialId");
+    if (r.method === "ssh-deploy-key") {
+      if (!r.publicKey || !PUBLIC_KEY_RE.test(r.publicKey)) issue("publicKey");
+      if (p && p.scheme !== "ssh") issue("method");
+      if (r.username !== undefined) issue("username");
+      return;
+    }
     if (p && (p.scheme !== "https" || (r.method === "github-token" && p.host !== "github.com"))) issue("method");
     if (r.method === "github-token" ? r.username !== undefined : r.username === undefined || !USERNAME_RE.test(r.username)) issue("username");
   });
@@ -169,6 +178,11 @@ function checkAuth(url: ParsedRepoUrl, a: AuthInput, needToken: boolean): Checke
     if (a.username !== undefined || a.token !== undefined) throw badAuth('a token and a user name need a method ("github-token" or "https-token")');
     return { method };
   }
+  if (method === "ssh-deploy-key") {
+    if (url.scheme !== "ssh") throw badAuth('"ssh-deploy-key" works only with an SSH address (git@host:path or ssh://host/path)');
+    if (a.username !== undefined || a.token !== undefined) throw badAuth('"ssh-deploy-key" has no user name and no token; the Foundry makes the key');
+    return { method };
+  }
   if (url.scheme !== "https") throw badAuth(`"${method as string}" works only with an https address`);
   const out: Checked = { method: method as RepoMethod };
   if (method === "github-token") {
@@ -190,6 +204,18 @@ const ownerExists = (opts: { ownerOk?: (userId: string) => boolean }, userId: st
 };
 
 const secretName = (r: Pick<RepoRecord, "id">) => `repo:${r.id}`;
+
+/** What is stored for a record: a token, or a key the Foundry made (with its public half). */
+interface Secret {
+  type: CredentialType;
+  value: string;
+  publicKey?: string;
+}
+
+const newKeySecret = (): Secret => {
+  const pair = generateKeyPair();
+  return { type: "ssh-key", value: pair.privateKey, publicKey: pair.publicKey };
+};
 
 /** Removes the token a record names, only when it is the record's own (right id, owner and name). Returns the old keys left. */
 function wipeToken(r: RepoRecord): number {
@@ -223,21 +249,24 @@ export function addRepo(userId: string, given: NewRepo | string, opts: { ownerOk
     if (file.repos.some((r) => r.owner === userId && keyOfRecord(r) === url.key)) throw new RepoError("duplicate", "you have that repository already");
     if (file.repos.some((r) => keyOfRecord(r) === url.key)) throw new RepoError("taken", "that repository belongs to another account");
     if (file.repos.filter((r) => r.owner === userId).length >= REPO_LIMIT) throw new RepoError("limit", `at most ${REPO_LIMIT} repositories`);
+    // a failed key leaves both files as they were
+    const secret: Secret | undefined = auth.method === "ssh-deploy-key" ? newKeySecret() : auth.token ? { type: "token", value: auth.token } : undefined;
     const id = randomUUID();
-    const credentialId = auth.token ? randomUUID() : undefined;
+    const credentialId = secret ? randomUUID() : undefined;
     const record: RepoRecord = {
       id,
       owner: userId,
       url: url.url,
       method: auth.method,
       ...(credentialId ? { credentialId } : {}),
+      ...(secret?.publicKey ? { publicKey: secret.publicKey } : {}),
       ...(auth.username ? { username: auth.username } : {}),
       added: new Date().toISOString(),
     };
     save([...file.repos, record]);
-    if (credentialId) {
+    if (credentialId && secret) {
       try {
-        addCredentialLocked({ id: credentialId, userId, type: "token", name: secretName(record), secret: auth.token });
+        addCredentialLocked({ id: credentialId, userId, type: secret.type, name: secretName(record), secret: secret.value });
       } catch (e) {
         try {
           save(file.repos);
@@ -257,15 +286,18 @@ export interface AuthChange {
   token?: unknown;
   /** Another form of the same repository. */
   url?: unknown;
+  /** `true`: make a new deploy key (the old one stops working). */
+  newKey?: unknown;
 }
 
 /**
- * Changes the method, user name, token or address of a record; what is not given keeps its value. The old token is wiped
- * first, then the record is written, then the new token is saved. A failure in between leaves a record that names a missing
- * token (never a token without a record); giving the token again repairs it.
+ * Changes the method, user name, token or address of a record, or makes a new deploy key; what is not given keeps its value.
+ * The old token or key is wiped first, then the record is written, then the new one is saved. A failure in between leaves a
+ * record that names a missing token or key (never a secret without a record); giving the token again, or choosing the
+ * method "ssh-deploy-key" again, repairs it.
  */
 export function setRepoAuth(userId: string, id: string, input: AuthChange, opts: { ownerOk?: (userId: string) => boolean } = {}): { repo: PublicRepo; oldKeysLeft: number } {
-  if ([input.method, input.username, input.token, input.url].every((v) => v === undefined)) throw badAuth("give a method, a user name, a token or an address");
+  if ([input.method, input.username, input.token, input.url, input.newKey].every((v) => v === undefined)) throw badAuth("give a method, a user name, a token, an address or a new key");
   return withAuthLock(() => {
     ownerExists(opts, userId);
     const file = read();
@@ -279,29 +311,40 @@ export function setRepoAuth(userId: string, id: string, input: AuthChange, opts:
     }
     const method = input.method ?? rec.method;
     const changed = method !== rec.method;
+    if (input.newKey !== undefined && (input.newKey !== true || rec.method !== "ssh-deploy-key" || changed)) {
+      throw badAuth('"newKey" must be true, and works only for a repository with the method "ssh-deploy-key"');
+    }
     const username = input.username ?? (changed ? undefined : rec.username);
-    if (changed && method !== "none" && input.token === undefined) throw badAuth("a new method needs a token");
+    if (changed && method !== "none" && method !== "ssh-deploy-key" && input.token === undefined) throw badAuth("a new method needs a token");
     const auth = checkAuth(url, { method, username, token: input.token }, false);
-    if (auth.token !== undefined && listCredentials(userId).some((c) => c.name === secretName(rec) && c.id !== rec.credentialId)) {
+    const deploy = auth.method === "ssh-deploy-key";
+    // a deploy key is made for a new method, on request, and when the stored one is missing, of another type or not the record's own
+    const keyOk = listCredentials(userId).some((c) => c.id === rec.credentialId && c.name === secretName(rec) && c.type === "ssh-key");
+    const secret: Secret | undefined = deploy ? (changed || input.newKey === true || !keyOk ? newKeySecret() : undefined) : auth.token !== undefined ? { type: "token", value: auth.token } : undefined;
+    if (secret && listCredentials(userId).some((c) => c.name === secretName(rec) && c.id !== rec.credentialId)) {
       throw badAuth("a credential with the reserved name of this repository exists already");
     }
-    const credentialId = auth.method === "none" ? undefined : auth.token !== undefined ? randomUUID() : rec.credentialId;
+    const credentialId = auth.method === "none" ? undefined : secret ? randomUUID() : rec.credentialId;
+    const publicKey = deploy ? (secret?.publicKey ?? rec.publicKey) : undefined;
     const next: RepoRecord = {
       id: rec.id,
       owner: rec.owner,
       url: input.url !== undefined ? url.url : rec.url,
       method: auth.method,
       ...(credentialId ? { credentialId } : {}),
+      ...(publicKey ? { publicKey } : {}),
       ...(auth.username ? { username: auth.username } : {}),
       added: rec.added,
       ...(rec.settings ? { settings: rec.settings } : {}),
     };
     let oldKeysLeft = 0;
     // a change to none also on a record that is none already: a retry cleans an old key left by the first try
-    if (auth.token !== undefined || auth.method === "none") oldKeysLeft = wipeToken(rec);
-    if (JSON.stringify(next) !== JSON.stringify(rec) || auth.token !== undefined) save(file.repos.map((r) => (r === rec ? next : r)));
-    if (auth.token !== undefined) {
-      addCredentialLocked({ id: credentialId!, userId, type: "token", name: secretName(rec), secret: auth.token });
+    if (secret || auth.method === "none") oldKeysLeft = wipeToken(rec);
+    // a repeat for a deploy key that is fine already still cleans old Keychain keys left by an earlier try
+    else if (deploy) oldKeysLeft = cleanKeys(userId);
+    if (JSON.stringify(next) !== JSON.stringify(rec) || secret) save(file.repos.map((r) => (r === rec ? next : r)));
+    if (secret) {
+      addCredentialLocked({ id: credentialId!, userId, type: secret.type, name: secretName(rec), secret: secret.value });
       // saving retries old keys too, so the count from the wipe may be out of date
       oldKeysLeft = credentialKeysLeft();
     }
@@ -369,7 +412,7 @@ export function setRepoSettings(id: string, input: unknown): RepoRecord {
 /** Methods whose secret is a personal token: it is wiped when the repository changes owner. */
 export const PERSONAL_METHODS: readonly RepoMethod[] = ["github-token", "https-token"];
 /** Methods whose secret belongs to the repository (a deploy key, a GitHub App installation): it moves with the repository. */
-export const REPO_BOUND_METHODS: readonly RepoMethod[] = [];
+export const REPO_BOUND_METHODS: readonly RepoMethod[] = ["ssh-deploy-key"];
 
 export interface TransferOptions {
   /** Finds the new owner by e-mail (default: users.json). */

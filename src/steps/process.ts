@@ -61,6 +61,7 @@ export function runProcess(cmd: string, args: string[], opts: ProcessOptions): P
       return reject(e);
     }
     const log = createWriteStream(opts.logFile, { flags: "a" });
+    let logError: NodeJS.ErrnoException | undefined;
     const child = spawn(cmd, args, {
       cwd: opts.cwd,
       env: mergeEnv(opts.env),
@@ -81,6 +82,13 @@ export function runProcess(cmd: string, args: string[], opts: ProcessOptions): P
       aborted = true;
       kill();
     };
+    // A log that cannot be written (a folder that is gone, a full disk) fails the step: the transcript would be missing or cut.
+    // The child is stopped, and the promise is rejected once it has exited.
+    log.on("error", (err: NodeJS.ErrnoException) => {
+      if (logError) return;
+      logError = err;
+      kill();
+    });
     if (opts.signal?.aborted) onAbort();
     else opts.signal?.addEventListener("abort", onAbort, { once: true });
 
@@ -134,7 +142,14 @@ export function runProcess(cmd: string, args: string[], opts: ProcessOptions): P
       errFilter.end();
       logFilter.end();
       if (opts.onLine && pending.trim()) opts.onLine(pending);
-      log.end(() => resolve({ exitCode: code, stdout, stderr, timedOut, aborted }));
+      if (logError) {
+        log.end();
+        return reject(new Error(`could not write the log file (${logError.code ?? "error"})`));
+      }
+      log.end((err?: Error | null) => {
+        if (err || logError) return reject(new Error(`could not write the log file (${(err as NodeJS.ErrnoException | null | undefined)?.code ?? logError?.code ?? "error"})`));
+        resolve({ exitCode: code, stdout, stderr, timedOut, aborted });
+      });
     });
 
     child.stdin.on("error", () => {}); // process may exit before reading stdin

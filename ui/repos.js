@@ -2,12 +2,14 @@ import { api } from "./api.js";
 import { h, modal, mount, toast } from "./dom.js";
 
 /**
- * The ways to sign in to a repository. A later method (an SSH deploy key, a GitHub App) is another entry:
+ * The ways to sign in to a repository. A later method (the GitHub App) is another entry:
  * `fields` are the inputs to show; a `secret` field is never shown again, a `multiline` one is a textarea.
+ * An `ssh` method needs an SSH address of the repository, an `https` one an https address.
  */
 export const METHODS = [
   {
     id: "github-token",
+    https: true,
     label: "GitHub fine-grained personal access token",
     help: [
       "Create a fine-grained personal access token on GitHub, limited to this repository.",
@@ -17,6 +19,7 @@ export const METHODS = [
   },
   {
     id: "https-token",
+    https: true,
     label: "HTTPS user name + token",
     help: [
       "For other git hosts. Use your user name on that host and an access token, not your password.",
@@ -25,6 +28,17 @@ export const METHODS = [
     fields: [
       { key: "username", label: "User name" },
       { key: "token", label: "Token", secret: true },
+    ],
+  },
+  {
+    id: "ssh-deploy-key",
+    label: "SSH deploy key",
+    ssh: true,
+    fields: [],
+    help: [
+      "The Foundry makes a key pair for this repository and shows you the public key.",
+      "Add the public key in the settings of the repository as a deploy key with write access.",
+      "Needs the SSH address of the repository (git@host:path or ssh://…).",
     ],
   },
   {
@@ -46,10 +60,27 @@ export function methodLabel(repo, admin) {
   return m.id === "https-token" && repo.username ? `${m.label} (${repo.username})` : m.label;
 }
 
+export const DEPLOY_KEY_HINT =
+  'Add this public key in the settings of the repository as a deploy key with write access (on GitHub: Settings → Deploy keys → Add deploy key, with "Allow write access").';
+
+const text = (s) => String(s ?? "").trim();
+
+/** True for an SSH address: ssh://… or git@host:path. */
+export const isSshUrl = (url) => /^(ssh:\/\/|git@)/i.test(text(url));
+
+/** Copies text to the clipboard. False when the browser has none (plain http) or refuses. */
+export async function copyText(value) {
+  try {
+    await navigator.clipboard.writeText(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** The connection status. Until the connection test exists, every repository is untested. */
 export const connectionStatus = (_repo) => "Not tested yet";
 
-const text = (s) => String(s ?? "").trim();
 const methodOf = (methods, id) => methods.find((m) => m.id === id) ?? { id, fields: [] };
 
 /** What is missing in the input, or "" when it can be sent. */
@@ -90,20 +121,32 @@ export function repoDialog({ admin = false, methods = methodsFor(admin), repo } 
   let pending = null;
   let closed = false;
   const shown = modal(repo ? "Change authentication" : "Add repository", (close) => {
-    const urlInput = repo ? null : h("input", { name: "url", class: "mono", placeholder: "https://github.com/owner/name", autocomplete: "off" });
+    const HTTPS_EXAMPLE = "https://github.com/owner/name";
+    const SSH_EXAMPLE = "git@github.com:owner/name.git";
+    const urlInput = repo ? null : h("input", { name: "url", class: "mono", placeholder: HTTPS_EXAMPLE, autocomplete: "off" });
     const initial = methods.some((m) => m.id === repo?.method) ? repo.method : methods[0].id;
     const select = h("select", { name: "method" }, methods.map((m) => h("option", { value: m.id }, m.label)));
     select.value = initial;
     const values = repo ? { ...repo } : {};
     delete values.token;
+    // the address of the record is not a field value; the SSH address input starts empty
+    delete values.url;
     let els = {};
     const area = h("div", { style: { display: "grid", gap: "12px" } });
     const err = h("p", { class: "status bad", style: { margin: 0 } });
     const draw = () => {
       const m = methodOf(methods, select.value);
       els = {};
+      if (urlInput) urlInput.setAttribute("placeholder", m.ssh ? SSH_EXAMPLE : HTTPS_EXAMPLE);
+      // a method whose address form differs from the stored one needs the other form of the address
+      const toSsh = repo && m.ssh && !isSshUrl(repo.url);
+      const toHttps = repo && m.https && isSshUrl(repo.url);
+      if (toSsh || toHttps) {
+        els.url = h("input", { name: "url", class: "mono", placeholder: toSsh ? SSH_EXAMPLE : HTTPS_EXAMPLE, autocomplete: "off", value: values.url ?? "" });
+      }
       mount(area,
         h("div", { class: "field" }, (m.help ?? []).map((t) => h("small", {}, t))),
+        els.url ? h("label", { class: "field" }, h("span", {}, toSsh ? "SSH address" : "HTTPS address"), els.url) : null,
         m.fields.map((f) => {
           const attrs = { name: f.key, autocomplete: f.secret ? "new-password" : "off" };
           els[f.key] = f.multiline
@@ -126,11 +169,12 @@ export function repoDialog({ admin = false, methods = methodsFor(admin), repo } 
       if (busy) return;
       const method = select.value;
       const v = read();
-      const input = { url: urlInput?.value, method, values: v, methods };
+      const withUrl = !repo || !!els.url;
+      const input = { url: els.url ? v.url : urlInput?.value, method, values: v, methods };
       const needSecret = !repo || method !== repo.method;
-      const problem = repoProblem({ ...input, needUrl: !repo, needSecret });
+      const problem = repoProblem({ ...input, needUrl: withUrl, needSecret });
       if (problem) return void (err.textContent = problem);
-      const body = repoBody({ ...input, withUrl: !repo });
+      const body = repoBody({ ...input, withUrl });
       if (repo) {
         const same = method === repo.method && Object.entries(body).every(([k, x]) => k === "method" || (k !== "token" && x === repo[k]));
         if (same) return close(true);
@@ -203,18 +247,42 @@ export async function renderRepos(main, { admin = false, notice } = {}) {
     await repoDialog({ admin });
     reload();
   };
+  const copy = async (value) => {
+    if (await copyText(value)) toast("Public key copied");
+    else toast("Could not copy. Select the key and copy it yourself.", "error");
+  };
+  const newKey = (e, repo) => {
+    const btn = e.currentTarget;
+    if (!confirm(`Generate a new key for ${repo.url}? The old key stops working. Add the new public key as a deploy key and remove the old one.`)) return;
+    return whileBusy(btn, async () => {
+      try {
+        await api.setRepoAuth(repo.id, { newKey: true });
+      } catch (err) {
+        // the client cannot tell whether a key was made, so there is no retry button
+        return reload({ text: plainError(err) });
+      }
+      toast("New key generated");
+      return reload();
+    });
+  };
+  const keyBlock = (repo) => h("div", { class: "field", style: { marginTop: "6px", maxWidth: "520px" } },
+    h("span", {}, "Public key"),
+    h("code", { class: "mono", style: { wordBreak: "break-all", userSelect: "all" } }, repo.publicKey),
+    h("button", { class: "small", onClick: () => copy(repo.publicKey) }, "Copy"),
+    h("small", {}, DEPLOY_KEY_HINT));
   const row = (repo) => h("tr", {},
     h("td", { class: "mono" }, repo.url),
-    h("td", {}, methodLabel(repo, admin)),
+    h("td", {}, methodLabel(repo, admin), repo.method === "ssh-deploy-key" && repo.publicKey ? keyBlock(repo) : null),
     h("td", {}, h("span", { class: "pill" }, connectionStatus(repo))),
     h("td", {},
       h("button", { class: "small", onClick: async () => {
         await repoDialog({ admin, repo });
         reload();
       } }, "Change authentication"), " ",
+      repo.method === "ssh-deploy-key" ? [h("button", { class: "small", onClick: (e) => newKey(e, repo) }, "Generate a new key"), " "] : null,
       h("button", { class: "small danger", onClick: (e) => {
         const btn = e.currentTarget;
-        if (!confirm(`Remove ${repo.url}? Its stored token is deleted too.`)) return;
+        if (!confirm(`Remove ${repo.url}? ${repo.method === "ssh-deploy-key" ? "Its stored key is deleted too." : "Its stored token is deleted too."}`)) return;
         return whileBusy(btn, () => remove(repo.id));
       } }, "Remove")));
   mount(main,

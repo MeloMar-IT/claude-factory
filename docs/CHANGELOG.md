@@ -30,6 +30,17 @@ Changes that are merged but not yet in a release go under **Unreleased**. Newest
   - **Code.** `writeAudit`, `appendAuditLocked`, `EVENT_ACTIONS`, `createUser(…, { bySelf })`, `startSession(…, { audit })`.
   - **Not included.** Other events (#95), an audit page (#96), the client address.
 
+- SSH deploy key (#67).
+  - **Method.** New method `ssh-deploy-key` for a repository. It works only with an SSH address (`git@host:path` or `ssh://…`); an https address, a token or a user name gives 400 (the message names the "SSH address").
+  - **Key.** The pair is made with `/usr/bin/ssh-keygen` (ed25519, no passphrase, no comment) in a 0700 temporary folder that is removed afterwards; if the folder cannot be removed, nothing is stored. The private key is the credential `repo:<id>` of type `ssh-key` and is never returned. A failed ssh-keygen answers 500 "the SSH key could not be made; see the server log" and changes nothing.
+  - **API.** The record and `GET /api/repos` have `publicKey`. `PUT …/auth {"newKey": true}` makes a new key and removes the old one. Choosing the method again repairs a key that is missing or is not the record's own, and cleans old Keychain keys left by an earlier try.
+  - **Redaction.** The public key stays readable in the answers of `/api/repos`, also when a stored secret is part of it (such as a token `ssh-ed25519`). Only a whole public-key line as a complete JSON string value is kept; the rest of the answer is hidden as before, and so is a stored secret that reaches outside the key.
+  - **The page.** A deploy-key row shows the public key with **Copy**, a hint to add it as a deploy key with write access, and **Generate a new key** (with a confirmation; the old key stops working). The change dialog asks for the **SSH address** (or, for a token method, the **HTTPS address**) when the stored address has the other form.
+  - **Also fixed.** A log file of a step that cannot be written (folder gone, disk full) now fails the step and stops the process; before, it was an unhandled error.
+  - **Formats.** New optional `publicKey` and the new method in `repos.json`; old files load unchanged; an older build rejects a file that has such a record.
+  - **Code.** New `src/credentials/ssh-keygen.ts` (`generateKeyPair`, `KeygenError`, `PUBLIC_KEY_RE`), `redactKeeping` in `redact.ts`, a fourth argument of `send` and a second one of `redactedJson` (the public keys to keep), and `SCF_SSH_KEYGEN_BIN` (for tests).
+  - **Transfer.** An SSH deploy key is repository-bound (`REPO_BOUND_METHODS`): an admin's transfer moves the key to the new owner with the record and its `publicKey`; a missing key refuses the transfer (409 `no-credential`). The admin repository answers also keep the public key whole.
+  - **Not included.** The connection test, runs that use the key, the GitHub App.
 - Fix a test that failed on a busy machine: the clean-up after the failure-explanation tests retries while a stopped model process still writes its log (it failed the tests before the change for two stories).
 - Docs: new `docs/DESIGN.md` (how the Foundry is built, with diagrams) and `docs/LESSONS_LEARNED.md`; the user guide and README have pictures of the current interface (Your turn, Board, sign-in, My repositories, the user display) and every older picture was retaken. The README is rewritten around the current way of working (one label, Your turn, gitflow, accounts) and its quick start no longer uses a flow that is not shipped.
 - Users page (#65).
