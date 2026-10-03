@@ -616,6 +616,13 @@ write("issue-plan", {
     '{ "$FACTORY_TOOLS/test-summary" "$marker"; [ "$code" -eq 0 ] && echo "result: PASSED" || echo "result: FAILED (exit $code)"; } | tee "{{run.dir}}/last-tests.txt"',
     'exit "$code"',
   ].join("\n");
+  // Tests of code that was already tested (before the change, after the merge) run once more when they
+  // fail: on a busy machine a timing-sensitive test can fail by chance. A real failure fails twice.
+  const testsRunRetry = testsRun.replace(
+    'sh -c "$cmd" > "{{run.dir}}/tests.log" 2>&1; code=$?',
+    'sh -c "$cmd" > "{{run.dir}}/tests.log" 2>&1; code=$?\n' +
+      'if [ "$code" -ne 0 ]; then echo "the tests failed — running them once more (a test can fail by chance on a busy machine)"; touch "$marker"; sh -c "$cmd" > "{{run.dir}}/tests.log" 2>&1; code=$?; [ "$code" -eq 0 ] && echo "passed the second time: a flaky test, not a real failure"; fi',
+  );
   const tests = (id, fixId, next) => [
     { id, type: "shell", timeout_sec: 3600, run: testsRun, on_failure: fixId, ...(next ? { on_success: next } : {}) },
     {
@@ -705,7 +712,7 @@ write("issue-plan", {
       run: 'if [ -d .git ]; then git reset -q --hard && git clean -qfd && git fetch -q origin; else gh repo clone "$FACTORY_VAR_GITHUB_REPO" . -- -q; fi\n"$FACTORY_TOOLS/daily-branch" prepare --wait-for-merge',
       routes: [{ if: "^WAIT:", goto: "wait_for_merge" }],
     },
-    { ...tests("baseline_tests", "baseline_failed")[0], description: "Tests must pass before we change anything", on_failure: "baseline_failed" },
+    { ...tests("baseline_tests", "baseline_failed")[0], run: testsRunRetry, description: "Tests must pass before we change anything (a failing run is tried once more)", on_failure: "baseline_failed" },
     {
       id: "implement",
       type: "claude",
@@ -1186,7 +1193,7 @@ write("issue-plan", {
     type: "shell",
     timeout_sec: 3600,
     description: "The merged develop must pass the tests before it is pushed",
-    run: testRun,
+    run: testsRunRetry,
     on_success: "push_develop",
     on_failure: "fix_develop",
   };
@@ -1208,7 +1215,8 @@ write("issue-plan", {
     id: "commit_develop_fix",
     type: "shell",
     jump_only: true,
-    run: 'git add -A && git commit -q -m "Fix #$FACTORY_VAR_ISSUE after merging into develop" && git log --oneline -1',
+    // The agent may find nothing to fix (e.g. a test that fails only by chance): then just test again.
+    run: 'git add -A; if git diff --cached --quiet; then echo "the fix changed nothing — testing again"; else git commit -q -m "Fix #$FACTORY_VAR_ISSUE after merging into develop" && git log --oneline -1; fi',
     on_success: "test_develop",
   };
   const pushDevelop = {

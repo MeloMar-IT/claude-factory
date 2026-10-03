@@ -46,6 +46,8 @@ const WatcherSchema = z
     remove_on_done: z.array(z.string()).default([]),
     /** issues: post the failure reason and the failing step's output on the issue. */
     comment_on_failure: z.boolean().default(true),
+    /** issues: keep one status comment on every issue the watcher follows (edited, never a second one). */
+    status_comment: z.boolean().default(true),
     /** Start nothing while an open PR's head branch starts with this (e.g. factory/daily-). */
     pause_while_pr_open: z.string().optional(),
     /** Never run two of this watcher's runs at the same time (they share a branch). */

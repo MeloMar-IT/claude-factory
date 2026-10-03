@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { isBot, type Comment } from "./github.js";
+import { isBot, isStatusComment, type Comment } from "./github.js";
 import type { CommentKind } from "./next-step.js";
 
 /** Reading the Foundry's comments on an issue, and writing the answers to them. Pure: no GitHub, no files. */
@@ -20,7 +20,7 @@ export function findComment(comments: Comment[], kind: string, runId?: string, a
   if (kind === "questions") found = marked(/<!-- [\w-]+ run=\S* questions -->/);
   else if (kind === "planner_questions") found = runId ? newest((c) => isBot(c) && c.body.includes(`run=${runId} -->`)) : undefined;
   else if (runId) found = newest((c) => isBot(c) && c.body.includes(`run=${runId} approval`));
-  if (!found && QUESTION_KINDS.includes(kind)) found = newest(isBot);
+  if (!found && QUESTION_KINDS.includes(kind)) found = newest((c) => isBot(c) && !isStatusComment(c));
   return found;
 }
 

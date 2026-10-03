@@ -586,6 +586,7 @@ watchers:
 | `precheck_flow` | Run this flow once over all new labelled issues before any is started (`epic-questions` asks every owner decision up front) |
 | `pause_while_pr_open` | Start nothing while a PR from a branch with this prefix is open (for the older two-label pipeline) |
 | `comment_on_failure` | On by default: post the failure reason and output on the issue |
+| `status_comment` | On by default: keep one status comment on every issue the watcher follows (see "The status comment") |
 | `owner` | The e-mail of the account that owns this watcher's runs and may read and approve them. Empty: the first admin. Only an admin can set it, and it must be an account |
 
 **Coding agents run the build themselves.** In the issue flows the coding agent may run the
@@ -594,6 +595,32 @@ project's build and test commands (`./gradlew`, `mvn`, `npm`, `pytest`, `go test
 test fixtures. Pushing is never allowed. If the build needs environment settings (such as
 `JAVA_HOME`), put them in the `agent_env` variable: `KEY=value` pairs separated by `;` or new
 lines. `PATH`, tokens and the Foundry's own variables can't be set this way.
+
+### The status comment
+
+Every issue an issue watcher follows gets **one status comment** that says what happens next. It looks like this:
+
+```
+**Nothing needed from you** — it is being worked on.
+
+Nothing to do, it continues by itself.
+
+- **Where:** this issue
+
+_This comment is kept up to date by the Spaghetti Code Foundry. It is edited, never posted again. Other comments are history._
+```
+
+- **Edited, never a second one.** The Foundry changes the text of the same comment when the state changes. An edit sends no notification. Other comments (questions, plans, approvals, failures) are history and stay as they are.
+- **When it is your move**, the first line starts with **What you need to do**. Otherwise it says **Nothing needed from you** and why.
+- **Done.** Once the work is finished it says it is done. If the work waits for a scheduled release (a schedule watcher with `at`), it says it waits for that release, and says it is done after the release ran.
+- **Closed while the run works.** It asks you to cancel the run if the work is no longer wanted. When the run ends it says it is done.
+- **No longer followed.** If the issue is closed or loses the watcher's label, the last text says the Foundry no longer follows it (or that it is done, if its run succeeded). A closed-issue check that fails or is cut short changes nothing.
+- **Two watchers on one issue** (for example a plan and a code watcher) share one comment. It shows the record of the one that is working, else the one that waits for you.
+- **Plain words.** The comment uses the wording for a reader of the issue: no raw error text, folder, setting or amount of money. Pages of the Foundry app are named, not linked; the details are in the app.
+- **Switch it off** with `status_comment: false` on the watcher. A switched-off, removed or disabled watcher leaves its comments as they are.
+- **Extra copies.** If the Foundry finds more than one status comment of its own account on an issue, it keeps the oldest and removes the others (at most 5 per check; the rest follows at the next check).
+- **A failure is only in the log.** If a comment cannot be written, the check goes on; the log has a line `status comment #<n>: …` and the next check tries again.
+- **After an upgrade**, the first check adds one new comment (one notification) to every open issue the watcher follows, at most 30 per check. The Foundry remembers which issues have one in `status-comments.json` in its data folder (issue numbers only), so it can write a last text when an issue leaves the list, also after a restart.
 
 ### The label pipeline: one label → plan + code → one pull request
 

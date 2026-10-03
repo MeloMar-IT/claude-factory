@@ -20,6 +20,12 @@ describe("findComment", () => {
     expect(findComment(list, "questions", "r1")).toBe(list[0]);
   });
 
+  it("the questions fallback skips a newer status comment", () => {
+    const mine = c("needs info\n<!-- claude-factory run=r1 -->", 1);
+    const list = [mine, c("**Nothing needed from you**\n\n<!-- claude-factory status -->", 2)];
+    expect(findComment(list, "planner_questions")).toBe(mine);
+  });
+
   it("takes the planner questions of the item's run, not another run's or the plan", () => {
     const mine = c("needs info\n<!-- claude-factory run=r1 -->", 1);
     const list = [mine, c("plan\n<!-- claude-factory run=r1 plan -->", 2), c("other\n<!-- claude-factory run=r2 -->", 3)];
