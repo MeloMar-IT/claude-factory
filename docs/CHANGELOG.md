@@ -4,6 +4,7 @@ Changes that are merged but not yet in a release go under **Unreleased**. Newest
 
 ## Unreleased
 
+- Fix a test that failed on a busy machine: the clean-up after the failure-explanation tests retries while a stopped model process still writes its log (it failed the tests before the change for two stories).
 - Docs: new `docs/DESIGN.md` (how the Foundry is built, with diagrams) and `docs/LESSONS_LEARNED.md`; the user guide and README have pictures of the current interface (Your turn, Board, sign-in, My repositories, the user display) and every older picture was retaken. The README is rewritten around the current way of working (one label, Your turn, gitflow, accounts) and its quick start no longer uses a flow that is not shipped.
 - Users page (#65).
   - **The page.** Admins get **Users** in the top bar (`#/users`). It lists name, e-mail, role, status (active, blocked, no password yet), last sign-in and the number of runs; your own row says "(you)". Buttons: **Add user**, **Edit**, **New link**, **Block**, **Unblock**, **Delete**. An account with the role `user` never sees the page or the link; `#/users` goes back to `#/runs`.

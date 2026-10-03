@@ -26,7 +26,8 @@ afterEach(() => {
     if (saved[k] === undefined) delete process.env[env];
     else process.env[env] = saved[k];
   }
-  rmSync(tmp, { recursive: true, force: true });
+  // A model process that timed out may still write its log here for a moment: retry instead of failing the test.
+  rmSync(tmp, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
 });
 
 const cfg = (over: Record<string, unknown> = {}): Config => ConfigSchema.parse({ protected_branches: [], ...over });
