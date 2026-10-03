@@ -68,6 +68,14 @@ const TEMPLATES: Record<string, Template> = {
     reproduce: ["Run a flow of the kind below until it reaches the step below.", "Let the step fail with the error in the evidence.", "The failure shows no plain explanation."],
     where: ["`src/errors.ts` (the rules that explain an error)", "`src/failure.ts` (how a failure is classified)"],
   },
+  "self-update": {
+    title: "A self-update of the Foundry fails",
+    happened: "The running Foundry tried to update itself from main. The build or its tests failed, the new version did not start healthy, going back failed, or the update record cannot be read.",
+    effect: "The Foundry keeps running an old version, so a fix that reached main does not take effect. When going back failed, self-update stays off until a person repairs the checkout.",
+    expected: "A version of main that builds and passes its tests is installed, and the server starts healthy on it.",
+    reproduce: ["Switch on self-update and publish a commit on main that fails in the stage named in the evidence.", "Wait for the check (every 5 minutes).", "The update fails and the old version keeps running."],
+    where: ["`src/self-update.ts` (the check, staging and the install)", "`src/self-update-state.ts` (the record, going back)", "`src/supervise.ts` (the guard of the first start)"],
+  },
   "detector-failed": {
     title: "A detector of the monitor crashes",
     happened: "A detector of the monitor threw an error, so the problems it looks for are not checked.",
