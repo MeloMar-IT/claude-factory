@@ -1,7 +1,8 @@
 import { basename } from "node:path";
 import { StoreError } from "../auth/store.js";
 import { KeyError } from "../credentials/keychain.js";
-import { CredentialError, addCredential, listCredentials, removeCredential } from "../credentials/store.js";
+import { removeUserCredential } from "../auth/repos.js";
+import { CredentialError, addCredential, listCredentials } from "../credentials/store.js";
 import { sessionUser } from "./api-auth.js";
 import { HttpError, readJson, send } from "./http.js";
 import type { Route } from "./server.js";
@@ -43,7 +44,7 @@ export const credentialRoutes: Route = async (ctx, req, res, seg, method) => {
   }
 
   if (method !== "DELETE") throw new HttpError(405, "method not allowed");
-  const r = guarded(log, () => removeCredential(user.id, seg[1]!));
+  const r = guarded(log, () => removeUserCredential(user.id, seg[1]!));
   if (r.oldKeysLeft) {
     log?.(`credentials: ${r.oldKeysLeft} old key(s) still in the Keychain; run scf credential rotate-key`);
     // the wipe is not complete: say so, and let a retry of this call clean up

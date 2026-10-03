@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { basename } from "node:path";
-import { type RepoRecord, RepoError, addRepo, listAllRepos, listRepos, removeGithubRepo, removeRepo, setRepoAuth, setRepoSettings, transferRepo } from "../auth/repos.js";
+import { type RepoRecord, RepoError, addRepo, getRepo, listAllRepos, listRepos, readRepoSecret, removeGithubRepo, removeRepo, setRepoAuth, setRepoConnection, setRepoSettings, transferRepo } from "../auth/repos.js";
+import { ConnectError, testConnection } from "../repos/connect.js";
 import { StoreError } from "../auth/store.js";
 import { type User, getUser, listUsers } from "../auth/users.js";
 import { KeyError } from "../credentials/keychain.js";
@@ -78,6 +79,38 @@ async function adminRepos(ctx: ApiContext, req: IncomingMessage, res: ServerResp
   return false;
 }
 
+/** The repositories whose connection test is running now. A second test of the same one answers 409. */
+const testing = new Set<string>();
+
+/** `POST /api/repos/<id>/test`: runs the checks, saves the result as the connection status and answers with it. */
+async function testRepo(ctx: ApiContext, user: User, id: string): Promise<{ at: string; ok: boolean; checks: unknown[] }> {
+  const rec = guardedRepos(ctx, () => getRepo(id));
+  if (!rec || (rec.owner !== user.id && user.role !== "admin")) throw new HttpError(404, "no such repository");
+  if (testing.has(rec.id)) throw new HttpError(409, "a test of this repository is running already; wait for it to finish");
+  testing.add(rec.id);
+  try {
+    if (rec.method === "none" && user.role !== "admin") {
+      throw new HttpError(409, "this repository has no sign-in yet; choose one with Change authentication");
+    }
+    const secret = rec.method === "none" ? undefined : guardedRepos(ctx, () => readRepoSecret(rec));
+    let result;
+    try {
+      result = await testConnection({ url: rec.url, method: rec.method, username: rec.username, secret });
+    } catch (e) {
+      if (!(e instanceof ConnectError)) throw e;
+      ctx.diagLog?.(`repos: test ${e.code}`);
+      throw new HttpError(500, "the connection test could not run; see the server log");
+    }
+    const saved = guardedRepos(ctx, () => setRepoConnection(rec, result));
+    if (saved === "gone") throw new HttpError(404, "no such repository");
+    if (saved === "changed") throw new HttpError(409, "the repository was changed while the test ran; test again");
+    for (const c of result.checks) if (!c.ok) ctx.diagLog?.(`repos: test ${c.check} ${c.code}`);
+    return result;
+  } finally {
+    testing.delete(rec.id);
+  }
+}
+
 /** The caller's own repositories: list, add, change how to reach one, remove. A token is only ever accepted, a private key never leaves the server. */
 export const repoRoutes: Route = async (ctx, req, res, seg, method) => {
   if (seg[0] === "admin") return adminRepos(ctx, req, res, seg, method);
@@ -106,6 +139,9 @@ export const repoRoutes: Route = async (ctx, req, res, seg, method) => {
     );
     oldKeys(ctx, r.oldKeysLeft, "the repository was changed");
     return send(res, 200, r.repo, publicKeys([r.repo])), true;
+  }
+  if (seg.length === 3 && seg[2] === "test" && method === "POST") {
+    return send(res, 200, await testRepo(ctx, user, seg[1]!)), true;
   }
   if (seg.length === 2 && method === "DELETE") {
     oldKeys(ctx, guardedRepos(ctx, () => removeRepo(user.id, seg[1]!)).oldKeysLeft, "the repository was removed");

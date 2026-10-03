@@ -2,14 +2,16 @@ import { createHash, randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
-import { CredentialError, type CredentialType, addCredentialLocked, checkSecret, listCredentials, moveCredentialLocked, oldKeysLeft as credentialKeysLeft, removeCredentialsLocked } from "../credentials/store.js";
+import { CredentialError, type CredentialType, type Removed, addCredentialLocked, checkSecret, listCredentials, moveCredentialLocked, oldKeysLeft as credentialKeysLeft, removeCredentialsLocked } from "../credentials/store.js";
 import { PUBLIC_KEY_RE, generateKeyPair } from "../credentials/ssh-keygen.js";
+import { ConnectionSchema, type ConnectionResult, repoSecretName } from "./repo-connection.js";
 import { RepoSettingsSchema, checkRepoSettings } from "./repo-settings.js";
 import { type ParsedRepoUrl, RepoError, type RepoErrorCode, githubKey, parseRepoUrl, tryParseRepoUrl, validGithubName } from "./repo-url.js";
 import { authLockHeld, dataHome, readJsonFile, withAuthLock, writeJsonFile } from "./store.js";
 import { type User, UserError, checkEmail, findUserByEmail, getUser } from "./users.js";
 
 export { RepoError };
+export { readRepoSecret } from "./repo-connection.js";
 export type { RepoErrorCode };
 
 /** The record was saved, but its token could not be saved and the record could not be taken back. Change the token again to repair it. */
@@ -47,6 +49,7 @@ const RecordSchema = z
     username: z.string().optional(),
     added: z.iso.datetime(),
     settings: RepoSettingsSchema.optional(),
+    connection: ConnectionSchema.optional(),
   })
   .strict()
   .superRefine((r, ctx) => {
@@ -133,6 +136,12 @@ const pathOfRecord = (r: RepoRecord) => r.url.replace(/^https:\/\/github\.com\//
 
 // ---- reading ---------------------------------------------------------------------------------------
 
+/** One record by its id, with its admin settings. The caller decides who may see it. */
+export const getRepo = (id: string): RepoRecord | undefined => {
+  const r = read().repos.find((x) => x.id === id);
+  return r ? { ...r } : undefined;
+};
+
 /** The repositories of an account, in the order they were added. A record never holds a secret. */
 export const listRepos = (userId: string): PublicRepo[] => read().repos.filter((r) => r.owner === userId).map(strip);
 
@@ -203,7 +212,10 @@ const ownerExists = (opts: { ownerOk?: (userId: string) => boolean }, userId: st
   if (!(opts.ownerOk ?? ((id: string) => getUser(id) !== undefined))(userId)) throw new RepoError("no-owner", "no such account");
 };
 
-const secretName = (r: Pick<RepoRecord, "id">) => `repo:${r.id}`;
+const secretName = repoSecretName;
+
+/** The record without its connection status. */
+const bare = ({ connection: _c, ...rest }: RepoRecord) => rest;
 
 /** What is stored for a record: a token, or a key the Foundry made (with its public half). */
 interface Secret {
@@ -337,6 +349,8 @@ export function setRepoAuth(userId: string, id: string, input: AuthChange, opts:
       added: rec.added,
       ...(rec.settings ? { settings: rec.settings } : {}),
     };
+    // the status stays only for a call that changes nothing about how the repository is reached
+    if (rec.connection && !secret && JSON.stringify(bare(next)) === JSON.stringify(bare(rec))) next.connection = rec.connection;
     let oldKeysLeft = 0;
     // a change to none also on a record that is none already: a retry cleans an old key left by the first try
     if (secret || auth.method === "none") oldKeysLeft = wipeToken(rec);
@@ -393,6 +407,45 @@ export function removeReposLocked(userId: string): number {
   return mine.length;
 }
 
+// ---- connection status -----------------------------------------------------------------------------
+
+/**
+ * Saves the result of a connection test on the record `rec` was read from. "gone" when the record is removed, "changed" when
+ * how it is reached changed meanwhile (owner, address, method, user name, token or key); nothing is written then.
+ * A result that does not fit the schema throws and writes nothing.
+ */
+export function setRepoConnection(rec: RepoRecord, result: ConnectionResult): "saved" | "gone" | "changed" {
+  const connection = ConnectionSchema.parse(result);
+  return withAuthLock(() => {
+    const file = read();
+    const now = file.repos.find((r) => r.id === rec.id);
+    if (!now) return "gone";
+    // a sign-in deleted during the test: a result for it must not be saved
+    if (now.method !== "none") {
+      const type = now.method === "ssh-deploy-key" ? "ssh-key" : "token";
+      if (!listCredentials(now.owner).some((c) => c.id === now.credentialId && c.name === secretName(now) && c.type === type)) return "changed";
+    }
+    const { settings: _a, ...was } = bare(rec);
+    const { settings: _b, ...is } = bare(now);
+    if (JSON.stringify(was) !== JSON.stringify(is)) return "changed";
+    save(file.repos.map((r) => (r === now ? { ...now, connection } : r)));
+    return "saved";
+  });
+}
+
+/**
+ * Removes one of the user's credentials. When it is the sign-in of one of the user's repositories, that repository's
+ * connection status goes first (it describes a sign-in that is gone).
+ */
+export const removeUserCredential = (userId: string, credentialId: string): Removed =>
+  withAuthLock(() => {
+    const file = read();
+    if (file.repos.some((r) => r.owner === userId && r.credentialId === credentialId && r.connection)) {
+      save(file.repos.map((r) => (r.owner === userId && r.credentialId === credentialId ? bare(r) : r)));
+    }
+    return removeCredentialsLocked(userId, credentialId);
+  });
+
 // ---- admin: settings and transfer ------------------------------------------------------------------
 
 /** Sets (or, with {}, clears) the admin settings of any repository. Returns the record with its settings. */
@@ -446,7 +499,7 @@ export function transferRepo(id: string, emailInput: unknown, opts: TransferOpti
     if (rec.owner === owner.id) return { repo: { ...rec }, oldKeysLeft: cleanKeys(owner.id) };
     if (file.repos.some((r) => r.owner === owner.id && keyOfRecord(r) === keyOfRecord(rec))) throw new RepoError("duplicate", "that account has that repository already");
     if (file.repos.filter((r) => r.owner === owner.id).length >= REPO_LIMIT) throw new RepoError("limit", `that account has ${REPO_LIMIT} repositories already`);
-    let next: RepoRecord = { ...rec, owner: owner.id };
+    let next: RepoRecord = { ...bare(rec), owner: owner.id };
     let oldKeysLeft = 0;
     if (REPO_BOUND_METHODS.includes(rec.method)) {
       if (!rec.credentialId || moveCredentialLocked(rec.owner, owner.id, rec.credentialId, secretName(rec)) === "missing") {
