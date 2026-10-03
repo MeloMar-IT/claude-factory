@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { defaultOwner } from "../auth/run-owner.js";
+import { defaultOwner, isRefinementRun } from "../auth/run-owner.js";
 import { nextStepEnv } from "../next-step.js";
 import { loadConfig, loadRepoVars, type Config } from "../config.js";
 import { FACTORY_HOME } from "../flow/load.js";
@@ -94,8 +94,8 @@ export async function runFlow(flow: Flow, opts: RunOptions): Promise<RunSummary>
   const runDir = join(opts.runsDir, runId);
 
   const vars = opts.frozenVars ? { ...opts.vars } : effectiveVars(flow, opts.repo, opts.vars, opts.log);
-  // A run nobody asked for by name (CLI, evals) belongs to the first admin.
-  const owner = opts.owner ?? defaultOwner();
+  // A run nobody asked for by name (CLI, evals) belongs to the first admin; a refinement run without an owner stays without one.
+  const owner = opts.owner ?? (isRefinementRun(opts.source) ? undefined : defaultOwner());
   const summary: RunSummary = {
     runId,
     flow: flow.name,

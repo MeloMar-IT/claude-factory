@@ -2,7 +2,7 @@
 // Stand-in for the `claude` CLI: reads the prompt from stdin, emits stream-json.
 // Prompt directives: "WRITE <file> <text>" writes a file; "SAY <text>" sets the result;
 // "ERROR" returns an error result; "DENY <Tool> <text>" adds a refused tool call to the result's
-// permission_denials (command for Bash, file_path otherwise). Args are echoed into the result for assertions.
+// permission_denials (command for Bash, file_path otherwise); "SHOWGH" reports whether it saw a GH_TOKEN. Args are echoed into the result for assertions.
 // The context brief of refine-brief has a canned answer: FAKE_BRIEF replaces it, FAKE_BRIEF=ECHO adds args, folder and prompt.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -12,6 +12,8 @@ for await (const chunk of process.stdin) prompt += chunk;
 const args = process.argv.slice(2);
 const emit = (o) => process.stdout.write(JSON.stringify(o) + "\n");
 
+// Whether the step had a GH_TOKEN: none, the one in FAKE_GH_EXPECT_TOKEN ("stored") or another. The token itself is never printed.
+const ghSeen = !process.env.GH_TOKEN ? "none" : process.env.GH_TOKEN === process.env.FAKE_GH_EXPECT_TOKEN ? "stored" : "other";
 let result = `ok args=${args.join(" ")}`;
 const denials = [];
 for (const line of prompt.split("\n")) {
@@ -26,6 +28,7 @@ for (const line of prompt.split("\n")) {
   }
   const s = line.match(/^SAY (.*)$/);
   if (s) result = s[1];
+  if (line === "SHOWGH") result = `gh_token=${ghSeen}`;
   if (line === "SHOWENV") result = `base=${process.env.ANTHROPIC_BASE_URL ?? ""} token=${process.env.ANTHROPIC_AUTH_TOKEN ?? ""} haiku=${process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL ?? ""} args=${args.join(" ")}`;
 }
 if (prompt.includes("CLAUDE_SIGNED_OUT")) {
@@ -62,7 +65,7 @@ if (prompt.includes("Explain why this run of a coding flow failed")) {
     `- ${existsSync("issues.md") && /The backlog is larger/.test(readFileSync("issues.md", "utf8").split("\n")[0]) ? "The backlog is larger than what was read." : "Nothing."}`,
   ].join("\n");
   const b = process.env.FAKE_BRIEF;
-  canned = b === "ECHO" ? `${brief}\nargs=${args.join(" ")}\ncwd=${process.cwd()}\nPROMPT<<${prompt}>>` : b ?? brief;
+  canned = b === "ECHO" ? `${brief}\nargs=${args.join(" ")}\ncwd=${process.cwd()}\ngh_token=${ghSeen}\nPROMPT<<${prompt}>>` : b ?? brief;
 } else if (prompt.includes("You triage tickets")) canned = process.env.FAKE_TRIAGE ?? "Small change.\nROUTE: SMALL";
 else if (prompt.includes("PLAN_STATUS: NEEDS_INFO")) canned = process.env.FAKE_PLAN ?? "1. change feature.txt\nPLAN_STATUS: READY";
 else if (prompt.includes("VERDICT: APPROVE")) canned = "Looks good.\nVERDICT: APPROVE";

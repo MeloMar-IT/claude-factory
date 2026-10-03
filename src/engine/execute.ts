@@ -5,7 +5,7 @@ import type { Flow, Step } from "../flow/schema.js";
 import { runAgentStep } from "../agents/run.js";
 import type { Target } from "../agents/targets.js";
 import { runShell } from "../steps/shell.js";
-import { grantPush, pushAllowEnv } from "./guards.js";
+import { TOKEN_REFUSED_REASON, grantPush, pushAllowEnv, repoReadAccess, repoReadEnv, tokenRefused } from "./guards.js";
 import type { RunSummary, StepRecord } from "./state.js";
 import { outputEnvName, render, varEnvName, withScfAliases, type TemplateContext } from "./template.js";
 
@@ -140,6 +140,15 @@ export async function executeStep(step: Step, scope: Scope, engine: Engine, logF
       const image = scope.flow.sandbox.docker_image ?? engine.config.sandbox.docker_image;
       if (step.sandbox && !image) engine.log(`    ⚠ ${step.id}: not sandboxed (no sandbox.docker_image configured)`);
       const env = stepEnv(scope, engine, step);
+      // The stored token of the repository, looked up now, only for the clone and the issue list of a refinement run.
+      const access = repoReadAccess(step, scope.depth, scope.flow.name, engine.summary, ctx.vars);
+      if (access?.kind === "refused") {
+        if (access.detail) engine.log(`    ! ${step.id}: the stored token could not be read: ${access.detail}`);
+        return { ok: false, output: access.reason, error: access.reason };
+      }
+      const readEnv = access ? repoReadEnv(access, env) : {};
+      Object.assign(env, readEnv);
+      const readNames = Object.keys(readEnv).filter((k) => readEnv[k] !== undefined);
       // The push exception is a one-time token that only this step gets (see grantPush), not a plain name.
       const grant = env.FACTORY_PUSH_ALLOW ? grantPush(env.FACTORY_PUSH_ALLOW) : undefined;
       if (grant) Object.assign(env, grant.env);
@@ -152,8 +161,12 @@ export async function executeStep(step: Step, scope: Scope, engine: Engine, logF
           timeoutMs,
           signal: engine.signal,
           dockerImage: step.sandbox ? image : undefined,
+          dockerEnv: readNames,
+          // the token of this step stays hidden even if the stored one is changed or removed while it runs
+          pinnedSecrets: access?.kind === "token" ? [access.token] : undefined,
         });
-        return { ok: r.ok, output: r.output, error: r.error, exitCode: r.exitCode };
+        const denied = access?.kind === "token" && !r.ok && r.error !== "cancelled" && r.error !== "timed out" && tokenRefused(r.output);
+        return { ok: r.ok, output: r.output, error: denied ? TOKEN_REFUSED_REASON : r.error, exitCode: r.exitCode };
       } finally {
         grant?.revoke();
       }

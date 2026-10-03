@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { createWriteStream } from "node:fs";
 import { StringDecoder } from "node:string_decoder";
-import { liveRedactor, redactStream, requireRedaction, type Redactor } from "../credentials/redact.js";
+import { combineRedactors, liveRedactor, makeRedactor, redactStream, requireRedaction, type Redactor } from "../credentials/redact.js";
 
 export interface ProcessResult {
   exitCode: number | null;
@@ -22,6 +22,8 @@ export interface ProcessOptions {
   onLine?: (line: string) => void;
   /** Secrets to hide from the output. Without it the stored credentials are used (and must be readable). */
   redactor?: Redactor;
+  /** Secrets of this process, hidden for its whole life even when the stored credentials change meanwhile. Used with the stored ones. */
+  pinnedSecrets?: string[];
 }
 
 /**
@@ -55,7 +57,8 @@ export function runProcess(cmd: string, args: string[], opts: ProcessOptions): P
         current = () => fixed;
       } else {
         requireRedaction();
-        current = liveRedactor;
+        const pinned = opts.pinnedSecrets?.length ? makeRedactor(opts.pinnedSecrets) : undefined;
+        current = pinned ? () => combineRedactors(liveRedactor(), pinned) : liveRedactor;
       }
     } catch (e) {
       return reject(e);

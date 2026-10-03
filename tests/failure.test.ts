@@ -29,6 +29,24 @@ describe("classifyFailure", () => {
   });
 
   it.each([
+    "set a token for this repository under My repositories",
+    "the token of this repository is missing; set it again under My repositories",
+    "the stored token of this repository cannot be read; set it again under My repositories, or ask an admin",
+    "GitHub refused the token of this repository; check its access to Contents and Issues",
+    '"acme/app" is not one of your repositories',
+    "this run has no owner, so the token of the repository cannot be looked up",
+  ])("is factory for a repository that could not be read with its stored token: %s", (error) => {
+    for (const output of [error, `${error}\nfatal: Authentication failed for 'https://github.com/acme/app/'`]) {
+      const h = [rec({ id: "clone", output, error })];
+      expect(classifyFailure(run("failed", `step "clone" failed: ${error}`, h))).toMatchObject({
+        cause: "factory",
+        what: "the repository could not be read with its stored token",
+        fix: "set the token of the repository again under My repositories, or ask an admin when it cannot be read",
+      });
+    }
+  });
+
+  it.each([
     ["planning failed: no PLAN_STATUS line", "the plan had no PLAN_STATUS line"],
     ["planning failed (no questions to ask)", "the plan had no questions to ask"],
     ["no SUBTASK lines", "the triage had no SUBTASK lines"],

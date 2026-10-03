@@ -23,7 +23,7 @@ steps:
       case "$r" in */*) ok=yes ;; esac
       case "$r" in ""|-*|/*|*/|*/*/*|*[!A-Za-z0-9._/-]*) ok=no ;; esac
       [ "$ok" = yes ] || { echo "set the variable github_repo to owner/name"; exit 1; }
-      gh repo clone "$r" repo -- -q || { echo "could not clone $r"; exit 1; }
+      gh repo clone "https://github.com/$r" repo -- -q -c credential.helper= -c 'credential.helper=!gh auth git-credential' || { echo "could not clone $r"; exit 1; }
       if git -C repo show-ref --verify --quiet refs/remotes/origin/develop; then branch=develop; else branch=$(git -C repo symbolic-ref --short HEAD); fi
       git -C repo checkout -q "$branch" || { echo "could not check out $branch"; exit 1; }
       echo "branch: $branch"

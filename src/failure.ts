@@ -44,6 +44,7 @@ const SETUP_ERRORS: { re: RegExp; what: string; fix: string }[] = [
   { re: /^provider \S+ needs (?:a model|base_url)/, what: "a provider is missing a model or an address", fix: SETTINGS_FIX },
   { re: /^claude CLI not found/, what: "the Claude Code tool is not installed", fix: "install Claude Code on the computer that runs the Foundry" },
   { re: /^codex CLI not found/, what: "the Codex tool is not installed", fix: "install Codex on the computer that runs the Foundry" },
+  { re: /^(?:set a token for this repository|the (?:stored )?token of this repository|GitHub refused the token of this repository|"[^"]+" is not one of your repositories|this run has no owner)/, what: "the repository could not be read with its stored token", fix: "set the token of the repository again under My repositories, or ask an admin when it cannot be read" },
 ];
 const LOGIN_FIX = "log in again with `gh auth login`, or check the token the Foundry uses";
 const NETWORK_FIX = "check the network connection of the computer that runs the Foundry";
