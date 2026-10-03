@@ -160,10 +160,20 @@ describe("the audit log from the store", () => {
     for (const w of ["Zebulon", "b@example.com", "scrypt$", "passwordHash", "another-password-123"]) expect(text).not.toContain(w);
   });
 
-  it("name and e-mail changes write no line", async () => {
+  it("a name or e-mail change writes one `edit` line", async () => {
     const a = await createUser(ann({ role: "admin" }));
     await updateUser(a.id, { name: "New", email: "new@example.com" }, { by: "cli" });
-    expect(auditLines()).toHaveLength(0);
+    expect(auditLines()).toMatchObject([{ action: "edit", by: "cli", userId: a.id }]);
+    const text = readFileSync(auditPath(), "utf8");
+    expect(text).not.toContain("new@example.com");
+    expect(text).not.toContain('"New"');
+  });
+
+  it("role and name changed in one call give exactly one `role` line", async () => {
+    const a = await createUser(ann({ role: "admin" }));
+    await createUser(ann({ email: "b@example.com", role: "admin" }));
+    await updateUser(a.id, { name: "New", role: "user" }, { by: "cli" });
+    expect(auditLines()).toMatchObject([{ action: "role", userId: a.id, oldRole: "admin", newRole: "user" }]);
   });
 
   it("failed actions write no line", async () => {

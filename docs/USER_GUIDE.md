@@ -947,7 +947,23 @@ as another admin. Change a role with
 `scf user role <e-mail> admin|user`. `scf user list` shows the last sign-in of each account
 ("never" when there is none).
 
-**What a block or delete stops.** A blocked or deleted account cannot start anything new. The jobs it
+**Managing accounts over the API.** Admins only (a user gets `403`). `GET /api/users` lists the
+accounts (`id`, `name`, `email`, `role`, `status`, `created`, `lastSignIn`, `runs`, `hasPassword`).
+`POST /api/users {"name": …, "email": …, "role": "admin"|"user"}` adds an account without a password
+and answers 201 with the account and its one-time token (400 for bad input, 409 for a taken e-mail).
+The token is shown once; the link is `<address>/#/set-password/<token>`.
+`PUT /api/users/<id>` changes `name`, `email` or `role`: leave a field out to keep it; `null` is not
+accepted (400). `POST /api/users/<id>/block {"stopWork": true}` blocks, signs the account out and
+answers with `cancelled: {queued, running, waiting}`. `POST /api/users/<id>/unblock` unblocks.
+`POST /api/users/<id>/link` gives a new token for an account without a password (409 if it has one).
+`DELETE /api/users/<id>` deletes as `scf user delete` does. An unknown id is 404, the last admin that
+is not blocked is 409. An admin may act on their own account within the last-admin rule; blocking
+yourself signs you out. If an old key stays in the Keychain, delete answers 500 and the account is
+gone; run `scf credential rotate-key`. A watcher's `owner` is an e-mail: after changing an account's
+e-mail, set the owner again, or its new runs go to the first admin.
+
+**What a block or delete stops.** Through the API the server acts at once and answers with the
+numbers; running runs are told to stop and show as cancelled a moment later. A blocked or deleted account cannot start anything new. The jobs it
 queued are cancelled (the server checks every 2 seconds; a block made while the server was down is
 handled at the next start, before any job starts). A job it queued never starts, also after a
 restart. Its running runs finish, and runs that wait for approval stay as they are. An admin can
@@ -959,13 +975,15 @@ cancelled too. `scf user unblock` restarts nothing and removes a stop-work reque
 not handled yet. Watchers of the account keep working: disable the watcher or change its owner. The
 server log says how many runs it cancelled, with the account id only.
 
-**Audit log.** Every `scf user` action that changes something (`create`, `password`, `role`,
+**Audit log.** Every `scf user` action and every users API call that changes something (`create`, `password`, `role`, `edit`,
 `block`, `unblock`, `delete`; also `link`, when a new set-password link replaces the old one) adds one line to `audit.jsonl` in the data folder (mode `0600`), for
 example `{"time":"2026-10-02T09:46:46.000Z","by":"cli","action":"role","userId":"<id>","oldRole":"user","newRole":"admin"}`.
-A password set through a link is a `password` line made by the account itself (`by` is its id).
+`by` is `cli` or the id of the admin. An `edit` line is a name or e-mail change. A password set through a link is a `password` line made by the account itself (`by` is its id).
 Only a role change has `oldRole` and `newRole`. A `block` line has `stopWork` (`true` when
 `--stop-work` was given). No line holds a name, e-mail, password, hash or
-token, and a failed action is not logged. If the file cannot be written, the command stops before
+token, and a failed action is not logged. A block or delete that stops with an error may already have
+signed the account out or removed its repositories and stored credentials; the server log names the
+problem, and the same action made again finishes the job and writes the line. If the file cannot be written, the command stops before
 it changes anything. In the rare case that the line cannot be added after the change (for example a
 full disk), the command says so and exits 1. The file is a record, not a protection: anyone who runs
 commands as you can edit it.
@@ -988,12 +1006,13 @@ The cookie gets the `Secure` flag when you reach the UI over HTTPS (through a pr
   the address, so it is in no request line or log. `POST /api/set-password` shares the limits with
   sign-in (60 tries per client in 15 minutes, 16 password checks at once), and using a link clears
   the wrong-tries count of that e-mail.
-- **Ending sessions.** Signing out, expiry, `scf user password` and `scf user block` end sessions.
+- **Ending sessions.** Signing out, expiry, `scf user password` and `scf user block` end sessions, and so do block and delete through the API.
   A run log that is open in the browser stops within 5 seconds. A role change does not end
   sessions; the new role counts from the next call.
 - **Problems with the files.** If `users.json` or `sessions.json` cannot be read or written, or
   another `scf` process holds the lock, sign-in shows "sign-in is not working; see the server
-  log". The log names the file and the kind of problem, never a password or a hash.
+  log". The log names the file and the kind of problem, never a password or a hash. The users API
+answers a plain 500 for such a problem and logs the same way (for example `users: audit.jsonl cannot-write`).
 
 #### Roles and permissions
 
@@ -1145,13 +1164,20 @@ Change a role with `scf user role <e-mail> admin|user`, or create an admin with
 | `GET /api/credentials` | yes | yes | your stored credentials |
 | `POST /api/credentials` | yes | yes | store a credential |
 | `DELETE /api/credentials/:id` | yes | yes | remove a credential |
+| `GET /api/users` | yes | no | list the accounts |
+| `POST /api/users` | yes | no | add an account without a password; the answer has its one-time set-password token |
+| `PUT /api/users/:id` | yes | no | change the name, e-mail or role of an account |
+| `POST /api/users/:id/block` | yes | no | block an account, end its sessions and cancel its queued jobs |
+| `POST /api/users/:id/unblock` | yes | no | unblock an account |
+| `POST /api/users/:id/link` | yes | no | a new set-password token for an account without a password |
+| `DELETE /api/users/:id` | yes | no | delete an account with its sessions, repositories and stored credentials |
 | `GET /api/repos` | yes | yes | your repositories |
 | `POST /api/repos` | yes | yes | add a repository (a URL, and a token for it) |
 | `PUT /api/repos/:id/auth` | yes | yes | change the method, user name, token or address of your repository |
 | `DELETE /api/repos/:id` | yes | yes | remove your repository and its stored token |
 | `DELETE /api/repos/:owner/:name` | yes | yes | remove a GitHub repository by name (old form) |
 
-**What comes later.** Adding users in the UI (it makes the set-password link), runs that use a user's stored credentials or a repository's token, changing
+**What comes later.** The Users page in the UI (the calls are there), runs that use a user's stored credentials or a repository's token, changing
 your own password in the UI, and pages for users (starting runs, repositories).
 
 ### Access from other computers

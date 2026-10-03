@@ -72,11 +72,16 @@ describe("prepareAuditLocked", () => {
     expect(JSON.parse(lines()[1]!)).toMatchObject({ oldRole: "user", newRole: "admin" });
   });
 
+  it("writes an edit entry with exactly the keys time, by, action, userId", () => {
+    add("cli", { action: "edit", userId: id() });
+    expect(Object.keys(JSON.parse(lines()[0]!))).toEqual(["time", "by", "action", "userId"]);
+  });
+
   it("refuses invalid entries", () => {
     const bad: unknown[] = [
       { action: "block", userId: id(), oldRole: "user", newRole: "admin" },
       { action: "role", userId: id() },
-      { action: "edit", userId: id() },
+      { action: "rename", userId: id() },
       { action: "create", userId: "not-a-uuid" },
     ];
     for (const e of bad) expect(() => withAuthLock(() => prepareAuditLocked("cli", e as AuditEvent))).toThrow();

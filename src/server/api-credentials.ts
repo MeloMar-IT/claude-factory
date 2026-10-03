@@ -9,6 +9,9 @@ import type { Route } from "./server.js";
 const INTERNAL = "the credential store is not working; see the server log";
 const STATUS = { "bad-type": 400, "bad-name": 400, "bad-secret": 400, duplicate: 409, "not-found": 404, "no-owner": 404 } as const;
 
+/** The rest of the answer when an old key is still in the Keychain after a wipe (admin text). */
+export const OLD_KEY_LEFT = "an old key is still in the Keychain, so older copies of the data could be read; try again, or run scf credential rotate-key";
+
 /** Runs store code. Input errors become 4xx; everything else is logged (file and kind, never a value) and answered with a plain 500. */
 function guarded<T>(log: ((m: string) => void) | undefined, fn: () => T): T {
   try {
@@ -46,7 +49,7 @@ export const credentialRoutes: Route = async (ctx, req, res, seg, method) => {
     // the wipe is not complete: say so, and let a retry of this call clean up
     const removed = r.removed ? "the credential was removed, but " : "";
     throw new HttpError(500, user.role === "admin"
-      ? `${removed}an old key is still in the Keychain, so older copies of the data could be read; try again, or run scf credential rotate-key`
+      ? `${removed}${OLD_KEY_LEFT}`
       : `${removed}the clean-up is not complete; try again, or ask the administrator`);
   }
   if (!r.removed) throw new HttpError(404, "no such credential");
