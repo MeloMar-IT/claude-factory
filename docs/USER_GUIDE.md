@@ -75,6 +75,7 @@ admin for a new one.
 | **Watchers** | Automatic runs from GitHub issues, PR comments, red CI, or a schedule |
 | **Models** | Which agents and models are available, and which model runs which step |
 | **Dashboard** | Spend, success rate, where runs fail, eval results |
+| **Users** | The accounts: add, edit, block and delete them (admins only) |
 | **Settings** | Budget, safety, notifications, bot identity, disk clean-up |
 
 An account with the role `user` sees only **Runs** and **My repositories**:
@@ -192,6 +193,8 @@ and a link to what it waits for.
 
 An admin sees every run, with an **Owner** column, and can pick one account in the **Owner**
 filter next to the title (the list shows "All owners" and each account with its number of runs).
+The Owner column shows the account's name, `deleted user` when the account is gone, and nothing for
+a run without an owner.
 A user sees only their own runs and their own queued runs; runs of others in front of them show
 as "n runs ahead of you".
 
@@ -215,7 +218,9 @@ Open a run to follow it live. At the top, the **What happens next** block says w
 move, what to do, why, a link to the place to do it, and when it continues by itself (if
 known). It updates live. While the run is not finished it also shows its progress, the estimate
 and the "Taking longer than usual" hint (see "How long will it take?" above). The raw reason of a
-waiting run (the approval message) is the **Details** row below.
+waiting run (the approval message) is the **Details** row below. An admin also sees an **Owner**
+row: the name of the account that started the run, or `deleted user` (no row for a run without an
+owner).
 
 A failed run shows a **failure card** instead: who has the next move, the kind of problem, what
 happened, why, what the Foundry already tried, what to do first and your four options (Retry,
@@ -1023,6 +1028,29 @@ as another admin. Change a role with
 `scf user role <e-mail> admin|user`. `scf user list` shows the last sign-in of each account
 ("never" when there is none).
 
+**The Users page.** Admins only: **Users** in the top bar (`#/users`). It lists name, e-mail, role,
+status (active, blocked, no password yet), last sign-in and the number of runs. Your own account is
+marked "(you)".
+
+- **Add user** asks for name, e-mail and role. Then the dialog shows the set-password link once. The
+  link works once, for 7 days, and you must send it to the user yourself. **Copy** needs HTTPS or
+  localhost; otherwise select the link in the field and copy it. Close the dialog too early and
+  the link is gone: use **New link**.
+- **New link** (only for an account without a password) shows a fresh link; the earlier one stops
+  working. For a blocked account the link works only after you unblock it.
+- **Edit** changes name, e-mail and role. After an e-mail change, set a watcher's `owner` again
+  (see above).
+- **Block** signs the user out, cancels their queued runs and lets running runs finish. **Also stop
+  all their work now** also cancels running runs and runs that wait for approval. The page then says
+  how many runs were cancelled.
+- **Unblock** lets the user sign in again. Cancelled runs are not restarted.
+- **Delete** asks first, names the account, wipes its stored credentials and keeps its runs
+  (they show `deleted user`). It cannot be undone.
+
+A refusal (the last admin, an e-mail that is taken, bad input) shows in the dialog and the list does
+not change. An error from Block or Delete can come after the change was made; close the dialog to
+see the list again. Blocking or deleting your own account signs you out, and the page reloads.
+
 **Managing accounts over the API.** Admins only (a user gets `403`). `GET /api/users` lists the
 accounts (`id`, `name`, `email`, `role`, `status`, `created`, `lastSignIn`, `runs`, `hasPassword`).
 `POST /api/users {"name": …, "email": …, "role": "admin"|"user"}` adds an account without a password
@@ -1268,7 +1296,7 @@ Change a role with `scf user role <e-mail> admin|user`, or create an admin with
 | `DELETE /api/repos/:id` | yes | yes | remove your repository and its stored token |
 | `DELETE /api/repos/:owner/:name` | yes | yes | remove a GitHub repository by name (old form) |
 
-**What comes later.** The Users page in the UI (the calls are there), runs that use a user's stored credentials or a repository's token, changing
+**What comes later.** Runs that use a user's stored credentials or a repository's token, changing
 your own password in the UI, a connection test for repositories, SSH deploy keys, the GitHub App, and pages for users (starting runs).
 
 ### Access from other computers

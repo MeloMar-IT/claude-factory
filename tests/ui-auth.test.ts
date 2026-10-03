@@ -439,6 +439,8 @@ describe("roles in the page", () => {
     expect(auth.userHash("#/runs/abc/x")).toBe("#/runs");
     expect(auth.userHash("#/settings")).toBe("#/runs");
     expect(auth.userHash("")).toBe("#/runs");
+    expect(auth.userHash("#/users")).toBe("#/runs");
+    expect(auth.userHash("#/users/x")).toBe("#/runs");
   });
 
   it("allowedHash replaces a page a user may not open, and leaves the rest", () => {
@@ -450,6 +452,10 @@ describe("roles in the page", () => {
     expect(auth.allowedHash(true, "#/settings", replace)).toBe("#/settings");
     expect(auth.allowedHash(false, "#/repos", replace)).toBe("#/repos");
     expect(replace).not.toHaveBeenCalled();
+    expect(auth.allowedHash(true, "#/users", replace)).toBe("#/users");
+    expect(replace).not.toHaveBeenCalled();
+    expect(auth.allowedHash(false, "#/users", replace)).toBe("#/runs");
+    expect(replace).toHaveBeenCalledWith("#/runs");
   });
 
   it("startApp gives a user only the route, and an admin the whole start-up", async () => {

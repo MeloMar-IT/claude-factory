@@ -8,6 +8,18 @@ const secs = (ms) => (ms < 60_000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.floor
 const what = (r) => (r.vars?.issue ? `${r.vars.github_repo}#${r.vars.issue}` : r.vars?.pr ? `${r.vars.github_repo} PR #${r.vars.pr}` : "");
 
 const REFRESH_MS = 30_000;
+const GONE = "deleted user";
+/** The server's owner name as the list shows it: "deleted user" for an account that is gone, "" for no owner. */
+export const ownerLabel = (name) => (name === "deleted account" ? GONE : name ?? "");
+/** Account names by id from the answer of GET /api/users; null when it is not a list. */
+export const ownerNames = (users) => (Array.isArray(users) ? new Map(users.map((u) => [u.id, u.name])) : null);
+/** The account's name, "deleted user" when it is gone, "" for no owner or while the names are not known. */
+export const ownerText = (owner, names) => (!owner || !names ? "" : names.get(owner) ?? GONE);
+/** The Owner row of the run page, or null. */
+export const ownerRow = (s, names) => {
+  const t = ownerText(s.owner, names);
+  return t ? [h("dt", {}, "Owner"), h("dd", {}, t)] : null;
+};
 
 /** A row of the Runs list: the status name of the record with its "?", then flow, task, steps, cost, start. */
 export const runRow = (r, { owner = false, cost = true } = {}) => h("tr", { class: "link", onClick: () => (location.hash = `#/runs/${r.runId}`) },
@@ -16,7 +28,7 @@ export const runRow = (r, { owner = false, cost = true } = {}) => h("tr", { clas
   h("td", { class: "task", title: r.task }, r.task || h("span", { class: "muted" }, "—"),
     r.next ? h("div", { class: "muted", title: r.next.text }, r.next.text) : null,
     r.next && whenParts(r.next).length ? h("div", { class: "next-parts timing" }, whenParts(r.next)) : null),
-  owner ? h("td", {}, r.ownerName ?? "—") : null,
+  owner ? h("td", {}, ownerLabel(r.ownerName)) : null,
   h("td", { class: "mono" }, r.history?.length ?? 0),
   cost ? h("td", { class: "mono" }, money(r.totalCostUsd)) : null,
   h("td", { class: "muted" }, timeAgo(r.startedAt)));
@@ -58,7 +70,7 @@ export async function renderRunsList(main, { admin = true } = {}) {
       h("tbody", {}, list.map((r) => runRow(r, { owner: admin, cost: admin }))));
     const filter = admin ? h("select", { class: "small-select", title: "Show the runs of one account", onChange: (e) => { owner = e.target.value; draw(); } },
       h("option", { value: "" }, "All owners"),
-      owners.map((o) => h("option", { value: o.id, selected: o.id === owner }, `${o.name} (${o.runs})`))) : null;
+      owners.map((o) => h("option", { value: o.id, selected: o.id === owner }, `${ownerLabel(o.name)} (${o.runs})`))) : null;
 
     mount(main,
       h("div", { class: "toolbar" }, h("h1", {}, "Runs"),
@@ -246,6 +258,8 @@ export function renderRunDetail(main, runId, { admin = true } = {}) {
   let summary;
   let tab = "log";
   let follow = true;
+  let names = null;
+  let open = true;
   logEl.addEventListener("scroll", () => {
     follow = logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 20;
   });
@@ -294,6 +308,7 @@ export function renderRunDetail(main, runId, { admin = true } = {}) {
         h("dl", { class: "meta" },
           what(s) ? [h("dt", {}, "Ticket"), h("dd", {}, what(s))] : null,
           h("dt", {}, "Run"), h("dd", {}, s.runId),
+          admin ? ownerRow(s, names) : null,
           s.branch ? [h("dt", {}, "Branch"), h("dd", {}, s.branch)] : null,
           s.workdir ? [h("dt", {}, "Workspace"), h("dd", {}, s.workdir)] : null,
           versionRow(s),
@@ -303,6 +318,8 @@ export function renderRunDetail(main, runId, { admin = true } = {}) {
     if (card && !picked && !(prev && prev.status === "failed" && prev.next?.failure)) return showTab("steps");
     if (tab === "steps" && (!prev || prev.history.length !== s.history.length)) showTab("steps");
   };
+
+  if (admin) api.users().then((list) => { names = ownerNames(list); if (open && summary) draw(summary); }).catch(() => {});
 
   const es = api.events(runId);
   es.addEventListener("update", (e) => {
@@ -316,5 +333,8 @@ export function renderRunDetail(main, runId, { admin = true } = {}) {
   es.onerror = () => {
     if (es.readyState === EventSource.CLOSED) toast("Lost connection to the run stream", "error");
   };
-  return () => es.close();
+  return () => {
+    open = false;
+    es.close();
+  };
 }
