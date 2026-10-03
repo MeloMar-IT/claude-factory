@@ -596,7 +596,7 @@ describe("the SSH deploy key", () => {
       const before = [readFileSync(reposPath(), "utf8"), readFileSync(credentialsPath(), "utf8")];
       kc.clearLog();
       const out = setRepoAuth(ANN, r.id, { method: "ssh-deploy-key" }, OK);
-      expect(out).toEqual({ repo: r, oldKeysLeft: 0 });
+      expect(out).toEqual({ repo: r, oldKeysLeft: 0, changed: false });
       expect(kg.calls()).toHaveLength(1);
       expect(kc.calls()).toEqual([]);
       expect([readFileSync(reposPath(), "utf8"), readFileSync(credentialsPath(), "utf8")]).toEqual(before);
