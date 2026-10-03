@@ -756,10 +756,11 @@ describe("sign-ins in the audit log", () => {
       await post(s, "/api/session", { email: ann.email, password: 5 });
       await login(s, "x".repeat(300) + "@example.com", PW);
       expect(signIns(s)).toHaveLength(0);
-      for (let i = 0; i < 10; i++) await login(s, ann.email, "not-the-password-1");
-      expect(signIns(s)).toHaveLength(10);
+      // the over-long e-mail counted for the address, so the fifth try from it starts a wait: four lines, then a 429 without a line
+      for (let i = 0; i < 4; i++) await login(s, ann.email, "not-the-password-1");
+      expect(signIns(s)).toHaveLength(4);
       expect((await login(s, ann.email, "not-the-password-1")).status).toBe(429);
-      expect(signIns(s)).toHaveLength(10);
+      expect(signIns(s)).toHaveLength(4);
     }));
 
   it("writes a create line at setup, and no sign-in line", () =>
