@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { z } from "zod";
 import { CredentialError, type CredentialType, addCredentialLocked, checkSecret, listCredentials, moveCredentialLocked, oldKeysLeft as credentialKeysLeft, removeCredentialsLocked } from "../credentials/store.js";
 import { PUBLIC_KEY_RE, generateKeyPair } from "../credentials/ssh-keygen.js";
+import { changedKeys } from "./audit.js";
 import { RepoSettingsSchema, checkRepoSettings } from "./repo-settings.js";
 import { type ParsedRepoUrl, RepoError, type RepoErrorCode, githubKey, parseRepoUrl, tryParseRepoUrl, validGithubName } from "./repo-url.js";
 import { authLockHeld, dataHome, readJsonFile, withAuthLock, writeJsonFile } from "./store.js";
@@ -296,7 +297,7 @@ export interface AuthChange {
  * record that names a missing token or key (never a secret without a record); giving the token again, or choosing the
  * method "ssh-deploy-key" again, repairs it.
  */
-export function setRepoAuth(userId: string, id: string, input: AuthChange, opts: { ownerOk?: (userId: string) => boolean } = {}): { repo: PublicRepo; oldKeysLeft: number } {
+export function setRepoAuth(userId: string, id: string, input: AuthChange, opts: { ownerOk?: (userId: string) => boolean } = {}): { repo: PublicRepo; oldKeysLeft: number; changed: boolean } {
   if ([input.method, input.username, input.token, input.url, input.newKey].every((v) => v === undefined)) throw badAuth("give a method, a user name, a token, an address or a new key");
   return withAuthLock(() => {
     ownerExists(opts, userId);
@@ -342,18 +343,19 @@ export function setRepoAuth(userId: string, id: string, input: AuthChange, opts:
     if (secret || auth.method === "none") oldKeysLeft = wipeToken(rec);
     // a repeat for a deploy key that is fine already still cleans old Keychain keys left by an earlier try
     else if (deploy) oldKeysLeft = cleanKeys(userId);
-    if (JSON.stringify(next) !== JSON.stringify(rec) || secret) save(file.repos.map((r) => (r === rec ? next : r)));
+    const differs = JSON.stringify(next) !== JSON.stringify(rec) || Boolean(secret);
+    if (differs) save(file.repos.map((r) => (r === rec ? next : r)));
     if (secret) {
       addCredentialLocked({ id: credentialId!, userId, type: secret.type, name: secretName(rec), secret: secret.value });
       // saving retries old keys too, so the count from the wipe may be out of date
       oldKeysLeft = credentialKeysLeft();
     }
-    return { repo: strip(next), oldKeysLeft };
+    return { repo: strip(next), oldKeysLeft, changed: differs };
   });
 }
 
 /** Removes the record picked by `pick` from the account's own records, wiping its token first. */
-function removeWhere(userId: string, pick: (mine: RepoRecord[]) => RepoRecord | undefined): { oldKeysLeft: number } {
+function removeWhere(userId: string, pick: (mine: RepoRecord[]) => RepoRecord | undefined): { oldKeysLeft: number; removed?: PublicRepo } {
   return withAuthLock(() => {
     const file = read();
     const rec = pick(file.repos.filter((r) => r.owner === userId));
@@ -365,7 +367,7 @@ function removeWhere(userId: string, pick: (mine: RepoRecord[]) => RepoRecord | 
     }
     const oldKeysLeft = wipeToken(rec);
     save(file.repos.filter((r) => r !== rec));
-    return { oldKeysLeft };
+    return { oldKeysLeft, removed: strip(rec) };
   });
 }
 
@@ -396,7 +398,7 @@ export function removeReposLocked(userId: string): number {
 // ---- admin: settings and transfer ------------------------------------------------------------------
 
 /** Sets (or, with {}, clears) the admin settings of any repository. Returns the record with its settings. */
-export function setRepoSettings(id: string, input: unknown): RepoRecord {
+export function setRepoSettings(id: string, input: unknown): { repo: RepoRecord; changed: string[] } {
   const settings = checkRepoSettings(input);
   return withAuthLock(() => {
     const file = read();
@@ -405,7 +407,7 @@ export function setRepoSettings(id: string, input: unknown): RepoRecord {
     const { settings: _old, ...rest } = rec;
     const next: RepoRecord = Object.keys(settings).length ? { ...rest, settings } : rest;
     if (JSON.stringify(next) !== JSON.stringify(rec)) save(file.repos.map((r) => (r === rec ? next : r)));
-    return { ...next };
+    return { repo: { ...next }, changed: changedKeys(rec.settings ?? {}, settings) };
   });
 }
 
@@ -426,7 +428,7 @@ const EMAIL_CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
  * repository-bound secret is re-encrypted for the new owner. The secret goes first and the record second, so a failure in
  * between leaves the record with the old owner, and repeating the transfer finishes it.
  */
-export function transferRepo(id: string, emailInput: unknown, opts: TransferOptions = {}): { repo: RepoRecord; oldKeysLeft: number } {
+export function transferRepo(id: string, emailInput: unknown, opts: TransferOptions = {}): { repo: RepoRecord; oldKeysLeft: number; moved: boolean } {
   if (typeof emailInput !== "string" || !emailInput.trim()) throw new RepoError("bad-owner", "give the e-mail of the new owner");
   let email = "";
   try {
@@ -443,7 +445,7 @@ export function transferRepo(id: string, emailInput: unknown, opts: TransferOpti
     const rec = file.repos.find((r) => r.id === id);
     if (!rec) throw new RepoError("not-found", "no such repository");
     // a repeat after a failed first try: the record is moved already, so only old keys are cleaned
-    if (rec.owner === owner.id) return { repo: { ...rec }, oldKeysLeft: cleanKeys(owner.id) };
+    if (rec.owner === owner.id) return { repo: { ...rec }, oldKeysLeft: cleanKeys(owner.id), moved: false };
     if (file.repos.some((r) => r.owner === owner.id && keyOfRecord(r) === keyOfRecord(rec))) throw new RepoError("duplicate", "that account has that repository already");
     if (file.repos.filter((r) => r.owner === owner.id).length >= REPO_LIMIT) throw new RepoError("limit", `that account has ${REPO_LIMIT} repositories already`);
     let next: RepoRecord = { ...rec, owner: owner.id };
@@ -458,6 +460,6 @@ export function transferRepo(id: string, emailInput: unknown, opts: TransferOpti
       next = { ...bare, method: "none" };
     }
     save(file.repos.map((r) => (r === rec ? next : r)));
-    return { repo: { ...next }, oldKeysLeft };
+    return { repo: { ...next }, oldKeysLeft, moved: true };
   });
 }

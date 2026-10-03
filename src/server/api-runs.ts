@@ -4,6 +4,7 @@ import { supersededRuns } from "../stats.js";
 import { resolve } from "node:path";
 import { runDiff } from "../engine/diff.js";
 import { readTranscript } from "../engine/transcript.js";
+import { auditAction } from "../auth/audit.js";
 import { ownsRepo } from "../auth/repos.js";
 import { ownerNames } from "../auth/run-owner.js";
 import { effectiveVars } from "../engine/runner.js";
@@ -126,13 +127,18 @@ export const runRoutes: Route = async (ctx, req, res, seg, method, user) => {
       { kind: "run", flow, task, repo, vars: runVars, ...(admin ? {} : { frozenVars: true }) },
       { lockKey, source: "ui", owner: user.id, queuedBy: user.id },
     );
+    auditAction(ctx.diagLog, user.id, "run-start", runId);
     return send(res, 201, { runId, queued: scheduler.isQueued(runId) }), true;
   }
 
   if (!id || !/^[\w-]+$/.test(id)) throw new HttpError(400, "invalid run id");
   const action = seg[2];
 
-  if (action === "cancel" && method === "POST") return send(res, 200, { cancelled: scheduler.cancel(id) }), true;
+  if (action === "cancel" && method === "POST") {
+    const cancelled = scheduler.cancel(id);
+    if (cancelled) auditAction(ctx.diagLog, user.id, "run-cancel", id);
+    return send(res, 200, { cancelled }), true;
+  }
 
   if ((action === "resume" || action === "approve" || action === "reject") && method === "POST") {
     const body = await readJson(req);
@@ -152,6 +158,7 @@ export const runRoutes: Route = async (ctx, req, res, seg, method, user) => {
         : { kind: "resume", runId: id, decision: { approved: action === "approve", by: "ui", note: str(body, "note", false) || undefined } },
       { lockKey, source: `ui ${action}`, queuedBy: user.id, ...(story ? { priority: true, storyAt: story.createdAt } : {}) },
     );
+    auditAction(ctx.diagLog, user.id, `run-${action}`, id);
     return send(res, 202, { runId: id }), true;
   }
 

@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { basename } from "node:path";
+import { auditAction } from "../auth/audit.js";
 import { type RepoRecord, RepoError, addRepo, listAllRepos, listRepos, removeGithubRepo, removeRepo, setRepoAuth, setRepoSettings, transferRepo } from "../auth/repos.js";
 import { StoreError } from "../auth/store.js";
 import { type User, getUser, listUsers } from "../auth/users.js";
@@ -54,7 +55,7 @@ function adminRow(rec: RepoRecord, users?: Map<string, User>) {
 }
 
 /** The admin calls (the permission table lets only an admin through): all repositories, their settings, and transfer. */
-async function adminRepos(ctx: ApiContext, req: IncomingMessage, res: ServerResponse, seg: string[], method: string): Promise<boolean> {
+async function adminRepos(ctx: ApiContext, req: IncomingMessage, res: ServerResponse, seg: string[], method: string, by: string): Promise<boolean> {
   if (seg[1] !== "repos") return false;
   if (seg.length === 2 && method === "GET") {
     const rows = guardedRepos(ctx, () => {
@@ -65,12 +66,15 @@ async function adminRepos(ctx: ApiContext, req: IncomingMessage, res: ServerResp
   }
   if (seg.length === 4 && seg[3] === "settings" && method === "PUT") {
     const body = await readJson(req);
-    const row = adminRow(guardedRepos(ctx, () => setRepoSettings(seg[2]!, body)));
+    const r = guardedRepos(ctx, () => setRepoSettings(seg[2]!, body));
+    if (r.changed.length) auditAction(ctx.diagLog, by, "repo-change", r.repo.id, `settings: ${r.changed.join(", ")}`);
+    const row = adminRow(r.repo);
     return send(res, 200, row, publicKeys([row])), true;
   }
   if (seg.length === 4 && seg[3] === "transfer" && method === "POST") {
     const body = await readJson(req);
     const r = guardedRepos(ctx, () => transferRepo(seg[2]!, given(body, "email")));
+    if (r.moved) auditAction(ctx.diagLog, by, "repo-transfer", r.repo.id, r.repo.owner);
     oldKeys(ctx, r.oldKeysLeft, "the repository was transferred");
     const row = adminRow(r.repo);
     return send(res, 200, row, publicKeys([row])), true;
@@ -79,8 +83,8 @@ async function adminRepos(ctx: ApiContext, req: IncomingMessage, res: ServerResp
 }
 
 /** The caller's own repositories: list, add, change how to reach one, remove. A token is only ever accepted, a private key never leaves the server. */
-export const repoRoutes: Route = async (ctx, req, res, seg, method) => {
-  if (seg[0] === "admin") return adminRepos(ctx, req, res, seg, method);
+export const repoRoutes: Route = async (ctx, req, res, seg, method, caller) => {
+  if (seg[0] === "admin") return adminRepos(ctx, req, res, seg, method, caller.id);
   if (seg[0] !== "repos") return false;
   const user = sessionUser(ctx, req);
   const noServerAccess = (m: unknown) => {
@@ -96,6 +100,7 @@ export const repoRoutes: Route = async (ctx, req, res, seg, method) => {
     const repo = guardedRepos(ctx, () =>
       addRepo(user.id, { url: given(body, "url") ?? given(body, "name"), method: given(body, "method"), username: given(body, "username"), token: given(body, "token") }),
     );
+    auditAction(ctx.diagLog, user.id, "repo-add", repo.id, repo.url);
     return send(res, 201, repo, publicKeys([repo])), true;
   }
   if (seg.length === 3 && seg[2] === "auth" && method === "PUT") {
@@ -104,15 +109,20 @@ export const repoRoutes: Route = async (ctx, req, res, seg, method) => {
     const r = guardedRepos(ctx, () =>
       setRepoAuth(user.id, seg[1]!, { method: given(body, "method"), username: given(body, "username"), token: given(body, "token"), url: given(body, "url"), newKey: given(body, "newKey") }),
     );
+    if (r.changed) auditAction(ctx.diagLog, user.id, "repo-change", r.repo.id, r.repo.url);
     oldKeys(ctx, r.oldKeysLeft, "the repository was changed");
     return send(res, 200, r.repo, publicKeys([r.repo])), true;
   }
   if (seg.length === 2 && method === "DELETE") {
-    oldKeys(ctx, guardedRepos(ctx, () => removeRepo(user.id, seg[1]!)).oldKeysLeft, "the repository was removed");
+    const r = guardedRepos(ctx, () => removeRepo(user.id, seg[1]!));
+    if (r.removed) auditAction(ctx.diagLog, user.id, "repo-remove", r.removed.id, r.removed.url);
+    oldKeys(ctx, r.oldKeysLeft, "the repository was removed");
     return send(res, 200, { ok: true }), true;
   }
   if (seg.length === 3 && method === "DELETE") {
-    oldKeys(ctx, guardedRepos(ctx, () => removeGithubRepo(user.id, `${seg[1]}/${seg[2]}`)).oldKeysLeft, "the repository was removed");
+    const r = guardedRepos(ctx, () => removeGithubRepo(user.id, `${seg[1]}/${seg[2]}`));
+    if (r.removed) auditAction(ctx.diagLog, user.id, "repo-remove", r.removed.id, r.removed.url);
+    oldKeys(ctx, r.oldKeysLeft, "the repository was removed");
     return send(res, 200, { ok: true }), true;
   }
   return false;

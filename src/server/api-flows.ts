@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { auditAction } from "../auth/audit.js";
 import { effectiveVars } from "../engine/runner.js";
 import { blockDir, listBlocks, parseBlock } from "../flow/blocks.js";
 import { flowDir, flowFiles, listFlows, parseFlow, type FlowScope } from "../flow/load.js";
@@ -17,7 +18,7 @@ function scopeOf(body: Record<string, unknown>): FlowScope {
   return scope;
 }
 
-export const flowRoutes: Route = async ({ opts, config }, req, res, seg, method, user) => {
+export const flowRoutes: Route = async ({ opts, config, diagLog }, req, res, seg, method, user) => {
   if (seg[0] === "flows") {
     const name = seg[1];
     if (name !== undefined && !NAME_RE.test(name)) throw new HttpError(400, "invalid flow name");
@@ -65,6 +66,7 @@ export const flowRoutes: Route = async ({ opts, config }, req, res, seg, method,
       if (stamped.yaml !== yaml) parseFlow(stamped.yaml);
       mkdirSync(dir, { recursive: true });
       writeFileSync(path, stamped.yaml);
+      if (stamped.version !== undefined && stamped.version !== overwritten?.publish?.version) auditAction(diagLog, user.id, "flow-publish", name, String(stamped.version));
       return send(res, 200, { name, path, scope, yaml: stamped.yaml, ...(stamped.version !== undefined ? { version: stamped.version } : {}) }), true;
     }
     if (method === "DELETE") {

@@ -1,3 +1,4 @@
+import { auditAction, type EventAction } from "../auth/audit.js";
 import type { User } from "../auth/users.js";
 import { canWrite, commentOnIssue, commentsAfter, ghLogin, isBot, issueComments, mayWrite, repoPermission, setLabels } from "../github.js";
 import { labelNames } from "../queue/watcher.js";
@@ -15,6 +16,14 @@ const KICK_MS = 1000;
 const MAX_TEXT = 60_000;
 const REPO_RE = /^[\w.-]+\/[\w.-]+$/;
 const ACTIONS: readonly TurnAct[] = ["defaults", "answer", "approve", "reject", "retry", "retry_hint"];
+const AUDIT_ACTION: Record<TurnAct, EventAction> = {
+  defaults: "turn-answer",
+  answer: "turn-answer",
+  approve: "turn-approve",
+  reject: "turn-reject",
+  retry: "turn-retry",
+  retry_hint: "turn-retry",
+};
 
 export interface TurnDetail {
   /** Send this back with the action: the action is refused when the item changed meanwhile. */
@@ -189,6 +198,7 @@ export async function turnAct(ctx: ApiContext, user: Pick<User, "id" | "name">, 
     markActed(ctx, item.key, item.stamp, now);
     g.hinted.delete(item.key);
     ctx.opts.log?.(`your turn: ${req.action} ${repo}#${issue} by account ${user.id}`);
+    auditAction(ctx.diagLog, user.id, AUDIT_ACTION[req.action], `${repo}#${issue}`);
     ctx.watchers.kickRepo(repo, KICK_MS);
   } finally {
     g.busy.delete(item.key);

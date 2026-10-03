@@ -339,7 +339,7 @@ say "nothing — it continues by itself" when that is true; use one vocabulary
 - **Permissions are enforced on the server.** Every API route has a rule in
   `src/server/permissions.ts`, and a test fails when a route has none.
 - **Blocking** an account signs it out at once, optionally stopping its work.
-- An audit log records sign-ins and account changes.
+- An audit log records sign-ins, account changes and what signed-in people do in the web interface.
 
 ![The user display: only Runs and My repositories](images/user-home.png)
 

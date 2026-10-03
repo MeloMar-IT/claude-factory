@@ -1,4 +1,7 @@
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { dataHome } from "../src/auth/store.js";
 import { ConfigSchema } from "../src/config.js";
 import { canWrite, commentOnIssue, issueComments, repoPermission, setLabels } from "../src/github.js";
 import { nextStep, type NextStep } from "../src/next-step.js";
@@ -307,5 +310,65 @@ describe("timeouts", () => {
     delete process.env.FAKE_GH_SLEEP;
     process.env.FAKE_GH_FAIL = "api repos/acme/app/collaborators/x/permission";
     expect(await canWrite("acme/app", "x")).toBe(false);
+  });
+});
+
+describe("audit log", () => {
+  const UID = "11111111-1111-4111-8111-111111111111";
+  const auditFile = () => join(dataHome(), "audit.jsonl");
+  const auditLines = () => (existsSync(auditFile()) ? readFileSync(auditFile(), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) : []);
+  const diag: string[] = [];
+  const run = (ctx: ApiContext, body: Record<string, unknown>) => {
+    (ctx as { diagLog?: (m: string) => void }).diagLog = (m) => diag.push(m);
+    return turnAct(ctx, { id: UID, name: "Marcel K" }, readAct(body), NOW);
+  };
+  const digestOf = async (ctx: ApiContext, key: string) => (await turnDetail(ctx, key, NOW)).digest;
+  beforeEach(() => {
+    rmSync(auditFile(), { force: true, recursive: true });
+    diag.length = 0;
+  });
+
+  it("writes one line per action with owner/repo#issue and no typed text", async () => {
+    const ctx = ctxAll();
+    await run(ctx, { key: QKEY, action: "answer", stamp: SINCE, digest: await digestOf(ctx, QKEY), answers: [{ n: 1, text: "SECRET-ANSWER" }] });
+    const ctx2 = ctxAll();
+    await run(ctx2, { key: PKEY, action: "approve", stamp: SINCE, digest: await digestOf(ctx2, PKEY), text: "SECRET-NOTE" });
+    const ctx3 = ctxAll();
+    await run(ctx3, { key: PKEY, action: "reject", stamp: SINCE, digest: await digestOf(ctx3, PKEY), text: "SECRET-REJECT" });
+    const ctx4 = ctxAll();
+    await run(ctx4, { key: FKEY, action: "retry_hint", stamp: SINCE, text: "SECRET-HINT" });
+    const ctx5 = ctxAll();
+    await run(ctx5, { key: FKEY, action: "retry" });
+    const ctx6 = ctxAll();
+    await run(ctx6, { key: QKEY, action: "defaults", stamp: SINCE, digest: await digestOf(ctx6, QKEY) });
+    const lines = auditLines();
+    expect(lines.map((l) => [l.action, l.target])).toEqual([
+      ["turn-answer", "acme/app#5"],
+      ["turn-approve", "acme/app#6"],
+      ["turn-reject", "acme/app#6"],
+      ["turn-retry", "acme/app#8"],
+      ["turn-retry", "acme/app#8"],
+      ["turn-answer", "acme/app#5"],
+    ]);
+    expect(lines.every((l) => l.by === UID && l.result === "ok")).toBe(true);
+    expect(readFileSync(auditFile(), "utf8")).not.toMatch(/SECRET/);
+  });
+
+  it("writes no line for a refused or failed call", async () => {
+    const ctx = ctxAll();
+    expect(await status(run(ctx, { key: "nope", action: "retry" }))).toBe(404);
+    expect(await status(run(ctx, { key: FKEY, action: "retry", stamp: "old" }))).toBe(409);
+    setComments({ body: questionsComment }, { login: "ann", body: "Use Postgres" });
+    expect(await status(run(ctx, { key: QKEY, action: "defaults", stamp: SINCE, digest: "x" }))).toBe(409);
+    process.env.FAKE_GH_FAIL = "issue edit";
+    expect(await status(run(ctxAll(), { key: FKEY, action: "retry" }))).toBe(502);
+    expect(auditLines()).toEqual([]);
+  });
+
+  it("does not fail the action when the file cannot be written", async () => {
+    mkdirSync(auditFile());
+    const ctx = ctxAll();
+    await run(ctx, { key: QKEY, action: "defaults", stamp: SINCE, digest: await digestOf(ctx, QKEY) });
+    expect(diag).toContain("audit: audit.jsonl cannot-write (turn-answer)");
   });
 });

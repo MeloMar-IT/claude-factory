@@ -1,4 +1,5 @@
 import { agentStatuses, providerStatuses, testSpec } from "../agents/health.js";
+import { auditAction, changedKeys } from "../auth/audit.js";
 import { watcherOwnerProblem } from "../auth/run-owner.js";
 import { hasAdmin } from "../auth/users.js";
 import { CONFIG_PATH, ConfigSchema, saveConfig } from "../config.js";
@@ -12,7 +13,7 @@ import { hostAllowed, listenCovers, listenProblem } from "./net.js";
 import { watchersWithNext } from "./next.js";
 import type { Route } from "./server.js";
 
-export const adminRoutes: Route = async (ctx, req, res, seg, method) => {
+export const adminRoutes: Route = async (ctx, req, res, seg, method, user) => {
   const { opts, scheduler, watchers } = ctx;
 
   if (seg[0] === "info" && method === "GET") {
@@ -34,6 +35,7 @@ export const adminRoutes: Route = async (ctx, req, res, seg, method) => {
     if (method === "PUT") {
       const body = await readJson(req);
       let saved;
+      const before = ctx.config();
       try {
         // Do not let a change shut out the browser that sends it (or the proxy it comes through).
         const parsed = ConfigSchema.parse(body);
@@ -52,6 +54,8 @@ export const adminRoutes: Route = async (ctx, req, res, seg, method) => {
       } catch (e) {
         throw new HttpError(400, `invalid config: ${(e as Error).message}`);
       }
+      const changed = changedKeys(before, saved);
+      if (changed.length) auditAction(ctx.diagLog, user.id, "settings-change", "config.yaml", changed.join(", "));
       ctx.reloadConfig();
       watchers.sync();
       return send(res, 200, saved), true;
