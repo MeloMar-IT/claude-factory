@@ -134,7 +134,7 @@ describe("refine-brief flow", { timeout: 30_000 }, () => {
     const s = await run();
     expect(s.status).toBe("succeeded");
     expect(ghCalls()).toEqual([
-      "gh repo clone acme/app repo -- -q",
+      "gh repo clone https://github.com/acme/app repo -- -q -c credential.helper= -c credential.helper=!gh auth git-credential",
       "gh issue list --repo acme/app --state open --limit 201 --json number,title,body,labels,comments",
     ]);
     expect(gh.comments()).toEqual([]);
@@ -306,7 +306,11 @@ describe("refine-brief definition", () => {
     expect(shell).toHaveLength(3);
     const all = shell.map((s) => s.run).join("\n");
     expect(all).not.toContain("{{");
-    expect([...all.matchAll(/\bgh\s+\w+\s+\w+/g)].map((m) => m[0])).toEqual(["gh repo clone", "gh issue list"]);
+    expect([...all.matchAll(/\bgh\s+\w+\s+\w+/g)].map((m) => m[0])).toEqual(["gh repo clone", "gh auth git", "gh issue list"]);
+    const clone = (flow.steps.find((s) => s.id === "clone") as { run: string }).run;
+    expect(clone).toContain('"https://github.com/$r"');
+    expect(clone).toContain("-c credential.helper=");
+    expect(clone).toContain("-c 'credential.helper=!gh auth git-credential'");
     expect(all).not.toMatch(/git\s+push|gh\s+(pr|label|api|release)\b|gh\s+issue\s+(comment|edit|create|close)/);
   });
 

@@ -114,6 +114,32 @@ export function redactStream(sink: (text: string) => void, current: () => Redact
   };
 }
 
+/** Hides what either redactor hides (overlapping matches become one). */
+export function combineRedactors(a: Redactor, b: Redactor): Redactor {
+  if (b.empty) return a;
+  if (a.empty) return b;
+  const find = (text: string): Match[] => {
+    const all = [...a.find(text), ...b.find(text)].sort((x, y) => x.start - y.start || y.end - x.end);
+    const out: Match[] = [];
+    for (const m of all) {
+      const last = out.at(-1);
+      if (last && m.start <= last.end) last.end = Math.max(last.end, m.end);
+      else out.push({ ...m });
+    }
+    return out;
+  };
+  const redact = (text: string) => {
+    let out = "";
+    let at = 0;
+    for (const m of find(text)) {
+      out += text.slice(at, m.start) + REDACTED;
+      at = m.end;
+    }
+    return out + text.slice(at);
+  };
+  return { empty: false, redact, find, maxLen: Math.max(a.maxLen, b.maxLen) };
+}
+
 // ---- the live set, from credentials.json -------------------------------------------------------------
 
 let cache: { sig: string; redactor: Redactor } | undefined;

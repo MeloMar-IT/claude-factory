@@ -3,6 +3,10 @@ import { basename, join } from "node:path";
 import { StoreError } from "./store.js";
 import { findUserByEmail, firstAdmin, listUsers } from "./users.js";
 
+/** The source of a run the server started for a refinement session: "refinement <session id>". Set by server code only. */
+export const REFINEMENT_SOURCE = "refinement ";
+export const isRefinementRun = (source?: string): boolean => typeof source === "string" && source.startsWith(REFINEMENT_SOURCE);
+
 /** The id of the first admin, or undefined when there is none or users.json cannot be read. Never throws. */
 export function defaultOwner(): string | undefined {
   try {
@@ -69,7 +73,7 @@ export function adoptRuns(runsDir: string, log?: (msg: string) => void): number 
   let n = 0;
   for (const b of listRunBriefs(runsDir)) {
     // the folder name, never the runId stored in the file, decides which file is changed
-    if (!b.owner && /^[\w-]+$/.test(b.dirName) && adoptRun(join(runsDir, b.dirName), owner)) n++;
+    if (!b.owner && !isRefinementRun(b.source) && /^[\w-]+$/.test(b.dirName) && adoptRun(join(runsDir, b.dirName), owner)) n++;
   }
   if (n) log?.(`${n} run${n === 1 ? "" : "s"} without an owner given to the first admin`);
   return n;

@@ -1,11 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { z } from "zod";
-import { CredentialError, addCredentialLocked, checkSecret, listCredentials, moveCredentialLocked, oldKeysLeft as credentialKeysLeft, removeCredentialsLocked } from "../credentials/store.js";
+import { CredentialError, addCredentialLocked, checkSecret, listCredentials, moveCredentialLocked, oldKeysLeft as credentialKeysLeft, readSecret, removeCredentialsLocked } from "../credentials/store.js";
 import { RepoSettingsSchema, checkRepoSettings } from "./repo-settings.js";
 import { type ParsedRepoUrl, RepoError, type RepoErrorCode, githubKey, parseRepoUrl, tryParseRepoUrl, validGithubName } from "./repo-url.js";
-import { authLockHeld, dataHome, readJsonFile, withAuthLock, writeJsonFile } from "./store.js";
+import { StoreError, authLockHeld, dataHome, readJsonFile, withAuthLock, writeJsonFile } from "./store.js";
 import { type User, UserError, checkEmail, findUserByEmail, getUser } from "./users.js";
 
 export { RepoError };
@@ -134,6 +134,50 @@ export const listAllRepos = (): RepoRecord[] => read().repos.map((r) => ({ ...r 
 export function ownsRepo(userId: string, name: string): boolean {
   const key = githubKey(name);
   return read().repos.some((r) => r.owner === userId && tryParseRepoUrl(r.url)?.github !== undefined && keyOfRecord(r) === key);
+}
+
+// ---- reading with the stored token -----------------------------------------------------------------
+
+export const NEEDS_TOKEN = "set a token for this repository under My repositories";
+export const TOKEN_MISSING = "the token of this repository is missing; set it again under My repositories";
+export const TOKEN_UNREADABLE = "the stored token of this repository cannot be read; set it again under My repositories, or ask an admin";
+export const NO_RUN_OWNER = "this run has no owner, so the token of the repository cannot be looked up";
+
+/** How a run may read a repository: with the stored token, with the server's own access, or not at all. */
+export type RepoAccess = { kind: "token"; token: string } | { kind: "server" } | { kind: "refused"; reason: string; detail?: string };
+
+const refused = (reason: string, detail?: string): RepoAccess => ({ kind: "refused", reason, ...(detail ? { detail } : {}) });
+
+/** The cause of a failure for the run log: a file name and kind, never a path or a secret. */
+function causeOf(e: unknown): string {
+  if (e instanceof StoreError) return `${basename(e.file)} ${e.kind}`;
+  if (e instanceof Error) return `${e.name}: ${e.message.split("\n")[0]!.slice(0, 120)}`;
+  return "error";
+}
+
+/**
+ * What the account may use to read a GitHub repository: its stored token ("github-token" or "https-token"), the server's
+ * access (method "none", admin only), or nothing, with a plain sentence. Sets `lastUsed` of a token. Never throws.
+ */
+export function repoAccess(userId: string | undefined, githubName: string): RepoAccess {
+  if (!userId) return refused(NO_RUN_OWNER);
+  try {
+    const notYours = refused(`"${githubName}" is not one of your repositories`);
+    if (!validGithubName(githubName)) return notYours;
+    const key = githubKey(githubName);
+    const rec = read().repos.find((r) => r.owner === userId && keyOfRecord(r) === key);
+    if (!rec) return notYours;
+    if (rec.method === "none") return getUser(userId)?.role === "admin" ? { kind: "server" } : refused(NEEDS_TOKEN);
+    if (!rec.credentialId) return refused(TOKEN_MISSING);
+    try {
+      return { kind: "token", token: readSecret(userId, rec.credentialId) };
+    } catch (e) {
+      if (e instanceof CredentialError && e.code === "not-found") return refused(TOKEN_MISSING);
+      throw e;
+    }
+  } catch (e) {
+    return refused(TOKEN_UNREADABLE, causeOf(e));
+  }
 }
 
 // ---- checks ----------------------------------------------------------------------------------------

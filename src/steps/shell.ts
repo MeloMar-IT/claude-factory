@@ -24,6 +24,10 @@ export async function runShell(o: {
   signal?: AbortSignal;
   /** Run inside this Docker image with only the workspace mounted. */
   dockerImage?: string;
+  /** Names of more variables to pass into the container (their values come from `env`). */
+  dockerEnv?: string[];
+  /** Secrets of this step, hidden for its whole life. */
+  pinnedSecrets?: string[];
 }): Promise<ShellRunResult> {
   const env: NodeJS.ProcessEnv = { ...NO_COLOR_ENV, ...o.env };
   let cmd = "/bin/sh";
@@ -31,7 +35,8 @@ export async function runShell(o: {
   if (o.dockerImage) {
     env.FACTORY_WORKDIR = "/work";
     env.SCF_WORKDIR = "/work";
-    const names = Object.keys(env).filter((k) => /^(FACTORY_|SCF_|NO_COLOR$|CI$)/.test(k) && env[k] !== undefined);
+    const extra = new Set(o.dockerEnv ?? []);
+    const names = Object.keys(env).filter((k) => (/^(FACTORY_|SCF_|NO_COLOR$|CI$)/.test(k) || extra.has(k)) && env[k] !== undefined);
     ({ cmd, args } = dockerCommand(o.dockerImage, o.cwd, o.command, names));
   }
   const res = await runProcess(cmd, args, {
@@ -40,6 +45,7 @@ export async function runShell(o: {
     timeoutMs: o.timeoutMs,
     signal: o.signal,
     logFile: o.logFile,
+    pinnedSecrets: o.pinnedSecrets,
   });
   // Keep the tail: that's where test failures and stack traces usually are.
   const output = (res.stdout + res.stderr).replace(ANSI, "").slice(-MAX_OUTPUT);

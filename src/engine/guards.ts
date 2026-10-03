@@ -3,7 +3,10 @@ import { createSign, randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { type RepoAccess, repoAccess } from "../auth/repos.js";
+import { isRefinementRun } from "../auth/run-owner.js";
 import type { Config } from "../config.js";
+import type { RunSummary } from "./state.js";
 import { FACTORY_HOME, flowDir, parseFlow } from "../flow/load.js";
 import type { Flow, Step } from "../flow/schema.js";
 
@@ -118,6 +121,76 @@ export function grantPush(branch: string): { env: Record<string, string>; revoke
   const file = join(dir, token);
   writeFileSync(file, branch, { mode: 0o600 });
   return { env: { FACTORY_PUSH_ALLOW: `${branch}:${token}` }, revoke: () => rmSync(file, { force: true }) };
+}
+
+// ── The architect reads with the repository's own token ──
+
+/** The flow whose clone and issue list get the stored token (a literal: src/flow/usage.ts would make an import cycle; a test pins it). */
+export const REPO_READ_FLOW = "refine-brief";
+export const REPO_READ_STEPS: readonly string[] = ["clone", "list_issues"];
+export const TOKEN_REFUSED_REASON = "GitHub refused the token of this repository; check its access to Contents and Issues, or set a new token under My repositories";
+
+/** Messages of gh and git for a token that GitHub did not accept or that cannot reach the repository. */
+const TOKEN_REFUSED = new RegExp(
+  [
+    "HTTP 401",
+    "Bad credentials",
+    "Could not resolve to a Repository",
+    "Resource not accessible by (?:personal access token|integration)",
+    "SAML enforcement",
+    "SAML SSO",
+    "forbids access via a (?:fine-grained )?personal access token",
+    "Authentication failed for",
+    "Invalid username or (?:password|token)",
+    "Repository not found",
+    "repository '.*' not found",
+    "Write access to repository not granted",
+    "Permission to .* denied",
+    "The requested URL returned error: 40[13]",
+    "terminal prompts disabled",
+  ].join("|"),
+  "i",
+);
+
+/** Did a command fail because GitHub refused the token? A rate limit is not a refusal. */
+export const tokenRefused = (output: string): boolean => TOKEN_REFUSED.test(output) && !/rate limit|abuse detection/i.test(output);
+
+/** The grant: the clone and the issue list of the unchanged name `refine-brief`, at the top level, in a run the server started for a refinement session. */
+export function isRepoReadStep(step: Pick<Step, "id">, depth: number, flowName: string, source: string | undefined): boolean {
+  return flowName === REPO_READ_FLOW && REPO_READ_STEPS.includes(step.id) && depth === 0 && isRefinementRun(source);
+}
+
+/** What the step may read with: undefined when it is not a repository read step (no lookup is made). */
+export function repoReadAccess(step: Pick<Step, "id">, depth: number, flowName: string, summary: Pick<RunSummary, "source" | "owner">, vars: Record<string, string>): RepoAccess | undefined {
+  if (!isRepoReadStep(step, depth, flowName, summary.source)) return undefined;
+  return repoAccess(summary.owner, vars.github_repo ?? "");
+}
+
+/**
+ * The env that makes the step use only the stored token: it replaces the bot's GH_TOKEN, and git ignores the server's
+ * own settings (a rewrite to ssh, a helper, a header) and speaks https only. Nothing for the server's own access.
+ */
+export function repoReadEnv(access: RepoAccess, env: Record<string, string>): Record<string, string | undefined> {
+  if (access.kind !== "token") return {};
+  return {
+    // no trace of the HTTP traffic, which would show the credential header; `undefined` removes an inherited variable
+    GIT_TRACE: undefined,
+    GIT_TRACE_PACKET: undefined,
+    GIT_TRACE_CURL: undefined,
+    GIT_TRACE_CURL_NO_DATA: undefined,
+    GIT_CURL_VERBOSE: undefined,
+    GIT_TRACE_REDACT: "1",
+    GH_TOKEN: access.token,
+    GH_HOST: "github.com",
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_PARAMETERS: "",
+    GIT_ALLOW_PROTOCOL: "https",
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_ASKPASS: "",
+    // the engine's own entries (core.hooksPath) stay; without any, say that there are none
+    ...(env.GIT_CONFIG_COUNT === undefined ? { GIT_CONFIG_COUNT: "0" } : {}),
+  };
 }
 
 // ── The running Foundry's own build ──
