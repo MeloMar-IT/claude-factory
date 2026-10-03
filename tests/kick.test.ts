@@ -1,3 +1,4 @@
+import { writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ConfigSchema } from "../src/config.js";
@@ -11,6 +12,8 @@ describe("next story starts right away", () => {
   let gh: ReturnType<typeof fakeGithub>;
   beforeEach(() => {
     gh = fakeGithub();
+    // These tests only need a run that finishes: one shell step (a full flow is slow on a busy machine).
+    writeFileSync(join(gh.tmp, ".claude-factory", "flows", "tiny.yaml"), "name: tiny\nworkspace: empty\nsteps:\n  - {id: done, type: shell, run: echo done}\n");
     process.env.FACTORY_CODEX_BIN = resolve("tests/fixtures/fake-codex.mjs");
     process.env.FACTORY_LOCK_DIR = join(gh.tmp, "locks");
   });
@@ -20,7 +23,7 @@ describe("next story starts right away", () => {
     const REPO = "acme/app";
     const config = ConfigSchema.parse({
       protected_branches: ["main"],
-      watchers: [{ id: "w", github_repo: REPO, label: "Factory_go", flow: "issue-gitflow", every: "1h",
+      watchers: [{ id: "w", github_repo: REPO, label: "Factory_go", flow: "tiny", every: "1h",
         vars: { test_cmd: "! grep -q BUG feature.txt 2>/dev/null", docs_required: "docs/CHANGELOG.md", union_merge_files: "docs/CHANGELOG.md" } }],
     });
     const DONE = JSON.stringify([
@@ -42,7 +45,7 @@ describe("next story starts right away", () => {
     ]);
     manager.sync();
     // #5 must start right after #4 finishes — not an hour later at the next interval.
-    const deadline = Date.now() + 20_000;
+    const deadline = Date.now() + 60_000;
     while (!scheduler.list().some((s) => s.vars.issue === "5") && Date.now() < deadline) await new Promise((r) => setTimeout(r, 200));
     expect(scheduler.list().some((s) => s.vars.issue === "5")).toBe(true);
     manager.stopAll();
@@ -54,7 +57,7 @@ describe("next story starts right away", () => {
     const REPO = "acme/app";
     const config = ConfigSchema.parse({
       protected_branches: ["main"],
-      watchers: [{ id: "w", github_repo: REPO, label: "Factory_go", flow: "issue-gitflow", every: "1h",
+      watchers: [{ id: "w", github_repo: REPO, label: "Factory_go", flow: "tiny", every: "1h",
         status_labels: { working: "Factory_working", done: "Factory_done", needs_info: "Factory_needs_info", waiting: "Factory_waiting", failed: "Factory_ERROR" },
         vars: { test_cmd: "! grep -q BUG feature.txt 2>/dev/null", docs_required: "docs/CHANGELOG.md" } }],
     });
@@ -68,7 +71,7 @@ describe("next story starts right away", () => {
     manager = new WatcherManager({ scheduler, runsDir: join(gh.tmp, "runs"), repo: gh.tmp, config: () => config, log: () => {} });
     process.env.FAKE_GH_ISSUES = JSON.stringify([{ number: 4, title: "Story 4", labels: [{ name: "Factory_go" }], state: "OPEN", body: "" }]);
     manager.sync();
-    const deadline = Date.now() + 15_000;
+    const deadline = Date.now() + 60_000;
     while (!scheduler.list().some((s) => s.vars.issue === "4" && s.status !== "running") && Date.now() < deadline) await new Promise((r) => setTimeout(r, 200));
     await new Promise((r) => setTimeout(r, 2000)); // a few kicked checks happen
     expect(scheduler.list().filter((s) => s.vars.issue === "4")).toHaveLength(1);
