@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { WatcherSchema } from "../src/config.js";
 import type { RunSummary } from "../src/engine/state.js";
 import { statusName } from "../src/words.js";
+import type { RunNextOptions } from "../src/next-step.js";
 import { briefFailure, COMMENT_KINDS, REPORT_KINDS, reportFirst, commentFirst, commentText, firstLine, countQuestions, nextStep, nextStepEnv, releaseAtFor, releaseWatchersFor, runClosedIssue, runNextStep, trackingWatcher, type NextKind, type NextStep } from "../src/next-step.js";
 
 const run = (over: Partial<RunSummary> = {}) =>
@@ -457,6 +458,60 @@ describe("until", () => {
     expect(n.text).toMatch(/^[^\n]+\.$/);
     expect(runNextStep(run(), watched).kind).toBe("done");
     expect(runNextStep(run(), watched).until).toBeUndefined();
+  });
+});
+
+describe("the failure of a run", () => {
+  const failed = (over: Partial<RunSummary> = {}) =>
+    run({ status: "failed", reason: 'step "a" failed: exit code 1', state: { next: "a", steps: {}, visits: {} }, history: [{ id: "a", type: "shell", ok: false, visit: 1, output: "x" }] as never, ...over });
+
+  it("is explained with options that follow watched and the failed label", () => {
+    const n = runNextStep(failed(), { watched: true, failedLabel: "Factory_ERROR" });
+    expect(n.failure).toMatchObject({ cause: "code", kind: "A problem in the code" });
+    expect(n.failure!.options).toHaveLength(4);
+    expect(n.failure!.options[0]).toContain("Factory_ERROR");
+    expect(runNextStep(failed()).failure!.options[0]).toBe("Retry — resume the run on its page");
+  });
+  it("is not there for other runs, and is dropped by briefFailure", () => {
+    expect(runNextStep(run({ status: "failed", reason: "interrupted — resume it" })).failure).toBeUndefined();
+    for (const status of ["running", "succeeded", "cancelled"] as const) expect(runNextStep(run({ status })).failure).toBeUndefined();
+    const factory = runNextStep(failed({ reason: "internal error: x" }), watched);
+    expect(factory.failure).toBeDefined();
+    expect(briefFailure(factory).failure).toBeUndefined();
+  });
+  it("holds no sentence of a model for a user", () => {
+    const r = failed({ failureNote: { kind: "code", why: "the secret sentence", by: "m" } });
+    expect(JSON.stringify(runNextStep(r, { forUser: true }))).not.toContain("secret sentence");
+    expect(JSON.stringify(runNextStep(r))).toContain("secret sentence");
+  });
+  it("counts a step budget as a limit and a rejection as a decision", () => {
+    expect(runNextStep(failed({ reason: 'step "a" failed: claude result: error_max_budget_usd' })).cause).toBe("limit");
+    expect(runNextStep(failed({ reason: 'step "a" failed: rejected' })).cause).toBe("decision");
+  });
+});
+
+describe("paused runs", () => {
+  const paused = (reason: string, history: unknown[] = [], over: Partial<RunNextOptions> = {}) =>
+    runNextStep(run({ status: "stopped", reason, history: history as never }), { ...watched, now: new Date("2026-10-01T08:20:00Z"), timeZone: "UTC", ...over });
+  it("a true usage limit stays a time limit", () => {
+    const n = paused("usage limit reached: busy", [{ limited: true }]);
+    expect(n).toMatchObject({ who: "A time limit", status: "paused — usage limit" });
+    expect(n.failure).toBeUndefined();
+  });
+  it("the daily budget is unchanged", () => {
+    expect(paused("daily budget of $5 reached — resume tomorrow").status).toBe("paused — daily budget");
+  });
+  it("signed out reads its own status, for an administrator and for a user", () => {
+    const reason = 'signed out — the Claude Code login has expired. Sign in again: run "claude" in a terminal and type /login.';
+    expect(paused(reason).status).toBe("paused — signed out");
+    expect(paused(reason, [], { forUser: true }).status).toBe("paused — signed out");
+    expect(paused(reason).failure).toBeUndefined();
+  });
+  it("an unreachable service reads its own status and has a time", () => {
+    const n = paused("usage limit reached: connection error", [{ limited: true, unreachable: true }]);
+    expect(n).toMatchObject({ why: "The AI service could not be reached", status: "paused — AI service not reachable" });
+    expect(n.until).toBeTruthy();
+    expect(n.failure).toBeUndefined();
   });
 });
 

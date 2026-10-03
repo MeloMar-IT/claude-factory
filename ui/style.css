@@ -353,3 +353,6 @@ td > .help > .help-mark { margin-left: 6px; }
 .board-step { font-weight: 550; }
 .board-deps { font-size: 12px; }
 .board-chain { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 12px; }
+.card.failure { border-color: var(--fail); }
+.card.failure ul.options { margin: 0; padding-left: 20px; display: grid; gap: 4px; }
+.card.failure details.raw summary { cursor: pointer; color: var(--muted); }

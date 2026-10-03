@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { nextStep, type NextStep } from "../src/next-step.js";
+import { nextStep, runNextStep, type NextStep } from "../src/next-step.js";
 import { FakeElement, installFakeDom } from "./helpers/fake-dom.js";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -600,5 +600,96 @@ describe("the Runs pages for a user", () => {
     handlers.update!({ data: JSON.stringify({ summary: RUN }) });
     expect(flowLinks(main)).toHaveLength(1);
     stop();
+  });
+
+  describe("a failed run", () => {
+    const base = {
+      runId: "r1", flow: "walk", status: "failed", reason: 'step "a" failed: exit code 1', startedAt: new Date().toISOString(), task: "do it", vars: {}, totalCostUsd: 0,
+      history: [{ id: "a", type: "shell", ok: false, visit: 1, output: "boom output", error: "exit code 1", durationMs: 5 }], state: { next: "a" },
+    };
+    const FAILED = { ...base, next: runNextStep(base as never, {}) };
+    const tabs = (main: FakeElement) => main.all("button").filter((b) => ["Live log", "Steps & transcripts", "Changes"].includes(b.textContent));
+    const onTab = (main: FakeElement) => tabs(main).filter((b) => b.attrs.class === "on").map((b) => b.textContent);
+    const push = (handlers: Record<string, (e: { data: string }) => void>, summary: unknown) => handlers.update!({ data: JSON.stringify({ summary }) });
+
+    it("failureCard shows who, kind, what, why, tried, what to do first and the four options in order", async () => {
+      const runs = (await import("../ui/runs.js" as string)) as any;
+      const card = runs.failureCard(FAILED) as FakeElement;
+      const text = card.textContent;
+      const f = FAILED.next.failure!;
+      for (const part of [FAILED.next.who, f.kind, f.what, f.why, f.tried, "Do first", FAILED.next.action]) expect(text).toContain(part);
+      const at = f.options.map((o) => text.indexOf(o));
+      expect(at.every((i) => i >= 0)).toBe(true);
+      expect([...at].sort((a, b) => a - b)).toEqual(at);
+      expect(text).not.toContain("A model read");
+      const raw = card.all("details")[0]!;
+      expect("open" in raw.attrs).toBe(false);
+      expect(raw.textContent).toContain(base.reason);
+    });
+    it("failureCard is null without an explanation, has no raw details for a user, and names the model only when it wrote the why", async () => {
+      const runs = (await import("../ui/runs.js" as string)) as any;
+      expect(runs.failureCard({ ...base, next: nextStep("running") })).toBeNull();
+      expect(runs.failureCard({ ...FAILED, reason: undefined }).all("details")).toHaveLength(0);
+      const model = { ...FAILED, next: { ...FAILED.next, failure: { ...FAILED.next.failure!, byModel: true } } };
+      expect(runs.failureCard(model).textContent).toContain("A model read");
+    });
+    it("the page puts the card first, has no next block and no Details row, and opens on Steps", async () => {
+      const runs = (await import("../ui/runs.js" as string)) as any;
+      const { handlers } = stubEventSource();
+      const main = connected();
+      const stop = runs.renderRunDetail(main, "r1");
+      push(handlers, FAILED);
+      const head = main.children[0] as FakeElement;
+      expect((head.children[1] as FakeElement).attrs.class).toContain("failure");
+      expect(main.textContent).not.toContain("What happens next");
+      expect(main.all("dt").map((d) => d.textContent)).not.toContain("Details");
+      expect(onTab(main)).toEqual(["Steps & transcripts"]);
+      stop();
+    });
+    it("'Show the failed step' lists the steps with that one open", async () => {
+      const runs = (await import("../ui/runs.js" as string)) as any;
+      const { handlers } = stubEventSource();
+      const main = connected();
+      const stop = runs.renderRunDetail(main, "r1");
+      push(handlers, FAILED);
+      main.all("button").find((b) => b.textContent === "Show the failed step")!.click();
+      const entries = main.all("details").filter((d) => d.attrs.class === "tl");
+      expect(entries).toHaveLength(1);
+      expect("open" in entries[0]!.attrs).toBe(true);
+      expect(entries[0]!.textContent).toContain("boom output");
+      stop();
+    });
+    it("moves to Steps when a running run fails, unless the reader picked a tab", async () => {
+      const runs = (await import("../ui/runs.js" as string)) as any;
+      for (const [pick, want] of [[undefined, "Steps & transcripts"], ["Live log", "Live log"], ["Changes", "Changes"]] as const) {
+        const { handlers } = stubEventSource();
+        const main = connected();
+        const stop = runs.renderRunDetail(main, "r1");
+        push(handlers, { ...base, status: "running", reason: undefined, next: nextStep("running") });
+        expect(onTab(main)).toEqual(["Live log"]);
+        if (pick) tabs(main).find((b) => b.textContent === pick)!.click();
+        push(handlers, FAILED);
+        expect(onTab(main)).toEqual([want]);
+        stop();
+      }
+    });
+    it("a waiting run still shows the next block, the Details row and the log", async () => {
+      const runs = (await import("../ui/runs.js" as string)) as any;
+      const { handlers } = stubEventSource();
+      const main = connected();
+      const stop = runs.renderRunDetail(main, "r1");
+      push(handlers, { ...base, status: "waiting", reason: "Go on?", next: nextStep("approval") });
+      expect(main.textContent).toContain("What happens next");
+      expect(main.all("dt").map((d) => d.textContent)).toContain("Details");
+      expect(onTab(main)).toEqual(["Live log"]);
+      stop();
+    });
+    it("stepEntry can be opened without a toggle", async () => {
+      const runs = (await import("../ui/runs.js" as string)) as any;
+      const e = runs.stepEntry("r1", base.history[0], 0, { open: true }) as FakeElement;
+      expect("open" in e.attrs).toBe(true);
+      expect(e.textContent).toContain("boom output");
+      expect(asked.filter((u) => u.includes("transcript"))).toEqual([]);
+    });
   });
 });

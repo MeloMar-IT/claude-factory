@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { codexSandbox } from "../src/agents/run.js";
-import { parseSpec, resolveTarget, toTarget } from "../src/agents/targets.js";
+import { isQuotaError, isTransientError, parseSpec, resolveTarget, toTarget } from "../src/agents/targets.js";
 import { ConfigSchema, type Config } from "../src/config.js";
 import { resumeRun, runFlow } from "../src/engine/runner.js";
 import { readTranscript } from "../src/engine/transcript.js";
@@ -169,6 +169,7 @@ steps:
     expect(s.status).toBe("succeeded");
     expect(s.history[0]!.agent).toBe("codex:openai");
     expect(s.history[0]!.output).toBe("from codex");
+    expect(s.history[0]!.retried?.models).toBe(1);
   });
 
   it("pauses the run on a usage limit when no fallback is left, and resumes where it stopped", async () => {
@@ -199,6 +200,52 @@ steps:
     const s = await runFlow(parseFlow(flow), { task: "t", repo, runsDir, claudeBin, config: cfg() });
     expect(s.status).toBe("succeeded");
     expect(s.history[0]!.output).toContain("looks fine");
+    expect(s.history[0]!.retried).toEqual({ blips: 1, models: 0 });
+  });
+
+  it("pauses as unreachable when the AI service cannot be reached, after two brief retries", async () => {
+    const flow = `
+name: t
+workspace: inplace
+steps:
+  - {id: b, type: claude, prompt: "{{vars.p}}"}
+`;
+    const s = await runFlow(parseFlow(flow), { task: "t", repo, runsDir, claudeBin, config: cfg(), vars: { p: "CLAUDE_UNREACHABLE" } });
+    expect(s.status).toBe("stopped");
+    expect(s.reason).toMatch(/^usage limit reached:/);
+    expect(s.history[0]).toMatchObject({ limited: true, unreachable: true, retried: { blips: 2, models: 0 } });
+  });
+
+  it("an overloaded service (529) counts as unreachable, a 429 rate limit does not", async () => {
+    const flow = `
+name: t
+workspace: inplace
+steps:
+  - {id: b, type: claude, prompt: "{{vars.p}}"}
+`;
+    const o = await runFlow(parseFlow(flow), { task: "t", repo, runsDir, claudeBin, config: cfg(), vars: { p: "CLAUDE_OVERLOADED" } });
+    expect(o.history[0]).toMatchObject({ limited: true, unreachable: true });
+    expect(isQuotaError("API Error: 429 rate limit", "")).toBe(true);
+    expect(isQuotaError("API Error: 529 overloaded_error", "")).toBe(false);
+    expect(isTransientError("429 rate limit exceeded: try again later", "")).toBe(true); // overlap: still a quota error
+  });
+
+  it("a true usage limit is limited but not unreachable", async () => {
+    const flow = `
+name: t
+workspace: inplace
+steps:
+  - {id: b, type: claude, prompt: "{{vars.p}}"}
+`;
+    const s = await runFlow(parseFlow(flow), { task: "t", repo, runsDir, claudeBin, config: cfg(), vars: { p: "CLAUDE_LIMIT" } });
+    expect(s.history[0]!.limited).toBe(true);
+    expect(s.history[0]!.unreachable).toBeUndefined();
+  });
+
+  it("buildClaudeArgs gives the model no tools only when asked", () => {
+    const args = buildClaudeArgs({ prompt: "x", cwd: ".", logFile: "l", noTools: true });
+    expect(args[args.indexOf("--tools") + 1]).toBe("");
+    expect(buildClaudeArgs({ prompt: "x", cwd: ".", logFile: "l" })).not.toContain("--tools");
   });
 
   it("pauses the run when the agent is signed out, and says how to sign in", async () => {

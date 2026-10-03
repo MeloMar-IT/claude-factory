@@ -1,6 +1,6 @@
 import { api } from "./api.js";
 import { h, mount, timeAgo, toast } from "./dom.js";
-import { needsYou, nextBlock, nextStatus, whenParts, whereLink } from "./next.js";
+import { needsYou, nextBlock, nextStatus, whenParts, whereLink, whoClass } from "./next.js";
 import { STEP_TYPES } from "./step-types.js";
 
 const money = (n) => (n ? `$${n.toFixed(4)}` : "—");
@@ -109,13 +109,47 @@ function transcriptView(events) {
   }));
 }
 
-function stepsView(runId, summary) {
+function stepsView(runId, summary, open = -1) {
   if (!summary.history.length) return h("p", { class: "muted" }, "No steps finished yet.");
-  return h("div", { class: "timeline" }, summary.history.map((s, i) => stepEntry(runId, s, i)));
+  return h("div", { class: "timeline" }, summary.history.map((s, i) => stepEntry(runId, s, i, { open: i === open })));
 }
 
-/** One finished step: summary line, the raw error under "Details", and the output or transcript when opened. */
-export function stepEntry(runId, s, i) {
+/** The step that explains a failed run: the last failed one that is not a sub-flow or parallel step (else the last failed one). -1 if none. */
+export function failedStepIndex(s) {
+  const h2 = s.history ?? [];
+  let last = -1;
+  for (let i = h2.length - 1; i >= 0; i--) {
+    if (h2[i].ok) continue;
+    if (last < 0) last = i;
+    if (h2[i].type !== "flow" && h2[i].type !== "parallel") return i;
+  }
+  return last;
+}
+
+/**
+ * The card of a failed run: who, the kind of problem, what failed, why, what was tried, what to do first and the four
+ * options. The raw reason is one click away under "Raw details" (an administrator only). Null when the run has no explanation.
+ */
+export function failureCard(s, { onStep } = {}) {
+  const n = s.next;
+  const f = n?.failure;
+  if (!f) return null;
+  const row = (k, v) => [h("dt", {}, k), h("dd", {}, v)];
+  return h("div", { class: `card next-step failure ${whoClass(n)}` },
+    h("div", { class: "next-parts" }, h("b", {}, "This run failed"), h("span", { class: `pill ${whoClass(n)}` }, n.who), h("span", { class: `pill kind-${f.cause}` }, f.kind)),
+    h("dl", { class: "meta" },
+      row("What happened", f.what),
+      row("Why", f.byModel ? [f.why, h("div", { class: "muted" }, "A model read the output of the failing step to write this sentence. It can be wrong.")] : f.why),
+      row("Already tried", f.tried),
+      n.action ? row("Do first", n.action) : null),
+    h("b", {}, "Your options"),
+    h("ul", { class: "options" }, f.options.map((o) => h("li", {}, o))),
+    onStep ? h("button", { class: "small", onClick: onStep }, "Show the failed step") : null,
+    s.reason ? h("details", { class: "raw" }, h("summary", {}, "Raw details"), h("pre", { class: "mono", style: { whiteSpace: "pre-wrap" } }, s.reason)) : null);
+}
+
+/** One finished step: summary line, the raw error under "Details", and the output or transcript when opened. `open`: shown opened. */
+export function stepEntry(runId, s, i, { open = false } = {}) {
   // A user's view has no output: a plain row that cannot be opened and never asks for a transcript.
   if (!("output" in s)) {
     return h("div", { class: "tl" },
@@ -129,16 +163,20 @@ export function stepEntry(runId, s, i) {
       s.error ? h("p", { class: "muted", style: { margin: "4px 12px" } }, s.error) : null);
   }
   const body = h("div");
+  let loaded = false;
+  const load = async () => {
+    if (loaded) return;
+    loaded = true;
+    if (s.type !== "claude") return mount(body, h("pre", {}, s.output || "(no output)"));
+    mount(body, h("p", { class: "muted", style: { padding: "0 12px" } }, "Loading transcript…"));
+    const t = await api.transcript(runId, i).catch((err) => ({ events: [{ kind: "raw", text: err.message }] }));
+    mount(body, transcriptView(t.events));
+  };
+  if (open) load();
   return h("details", {
     class: "tl",
-    onToggle: async (e) => {
-      if (!e.target.open || body.dataset.loaded) return;
-      body.dataset.loaded = "1";
-      if (s.type !== "claude") return mount(body, h("pre", {}, s.output || "(no output)"));
-      mount(body, h("p", { class: "muted", style: { padding: "0 12px" } }, "Loading transcript…"));
-      const t = await api.transcript(runId, i).catch((err) => ({ events: [{ kind: "raw", text: err.message }] }));
-      mount(body, transcriptView(t.events));
-    },
+    open: open || null,
+    onToggle: (e) => { if (e.target.open) load(); },
   },
     h("summary", {},
       h("span", { class: `pill ${s.ok ? "ok" : "fail"}` }, s.ok ? "✔" : "✘"),
@@ -212,18 +250,24 @@ export function renderRunDetail(main, runId, { admin = true } = {}) {
     follow = logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 20;
   });
 
-  const showTab = async (t) => {
+  // The reader picked a tab: the page does not move it any more (a failed run opens on Steps until then).
+  let picked = false;
+  const tabButtons = [];
+  const showTab = async (t, open = -1) => {
     tab = t;
-    document.querySelectorAll(".tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === t));
+    for (const [k, b] of tabButtons) b.setAttribute("class", k === t ? "on" : "");
     if (t === "log") return mount(tabBody, logEl);
-    if (t === "steps") return mount(tabBody, summary ? stepsView(runId, summary) : null);
+    if (t === "steps") return mount(tabBody, summary ? stepsView(runId, summary, open) : null);
     mount(tabBody, h("p", { class: "muted" }, "Computing diff…"));
     mount(tabBody, diffView(await api.diff(runId).catch((e) => ({ patch: "", stat: e.message }))));
   };
 
   const tabs = h("div", { class: "seg tabs", style: { marginBottom: "12px" } },
-    [["log", "Live log"], ["steps", admin ? "Steps & transcripts" : "Steps"], ["diff", "Changes"]].map(([k, l]) =>
-      h("button", { "data-tab": k, class: k === tab ? "on" : null, onClick: () => showTab(k) }, l)));
+    [["log", "Live log"], ["steps", admin ? "Steps & transcripts" : "Steps"], ["diff", "Changes"]].map(([k, l]) => {
+      const b = h("button", { "data-tab": k, class: k === tab ? "on" : null, onClick: () => { picked = true; showTab(k); } }, l);
+      tabButtons.push([k, b]);
+      return b;
+    }));
 
   mount(main, head, tabs, tabBody);
   mount(tabBody, logEl);
@@ -231,6 +275,8 @@ export function renderRunDetail(main, runId, { admin = true } = {}) {
   const draw = (s) => {
     const prev = summary;
     summary = s;
+    const failedIdx = s.status === "failed" ? failedStepIndex(s) : -1;
+    const card = s.status === "failed" ? failureCard(s, failedIdx >= 0 ? { onStep: () => { picked = true; showTab("steps", failedIdx); } } : {}) : null;
     mount(head,
       h("div", { class: "toolbar" },
         h("a", { href: "#/runs", class: "btn ghost" }, "←"),
@@ -241,7 +287,7 @@ export function renderRunDetail(main, runId, { admin = true } = {}) {
         h("span", { class: "spacer" }),
         ...actions(s),
         admin ? h("a", { class: "btn", href: `#/flows/${encodeURIComponent(s.flow)}` }, "Open flow") : null),
-      s.next ? nextBlock(s.next) : null,
+      card ?? (s.next ? nextBlock(s.next) : null),
       h("div", { class: "card", style: { marginBottom: "16px" } },
         s.task ? h("p", { style: { margin: 0, whiteSpace: "pre-wrap" } }, s.task) : null,
         s.questions ? h("pre", { class: "mono", style: { whiteSpace: "pre-wrap" } }, h("b", {}, "Questions"), "\n", s.questions) : null,
@@ -252,7 +298,9 @@ export function renderRunDetail(main, runId, { admin = true } = {}) {
           s.workdir ? [h("dt", {}, "Workspace"), h("dd", {}, s.workdir)] : null,
           versionRow(s),
           stepRow(s),
-          detailsRow(s))));
+          card ? null : detailsRow(s))));
+    // A failed run opens on its steps, once, unless the reader already chose a tab.
+    if (card && !picked && !(prev && prev.status === "failed" && prev.next?.failure)) return showTab("steps");
     if (tab === "steps" && (!prev || prev.history.length !== s.history.length)) showTab("steps");
   };
 

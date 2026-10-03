@@ -13,4 +13,6 @@ for (const k of Object.keys(process.env)) {
 process.env.FACTORY_HOME = mkdtempSync(join(tmpdir(), "factory-home-"));
 process.env.FACTORY_LOCK_DIR = join(process.env.FACTORY_HOME, "locks");
 process.env.FACTORY_NO_NOTIFY = "1";
+// Suites that start failing runs without a fake `claude` must never reach a real one for the failure summary.
+process.env.FACTORY_NO_FAILURE_MODEL = "1";
 process.env.FACTORY_TRANSIENT_RETRY_MS = "20,20"; // retries of a briefly unavailable service: quick in tests

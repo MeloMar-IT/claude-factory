@@ -22,6 +22,7 @@ import {
   type StepResult,
 } from "./execute.js";
 import { fallbackTargets } from "../agents/targets.js";
+import { explainFailure } from "../failure-explain.js";
 import { identityEnv, protectedBranchEnv, TOOLS_DIR } from "./guards.js";
 import { appendLiveLog, loadRun, saveRun, spentToday, type RunStatus, type RunSummary } from "./state.js";
 import { render } from "./template.js";
@@ -154,7 +155,7 @@ export async function resumeRun(opts: ResumeOptions): Promise<RunSummary> {
   if (!summary.flowDef.steps.some((s) => s.id === from)) throw new Error(`unknown step "${from}"`);
 
   const decision = opts.decision && summary.waiting ? { ...opts.decision, stepId: summary.waiting.stepId } : undefined;
-  Object.assign(summary, { status: "running" as RunStatus, reason: undefined, finishedAt: undefined, resumes: (summary.resumes ?? 0) + 1 });
+  Object.assign(summary, { status: "running" as RunStatus, reason: undefined, failureNote: undefined, finishedAt: undefined, resumes: (summary.resumes ?? 0) + 1 });
   summary.pid = process.pid;
   summary.stepStartedAt = undefined; // an old step time must not show on the resumed run
   claimRunStart(opts.runsDir, () => saveRun(summary));
@@ -275,8 +276,22 @@ async function finish(summary: RunSummary, opts: CommonOptions, config: Config, 
   if (r.outcome !== "waiting") summary.waiting = undefined;
   summary.stepStartedAt = undefined;
   summary.finishedAt = new Date().toISOString();
+  // The real outcome is saved first: a crash during the model call must not lose it.
   saveRun(summary);
   opts.onUpdate?.(summary);
+  if (r.outcome === "failed") {
+    // One short model call for the cause; its note and cost are saved in a second update.
+    const ex = await explainFailure({ run: summary, config, runsDir: opts.runsDir, claudeBin: opts.claudeBin, signal: opts.signal }).catch(() => undefined);
+    if (ex) {
+      summary.totalCostUsd += ex.costUsd;
+      if (ex.note) {
+        summary.failureNote = ex.note;
+        appendLiveLog(summary.runDir, redactText(`✎ why it failed: ${ex.note.why}`));
+      }
+      saveRun(summary);
+      opts.onUpdate?.(summary);
+    }
+  }
   await notifyRun(config, summary).catch(() => {});
   return summary;
 }

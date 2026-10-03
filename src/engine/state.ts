@@ -20,6 +20,10 @@ export interface StepRecord {
   tokens?: { input: number; output: number };
   /** The agent hit a usage/rate limit and no fallback model could take over. */
   limited?: boolean;
+  /** The AI service could not be reached at all (the limit flag is set so the run pauses). */
+  unreachable?: boolean;
+  /** Extra tries inside this step: after a brief outage, and on another model after a limit. */
+  retried?: { blips: number; models: number };
   /** Tool calls Claude Code refused (at most 5), e.g. "Bash: mkdir out". */
   denied?: string[];
   startedAt: string;
@@ -27,6 +31,14 @@ export interface StepRecord {
   logFile: string;
   /** Set for steps run by a sub-flow step, e.g. "build/test". */
   parent?: string;
+}
+
+/** Why a failed run failed, in one sentence written by a model (see failure-explain.ts). */
+export interface FailureNote {
+  kind: "code" | "environment";
+  why: string;
+  /** The agent that wrote it, e.g. "claude:anthropic:haiku". */
+  by: string;
 }
 
 /** Everything needed to continue a run later. */
@@ -59,6 +71,8 @@ export interface RunSummary {
   state: RunState;
   /** Set while status is "waiting". */
   waiting?: { stepId: string; message: string; since: string };
+  /** A model's one-sentence reason for a failed run; gone when the run is resumed. */
+  failureNote?: FailureNote;
   /** How many times the run was resumed. */
   resumes?: number;
   /** Process that last started or resumed the run. */

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import type { RunSummary } from "../src/engine/state.js";
-import { nextStep } from "../src/next-step.js";
+import { nextStep, runNextStep } from "../src/next-step.js";
 import { startServer, type ServerOptions } from "../src/server/server.js";
 import { USER_ERROR, hidePaths, movedText, userError, userLogLine, userRecord, userRun } from "../src/server/user-view.js";
 import { fakeKeychain, type FakeKeychain } from "./helpers/keychain.js";
@@ -32,6 +32,21 @@ describe("userRun", () => {
     next: nextStep("approval", { repo: "/srv/repo", runId: "r1" }, { message: "Go on" }),
     superseded: true,
   } as unknown as RunSummary & { superseded: boolean };
+
+  it("shows a failed run without the note of the model or the tries inside a step, and without folders", () => {
+    const f = {
+      ...full, status: "failed", reason: 'step "sh" failed: exit code 1', failureNote: { kind: "code", why: "SECRET sentence", by: "claude:anthropic:haiku" },
+      history: [{ ...full.history[1], parent: undefined, retried: { blips: 1, models: 0 }, unreachable: true }],
+    } as unknown as RunSummary;
+    const next = runNextStep(f, { forUser: true });
+    const u = userRun({ ...f, next });
+    expect(keys(u)).not.toContain("failureNote");
+    expect(keys(u.history[0]!)).toEqual(["durationMs", "error", "id", "ok", "startedAt", "type", "visit"]);
+    expect(JSON.stringify(u)).not.toMatch(/SECRET|haiku|retried|unreachable/);
+    expect(u.next?.failure).toBeDefined();
+    const withPath = userRun({ ...f, next: { ...next, failure: { ...next.failure!, what: "failed in /work/dir" } } });
+    expect(withPath.next?.failure?.what).toBe("failed in (folder)");
+  });
 
   it("has exactly the fields a user may see, at every level", () => {
     const u = userRun(full);

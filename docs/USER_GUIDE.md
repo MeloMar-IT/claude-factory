@@ -183,8 +183,15 @@ is wrong yet: look at the live log.
 Open a run to follow it live. At the top, the **What happens next** block says who has the next
 move, what to do, why, a link to the place to do it, and when it continues by itself (if
 known). It updates live. While the run is not finished it also shows its progress, the estimate
-and the "Taking longer than usual" hint (see "How long will it take?" above). For a failure it
-says what happened, why and what you can do in plain words. The raw reason (for a waiting run, the approval message) is the **Details** row below.
+and the "Taking longer than usual" hint (see "How long will it take?" above). The raw reason of a
+waiting run (the approval message) is the **Details** row below.
+
+A failed run shows a **failure card** instead: who has the next move, the kind of problem, what
+happened, why, what the Foundry already tried, what to do first and your four options (Retry,
+Retry with a hint, Change the plan, Close). The page opens on **Steps**, and **Show the failed
+step** opens the step that explains the failure. The raw reason is one click away under **Raw
+details** in the card; it is never the first thing shown. A user sees the card without raw
+details.
 
 The status next to the flow name has the same **?**. The **Current step** (while the run
 works) or **Resumes at step** (when it is stopped) row names the step and says what it does:
@@ -229,6 +236,33 @@ a **What happens next** block with **You** as who and the approval message as th
 Runs survive restarts: if the Foundry stops mid-run, the run is marked *interrupted* and can be
 resumed (watchers do this automatically).
 
+**The failure summary.** A failed run (the run page and the comment on the issue) says what
+failed, why, what was tried and the kind of problem:
+
+- **A problem in the code** — the tests keep failing, a review is rejected by the checks. Example:
+  "The step run_tests kept failing. Already tried: 3 fix attempts."
+- **A problem with the environment or the Foundry** — a blocked command, a login, the network, wrong
+  model settings. Example: "git could not log in to the remote."
+- **A limit** — the budget of a step or of the run was used up. Example: "It used the amount the
+  flow allows for one run."
+- **A person's decision** — someone rejected an approval. The note of the approver is shown.
+
+The four options, for a watched issue and for a run by hand:
+
+| Option | Watched issue | Run by hand |
+|---|---|---|
+| Retry | Remove the failed label, or resume the run on its page | Resume the run on its page (a new run when the fix is a change to the flow, such as a larger budget) |
+| Retry with a hint | Write the hint as a comment on the issue, then remove the failed label | Start a new run and put the hint in its task |
+| Change the plan | Change the text of the issue, then remove the failed label | Change the task, then start a new run |
+| Close | Close the issue if the work is no longer wanted | Leave the run as it is |
+
+For a code failure the *why* is one sentence written by a small model that read the end of the
+failing output (see "The failure summary call" in Costs). The comment and the card then say so.
+If the model says the cause is the environment, the failure counts as a Foundry failure.
+
+A usage limit, the daily budget, a sign-out and an unreachable AI service do not fail a run: they
+pause it, and it continues by itself (a sign-out needs you to sign in again first).
+
 **When the Foundry itself failed.** Some failures are not a bug in the code. The run page, the
 Runs list, the watcher card, the Dashboard and the notification then say "The Foundry failed, not
 the code", what went wrong and the fix. The causes and fixes:
@@ -242,10 +276,15 @@ the code", what went wrong and the fix. The causes and fixes:
   lines): resume the run to try the step again.
 - An internal error, an unknown step, or a run that failed before any step ran (workspace, bot
   identity, GitHub App token): fix the setting, or restart or update the Foundry, then resume.
+- A git or gh login error, or a network error, in a command of the flow: log in again (`gh auth
+  login`) or check the network, then resume.
+- Wrong model or provider settings, or a missing `claude` or `codex` program: fix the setting or
+  install the program, then resume.
 - An interrupted run: resume it (a watcher does this by itself).
 
 A failed test, guard or review, too many visits of a step and a push blocked by the secret scan
-are code failures and keep the usual text. If a command was blocked earlier in such a run, the
+are code failures and keep the usual text. A step budget that is used up is a limit, and a
+rejection is a person's decision. If a command was blocked earlier in such a run, the
 sentence adds a hint to allow it in the flow if it was needed.
 
 ### Words the Foundry uses
@@ -266,6 +305,8 @@ Every status in the app has a **?** that shows the two sentences from this table
 | waiting for another run | Only one run at a time works here, and another run is active. Nothing to do — it starts when that run is finished. |
 | waiting for another run in the same code | Another run is changing the same part of the code. Nothing to do — it goes on when that run is finished. |
 | paused — usage limit | The usage limit of the AI account is reached. Nothing to do — the Foundry tries again after the limit resets. |
+| paused — signed out | The Foundry is signed out of its AI account. Sign in again — the run then goes on by itself. |
+| paused — AI service not reachable | The AI service could not be reached. Nothing to do — the Foundry tries again later. |
 | paused — daily budget | Today's budget is used up. Nothing to do — it goes on tomorrow. |
 | checking for questions | The Foundry reads the new issues and looks for questions only you can answer. Nothing to do — an issue without questions starts after the check. |
 | starting soon | Nothing is in the way, it only waits for the watcher's next check. Nothing to do — it starts by itself. |
@@ -529,7 +570,7 @@ in GitHub:
 | `factory:needs-info` | Waiting for you — questions: reply on the issue, or reply `/defaults` |
 | `factory:waiting-approval` | Waiting for you — approval: reply `/approve` or `/reject` on the issue |
 | `factory:done` | Done — nothing to do |
-| `factory:failed` | Failed; the comment on the issue starts with what you need to do, then says what happened and why, with the failing output. Remove the label to start over, or resume the run on its page to continue at the failed step. If the Foundry itself failed, the comment says so and names the fix |
+| `factory:failed` | Failed; the comment on the issue starts with what you need to do, then says what happened, why, the kind of problem, what was already tried and your options, with the failing output. Remove the label to start over, or resume the run on its page to continue at the failed step. If the Foundry itself failed, the comment says so and names the fix |
 
 The descriptions on GitHub say the same in short. They are set when the labels are created and
 refreshed at every server start. The trigger label and the review label (`vars.review_plan_label`)
@@ -702,7 +743,7 @@ The threshold is the `auto_split_max_risk` variable (default 50).
 | `Factory_working` | Working, or paused — usage limit: planning and coding are running or paused | Wait; follow it on the Runs page |
 | `Factory_waiting` | Waiting for you — risky plan / split: it waits for your decision | `/approve` or `/reject` + feedback on the issue |
 | `Factory_done` | Done: implemented, tested, reviewed and merged into `develop` (gitflow) or in the rolling pull request | Nothing — merge the release pull request (or the rolling one) when you like |
-| `Factory_ERROR` | It failed; the comment on the issue starts with what you need to do, then says what happened and why, with the failing output | Fix the cause if needed, then remove the label to start over, or resume the run on its page to continue at the failed step. If the Foundry itself failed, the comment says so and names the fix |
+| `Factory_ERROR` | It failed; the comment on the issue starts with what you need to do, then says what happened, why, the kind of problem, what was already tried and your options, with the failing output | Fix the cause if needed, then remove the label to start over, or resume the run on its page to continue at the failed step. If the Foundry itself failed, the comment says so and names the fix |
 
 Issues with an excluded label (e.g. `geni`) are never picked up, whatever other labels they have.
 
@@ -1320,6 +1361,19 @@ them depends on how the agents are logged in:
 
 Budgets use these amounts either way, so they also protect your subscription limits.
 
+**The failure summary call.** When a run fails with what looks like a code problem, the Foundry
+makes one short call to a small model (default `haiku`) that reads the end of the failing output
+and writes the *why* sentence. It costs a few tenths of a cent to a few cents, is counted in the
+run and in the daily budget, and never gets more than what is left of them. The model has no
+tools and sees no GitHub token. Change the model or switch the call off in `config.yaml`:
+
+```yaml
+failure_summary: {enabled: true, model: haiku}   # model: ollama:<model> for a local one
+```
+
+With the call off, or on Codex-only installs, the card and the comment use the rules text. To
+turn it off for one process, set `SCF_NO_FAILURE_MODEL=1`.
+
 **Fixed-price subscriptions:** turn off **Enforce cost limits** in Settings (`cost_limits: false`).
 Costs are still recorded and shown everywhere, but nothing is ever stopped because of money — no
 run limit, no step limit, no daily budget. The usage limits that Claude and Codex report
@@ -1406,6 +1460,7 @@ Both names work; if both are set, `SCF_…` wins.
 | `SCF_NO_OPEN` | `FACTORY_NO_OPEN` | Set to `1` to not open a browser |
 | `SCF_NO_SUPERVISE` | `FACTORY_NO_SUPERVISE` | Set to `1` to not restart the server on a new build |
 | `SCF_NO_NOTIFY` | `FACTORY_NO_NOTIFY` | Set to `1` to turn notifications off |
+| `SCF_NO_FAILURE_MODEL` | `FACTORY_NO_FAILURE_MODEL` | Set to `1` to skip the model call that writes the reason of a failed run |
 | `SCF_LOCK_DIR` | `FACTORY_LOCK_DIR` | Where lock files are kept |
 
 Flows are looked up in `<repo>/.claude-factory/flows/`, then `~/.spaghetti-code-foundry/flows/`, then the
@@ -1467,7 +1522,7 @@ start over. When the fix is a change to the flow (a larger budget), only a new r
 resumed run keeps the flow it started with. A change in Settings, such as the cost limits, also
 counts for a resume.
 
-The raw text is still there, as a detail: under **Details** on the run page and inside each
+The raw text is still there, as a detail: under **Raw details** in the failure card on the run page, and inside each
 failed step of the **Steps & transcripts** list, under **Error details** on the watcher card,
 and inside the collapsed **Details** of the failure comment on the issue. The settings behind
 the messages are `max_visits` (attempts), `limits.max_cost_usd` (run budget), `max_budget_usd`

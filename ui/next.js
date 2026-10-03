@@ -3,7 +3,7 @@ import { h } from "./dom.js";
 // Shows the next-step record from the server. No wording of its own: only fields of the record, plus the label of the "?" button.
 
 const rank = (n) => (n.who === "You" ? 0 : n.who === "Something is wrong" ? 1 : 2);
-const whoClass = (n) => "who-" + String(n.who).toLowerCase().replace(/[^a-z]+/g, "-");
+export const whoClass = (n) => "who-" + String(n.who).toLowerCase().replace(/[^a-z]+/g, "-");
 
 /** Records with "You" first, then "Something is wrong", then the rest; order otherwise kept. */
 export const sortNext = (records) => [...records].sort((a, b) => rank(a) - rank(b));
