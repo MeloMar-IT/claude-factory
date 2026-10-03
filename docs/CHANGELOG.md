@@ -4,6 +4,13 @@ Changes that are merged but not yet in a release go under **Unreleased**. Newest
 
 ## Unreleased
 
+- Checked with real situations (#42).
+  - **Scenario list.** `tests/helpers/scenarios.ts` holds 14 real situations (questions, risky plan, failed baseline, session limit, signed out, issue closed on GitHub, interrupted run, watcher error, release, …). `tests/scenarios.test.ts` checks each against the next-step record (who, action, sentence, first line of a comment), the Your turn list and the Your turn page (buttons, link). Epic #31 could not be read, so cases recorded in this repository were used; scenarios with no dated case say `kind only`.
+  - **Measure.** The server takes a sample every minute into `clarity.json` in the data folder (local only). A *wait* is the time an item is on Your turn; it ends when the item leaves the page or moves to "Done — continuing". A *miss* is something that needs you (on the Board, in a watcher, or a run) but is not on Your turn, seen in two samples in a row; it should be 0. Dismissed waits are counted apart. A file of a newer version is left alone; a broken one is replaced. `GET /api/clarity` (admin only) and a "Your turn in numbers" card on the Dashboard show it. Code: `src/clarity.ts`, `src/server/clarity.ts`.
+  - **Fixed:** a signed-out agent now says "Sign in again: …" as the action instead of "Nothing — it continues by itself".
+  - **Fixed:** an issue closed on GitHub while its run is still busy (running, queued or waiting) is now also on Your turn. It was only in the health line and on the Board. It can be dismissed and goes away when the run ends.
+  - **Usability check.** `docs/USABILITY_CHECK.md` has the five screens, the 10-second procedure, a result table, an answer key and the source of each scenario.
+  - **Not included:** the check with the owner itself. The follow-up issue could not be opened by the Foundry; `docs/USABILITY_CHECK.md` has a pre-filled link to open it by hand.
 - One status comment per issue (#53).
   - **Behaviour.** An issue watcher keeps one comment on every issue it follows with the next step (the record the app shows, in plain words for a reader of the issue). It is edited, never posted again. It also covers done issues, a wait for the scheduled release, an issue closed while its run works, and an issue the watcher no longer follows (last text). Two watchers on one issue share the comment. Status comments never count as questions, answers or approval requests. Extra status comments of the Foundry's own account are removed (at most 5 per read); a comment of another account is never touched.
   - **Option.** `status_comment` on a watcher, `true` by default. Off, removed or disabled watchers leave their comments as they are.

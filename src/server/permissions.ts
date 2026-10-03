@@ -62,6 +62,7 @@ export const RULES: Rule[] = [
   r("POST", "your-turn/restore", "no", "restore dismissed items"),
   r("GET", "your-turn/detail", "no", "the questions, plan or split of an item"),
   r("POST", "your-turn/act", "no", "answer, approve, reject or retry an item, as a comment on the issue"),
+  r("GET", "clarity", "no", "how long items waited for you, and what Your turn missed"),
   r("GET", "credentials", "yes", "your stored credentials"),
   r("POST", "credentials", "yes", "store a credential"),
   r("DELETE", "credentials/:id", "yes", "remove a credential"),

@@ -344,7 +344,9 @@ export function nextStep(kind: NextKind, base: NextBase = {}, d: NextData = {}):
         who = "You";
         why = `${codex ? "Codex" : "Claude Code"} is signed out (its login has expired)`;
         until = limitRetry(d, LIMIT_RETRY_MS);
-        say = `sign in again: ${codex ? 'run "codex login"' : 'run "claude" in a terminal and type /login'}. It continues by itself after that`;
+        const login = codex ? 'run "codex login"' : 'run "claude" in a terminal and type /login';
+        action = `Sign in again: ${login}`;
+        say = `sign in again: ${login}. It continues by itself after that`;
         break;
       }
       who = "A time limit";

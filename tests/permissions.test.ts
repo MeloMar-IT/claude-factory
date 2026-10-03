@@ -158,6 +158,7 @@ const EXAMPLES: Record<string, Example> = {
   "POST your-turn/restore": no("your-turn/restore", 200, {}),
   "GET your-turn/detail": no("your-turn/detail", 400),
   "POST your-turn/act": no("your-turn/act", 400, {}),
+  "GET clarity": no("clarity", 200),
   "GET credentials": { path: "credentials", user: 200, admin: 200 },
   "POST credentials": { path: "credentials", body: {}, user: 400, admin: 400 },
   "DELETE credentials/:id": { path: `credentials/${UNKNOWN}`, user: 404, admin: 404 },

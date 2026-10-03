@@ -86,7 +86,9 @@ function actedNow(ctx: ApiContext, now: Date): Record<string, { since: string }>
   return out;
 }
 
-const keyOf =(n: NextStep) => `${n.repo}#${n.issue ?? ""}|${n.kind}|${n.runId ?? ""}`;
+/** The identity of an item that has no key of its own: repository, issue, kind and run. */
+export const turnKey = (n: NextStep) => `${n.repo}#${n.issue ?? ""}|${n.kind}|${n.runId ?? ""}`;
+const keyOf = turnKey;
 
 /** Every current item (dismissed ones too) and the page. */
 export function turnFor(ctx: ApiContext, now = new Date()) {
@@ -103,6 +105,22 @@ export function turnFor(ctx: ApiContext, now = new Date()) {
     };
   };
   const sources: TurnSource[] = [...c.watchers.map(fromEntry), ...c.issues.map(fromEntry)];
+
+  // An issue closed on GitHub while its run is busy is no longer tracked: the watcher's hold is all there is.
+  const q = ctx.scheduler.queue();
+  const live = new Set([...q.active.map((a) => a.runId), ...q.pending.map((p) => p.runId)]);
+  for (const t of tracked) {
+    for (const h of t.status.holds ?? []) {
+      const id = h.next.runId;
+      if (h.next.kind !== "closed_elsewhere" || h.issue === undefined || !id || t.issues.some((i) => i.issue === h.issue)) continue;
+      const run = list.find((r) => r.runId === id) ?? ctx.scheduler.get(id);
+      if (!live.has(id) && run?.status !== "waiting") continue; // the run is over: nothing is left to cancel
+      const since = h.since ?? (run ? runSince(run) : h.seen);
+      // A queued run has no run page yet: the Runs page lists the queue, where it can be cancelled.
+      const next = run ? h.next : { ...h.next, where: { label: "Runs page", url: "#/runs" } };
+      sources.push({ key: keyOf(h.next), next, since, stamp: since ?? "", dismissable: true, watcher: t.watcher.id });
+    }
+  }
 
   // Runs that no tracked issue speaks for: by hand, or by a watcher that is not an issues watcher.
   const covered = new Set<string | undefined>([
