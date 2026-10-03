@@ -528,6 +528,8 @@ describe("roles in the page", () => {
     expect(auth.userHash("")).toBe("#/runs");
     expect(auth.userHash("#/users")).toBe("#/runs");
     expect(auth.userHash("#/users/x")).toBe("#/runs");
+    expect(auth.userHash("#/audit")).toBe("#/runs");
+    expect(auth.userHash("#/audit/x")).toBe("#/runs");
   });
 
   it("allowedHash replaces a page a user may not open, and leaves the rest", () => {
@@ -542,6 +544,11 @@ describe("roles in the page", () => {
     expect(auth.allowedHash(true, "#/users", replace)).toBe("#/users");
     expect(replace).not.toHaveBeenCalled();
     expect(auth.allowedHash(false, "#/users", replace)).toBe("#/runs");
+    expect(replace).toHaveBeenCalledWith("#/runs");
+    replace.mockClear();
+    expect(auth.allowedHash(true, "#/audit", replace)).toBe("#/audit");
+    expect(replace).not.toHaveBeenCalled();
+    expect(auth.allowedHash(false, "#/audit", replace)).toBe("#/runs");
     expect(replace).toHaveBeenCalledWith("#/runs");
   });
 
