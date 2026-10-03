@@ -61,6 +61,7 @@ admin for a new one.
 | **Library** | Reusable blocks of steps to drop into flows |
 | **Runs** | Everything that ran or is running; the ones that need you on top |
 | **My repositories** | The repositories you work in, and how the Foundry signs in to them |
+| **Repositories** | Admin: the repositories of all accounts, their settings, and transfer to another account |
 | **Watchers** | Automatic runs from GitHub issues, PR comments, red CI, or a schedule |
 | **Models** | Which agents and models are available, and which model runs which step |
 | **Dashboard** | Spend, success rate, where runs fail, eval results |
@@ -1045,11 +1046,37 @@ the token empty; a new method needs a new token. **Remove** asks first and delet
 Errors from the server show in the dialog in plain words. A failed removal shows above the list, with
 **Try again** when the server asks for it (an old key is still in the Keychain). A repository without a
 method shows "Needs authentication" for a user. An admin can also choose "The server's own access". The page
-has no per-repository settings.
+has no per-repository settings. An admin sets them on the **Repositories** page.
+
+**The Repositories page (admin).** `#/all-repos` is the admin page **Repositories**; a user never gets it.
+It lists the repositories of all accounts with the owner (name and e-mail, and "blocked" for a blocked
+owner), the URL, the authentication method and the connection status ("Not tested yet" until the connection
+test exists). Three calls, all admin only: `GET /api/admin/repos`, `PUT /api/admin/repos/<id>/settings` and
+`POST /api/admin/repos/<id>/transfer {"email": …}`.
+
+- **Settings** per repository: the test command (one line, up to 500 characters), the docs to update (up to
+  50 paths, no leading `/`, `~` or `-`, no `..`), the protected branches (up to 50 patterns), and the names of
+  the main and the develop branch. Input is checked on the server: lengths, no control characters. Branch names
+  follow git's rules, are at most 200 characters, and may not be `@`. In a pattern `*` matches any text and
+  `?` matches one character; `[…]` is not allowed. `{}` clears the settings.
+- **The settings are only stored and shown.** Runs do not use them yet: the test command still comes from the
+  flow var `test_cmd` and the protected branches from `protected_branches` in `config.yaml`. They are never in
+  `GET /api/repos` and never shown on **My repositories**.
+- **Transfer** moves a repository to another account, chosen by e-mail (any case). It is refused, with a plain
+  message, when the e-mail is missing or not valid (400), no account has it (404), the account is blocked (409),
+  or it already has 50 repositories (400). Afterwards the repository is in the new owner's list and no longer in
+  the old one's, and its settings stay.
+- **Sign-in on transfer.** A personal token (`github-token`, `https-token`) is deleted and the method becomes
+  `none`. For a user that reads "Needs authentication"; for an admin it reads "The server's own access", like
+  every `none` repository of an admin. The new owner sets the sign-in again. Keeping a deploy key or a GitHub
+  App installation (they belong to the repository, not to a person) is prepared and starts to work when those
+  methods exist. The wipe cannot be undone; transfer back and type the token again.
+- Queued and running runs of the old owner are not stopped.
 
 **Repositories.** Every account has its own list of GitHub repositories, kept in `repos.json` in
 the data folder (mode `0600`). A repository is a record: `id`, `owner` (account id), `url`, `method`
-and `added`. It never holds a secret. These calls manage it:
+and `added`, and it may hold `settings`, which only an admin can read (`GET /api/repos` never has them).
+It never holds a secret. These calls manage it:
 
 - `GET /api/repos` lists your records.
 - `POST /api/repos {"url": …, "method": …, "username": …, "token": …}` adds one (201; 409 if you or
@@ -1163,6 +1190,9 @@ Change a role with `scf user role <e-mail> admin|user`, or create an admin with
 | `PUT /api/repos/:id/auth` | yes | yes | change the method, user name, token or address of your repository |
 | `DELETE /api/repos/:id` | yes | yes | remove your repository and its stored token |
 | `DELETE /api/repos/:owner/:name` | yes | yes | remove a GitHub repository by name (old form) |
+| `GET /api/admin/repos` | yes | no | the repositories of all accounts, with their settings |
+| `PUT /api/admin/repos/:id/settings` | yes | no | set the test command, docs, protected branches and branch names of a repository |
+| `POST /api/admin/repos/:id/transfer` | yes | no | move a repository to another account, by e-mail |
 
 **What comes later.** Adding users in the UI (it makes the set-password link), runs that use a user's stored credentials or a repository's token, changing
 your own password in the UI, a connection test for repositories, SSH deploy keys, the GitHub App, and pages for users (starting runs).

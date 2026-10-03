@@ -342,6 +342,24 @@ export function removeCredentialsLocked(userId: string, id?: string): Removed {
   return { removed: gone.length, keyId: next.keyId, oldKeysLeft };
 }
 
+/**
+ * Gives a credential to another account: it is decrypted and encrypted again for the new owner (the owner is part of what
+ * the encryption binds), with the same key. Only inside withAuthLock; the caller has checked both accounts.
+ * "already" when it belongs to the new owner under that id and name (a repeat), "missing" when it is not the old owner's.
+ */
+export function moveCredentialLocked(fromUserId: string, toUserId: string, id: string, name: string): "moved" | "already" | "missing" {
+  if (!authLockHeld()) throw new Error("moveCredentialLocked must run inside withAuthLock");
+  const file = read();
+  const c = file.credentials.find((x) => x.id === id && x.userId === fromUserId && x.name === name);
+  if (!c) return file.credentials.some((x) => x.id === id && x.userId === toUserId && x.name === name) ? "already" : "missing";
+  if (file.credentials.some((x) => x.userId === toUserId && x.name === name)) throw new CredentialError("duplicate", "the new owner has a credential with that name already");
+  const { iv: _i, tag: _t, data: _d, ...meta } = c;
+  const key = keyOf(file);
+  const moved = seal(key, { ...meta, userId: toUserId }, open(key, c));
+  writeFile({ ...file, credentials: file.credentials.map((x) => (x === c ? moved : x)) });
+  return "moved";
+}
+
 /** How many old keys are still in the Keychain, after their removal failed. Only reads the file. */
 export const oldKeysLeft = (): number => read().retiredKeyIds.length;
 

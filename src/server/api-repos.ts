@@ -1,13 +1,15 @@
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { basename } from "node:path";
-import { RepoError, addRepo, listRepos, removeGithubRepo, removeRepo, setRepoAuth } from "../auth/repos.js";
+import { type RepoRecord, RepoError, addRepo, listAllRepos, listRepos, removeGithubRepo, removeRepo, setRepoAuth, setRepoSettings, transferRepo } from "../auth/repos.js";
 import { StoreError } from "../auth/store.js";
+import { type User, getUser, listUsers } from "../auth/users.js";
 import { KeyError } from "../credentials/keychain.js";
 import { HttpError, readJson, send } from "./http.js";
 import type { ApiContext, Route } from "./server.js";
 import { sessionUser } from "./api-auth.js";
 
 const INTERNAL = "the repository list is not working; see the server log";
-const STATUS = { "bad-name": 400, "bad-url": 400, "bad-auth": 400, duplicate: 409, taken: 409, limit: 400, "not-found": 404, "no-owner": 404 } as const;
+const STATUS = { "bad-name": 400, "bad-url": 400, "bad-auth": 400, duplicate: 409, taken: 409, limit: 400, "not-found": 404, "no-owner": 404, "bad-settings": 400, "bad-owner": 400, blocked: 409, "no-credential": 409 } as const;
 
 /**
  * Runs repository-list code. Input errors become 4xx; everything else is logged (the file name and the kind, never
@@ -37,8 +39,35 @@ function oldKeys(ctx: ApiContext, left: number, done: string): void {
   throw new HttpError(500, `${done}, but an old key is still in the Keychain, so older copies of the data could be read; try again, or run scf credential rotate-key`);
 }
 
+/** A record for the admin page: with its settings (`{}` when none) and the owner's name, e-mail, role and status (null when the account is gone). */
+function adminRow(rec: RepoRecord, users?: Map<string, User>) {
+  const u = users ? users.get(rec.owner) : getUser(rec.owner);
+  return { ...rec, settings: rec.settings ?? {}, account: u ? { name: u.name, email: u.email, role: u.role, status: u.status } : null };
+}
+
+/** The admin calls (the permission table lets only an admin through): all repositories, their settings, and transfer. */
+async function adminRepos(ctx: ApiContext, req: IncomingMessage, res: ServerResponse, seg: string[], method: string): Promise<boolean> {
+  if (seg[1] !== "repos") return false;
+  if (seg.length === 2 && method === "GET") return send(res, 200, guardedRepos(ctx, () => {
+    const users = new Map(listUsers().map((u) => [u.id, u]));
+    return listAllRepos().map((r) => adminRow(r, users));
+  })), true;
+  if (seg.length === 4 && seg[3] === "settings" && method === "PUT") {
+    const body = await readJson(req);
+    return send(res, 200, adminRow(guardedRepos(ctx, () => setRepoSettings(seg[2]!, body)))), true;
+  }
+  if (seg.length === 4 && seg[3] === "transfer" && method === "POST") {
+    const body = await readJson(req);
+    const r = guardedRepos(ctx, () => transferRepo(seg[2]!, given(body, "email")));
+    oldKeys(ctx, r.oldKeysLeft, "the repository was transferred");
+    return send(res, 200, adminRow(r.repo)), true;
+  }
+  return false;
+}
+
 /** The caller's own repositories: list, add, change how to reach one, remove. A token is only ever accepted, never returned. */
 export const repoRoutes: Route = async (ctx, req, res, seg, method) => {
+  if (seg[0] === "admin") return adminRepos(ctx, req, res, seg, method);
   if (seg[0] !== "repos") return false;
   const user = sessionUser(ctx, req);
   const noServerAccess = (m: unknown) => {
