@@ -16,7 +16,9 @@ import { DEFAULT_FLOWS, Watcher } from "./queue/watcher.js";
 import { installService, serviceStatus, uninstallService } from "./service.js";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
-import { restartOnNewBuild, supervise } from "./supervise.js";
+import { buildStamp, restartOnNewBuild, supervise } from "./supervise.js";
+import { confirmStart, startGuard } from "./self-update-state.js";
+import { SelfUpdater } from "./self-update.js";
 import { dropEmptyHomeVars, prepareDataHome, watchDataHome } from "./home.js";
 
 const usage = () => `Spaghetti Code Foundry (scf) — run custom flows of headless Claude Code + shell steps
@@ -310,8 +312,11 @@ async function main(argv: string[]): Promise<number> {
         // supervise() sets FACTORY_SUPERVISED/FACTORY_NO_OPEN for the child; drop the SCF_ copies so its mirror can't undo them.
         delete process.env.SCF_SUPERVISED;
         delete process.env.SCF_NO_OPEN;
-        return supervise(fileURLToPath(import.meta.url), process.argv.slice(2), (m) => process.stdout.write(`${new Date().toISOString()} ${m}\n`));
+        delete process.env.SCF_START_GUARD;
+        const say = (m: string) => process.stdout.write(`${new Date().toISOString()} ${m}\n`);
+        return supervise(fileURLToPath(import.meta.url), process.argv.slice(2), say, startGuard(say));
       }
+      const stamp = buildStamp(dirname(fileURLToPath(import.meta.url)));
       const { url, ctx } = await startServer({
         repo,
         port,
@@ -324,23 +329,38 @@ async function main(argv: string[]): Promise<number> {
       const hint = adminHint();
       if (hint) process.stdout.write(`  ${hint}\n`);
       if (cmd === "ui" && !values["no-open"] && !process.env.FACTORY_NO_OPEN && process.platform === "darwin") execFile("open", [url]);
-      const idle = () => { const q = ctx.scheduler.queue(); return q.active.length === 0 && q.pending.length === 0; };
-      const beforeExit = () => ctx.watchers.stopAll();
+      // While the server waits to restart nothing queued starts, so only the active runs are waited for (queued jobs are saved).
+      const queueIdle = () => { const q = ctx.scheduler.queue(); return q.active.length === 0 && (ctx.scheduler.draining || q.pending.length === 0); };
       const log = (m: string) => process.stdout.write(`${new Date().toISOString()} ${m}\n`);
+      const drain = () => {
+        ctx.restart = { why: "new_version", since: new Date().toISOString() };
+        ctx.scheduler.drain();
+        ctx.watchers.drain(); // watchers start again with the new version; the monitor keeps watching the wait
+      };
+      const updater = new SelfUpdater({ config: () => ctx.config().self_update, idle: queueIdle, drain, beforeExit: () => beforeExit(), log: ctx.opts.log ?? log });
+      const beforeExit = () => {
+        updater.stop();
+        ctx.watchers.stopAll();
+      };
+      // a step of the updater runs in its own process group: it must not outlive the server
+      for (const [sig, code] of [["SIGTERM", 143], ["SIGINT", 130]] as const) process.on(sig, () => { updater.stop(); process.exit(code); });
+      // other restarts wait while the updater builds
+      const idle = () => queueIdle() && !updater.busy();
       restartOnNewBuild({
         distDir: dirname(fileURLToPath(import.meta.url)),
         idle,
-        drain: () => {
-          ctx.restart = { why: "new_version", since: new Date().toISOString() };
-          ctx.watchers.drain(); // watchers start again with the new version; the monitor keeps watching the wait
-        },
+        drain,
         beforeExit,
         log,
       });
       watchDataHome({ idle, beforeExit, log, busy: () => {
         ctx.restart ??= { why: "data_folder", since: new Date().toISOString() };
+        ctx.scheduler.drain();
         ctx.watchers.stopAll(); // drain, as for a new version: start nothing new while the restart waits
       } });
+      ctx.selfUpdate = updater;
+      void confirmStart(url, { stamp, log });
+      updater.start();
       return new Promise<number>(() => {}); // run until killed
     }
 

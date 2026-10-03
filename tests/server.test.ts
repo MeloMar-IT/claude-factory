@@ -42,6 +42,16 @@ steps:
   - {id: hello, type: shell, run: "echo hi from $FACTORY_TASK"}
 `;
 
+describe("readiness probe", () => {
+  it("answers this machine without a session, and nothing else without one", async () => {
+    const ready = await fetch(`${base}/api/ready`);
+    expect(ready.status).toBe(200);
+    expect(await ready.json()).toEqual({ ok: true });
+    expect((await fetch(`${base}/api/ready`, { headers: { "x-forwarded-for": "203.0.113.5" } })).status).not.toBe(200);
+    expect((await fetch(`${base}/api/health`)).status).toBe(401);
+  });
+});
+
 describe("ui server", () => {
   it("won't delete a flow a watcher uses (also a disabled one) or another flow runs; does once nothing uses it", async () => {
     const used = FLOW.replace("name: mine", "name: used-by-watcher");

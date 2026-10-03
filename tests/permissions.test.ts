@@ -218,7 +218,7 @@ describe("the table", () => {
       for (const m of readFileSync(join(dir, f), "utf8").matchAll(/seg\[0\]\s*(?:===|!==)\s*"([^"]+)"/g)) groups.add(m[1]!);
     }
     expect(groups.size).toBeGreaterThan(10);
-    const known = new Set([...RULES.map((r) => r.path.split("/")[0]!), "session", "setup", "set-password"]);
+    const known = new Set([...RULES.map((r) => r.path.split("/")[0]!), "session", "setup", "set-password", "ready"]);
     expect([...groups].filter((g) => !known.has(g))).toEqual([]);
   });
 });

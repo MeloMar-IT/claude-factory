@@ -169,7 +169,9 @@ A line under the top bar of every page says **All good**, or the number of probl
 - **A run that failed because of the Foundry:** the newest run per issue that no newer run replaced, from the last 7 days, at most 5. The line says "The Foundry failed, not the code" with the fix and a link to the run; the reason is on the run page.
 - **Last check per repository:** each repository of an enabled watcher is listed with the time of its last successful check (the oldest, when it has several watchers), or "no successful check yet".
 
-The same data is at `GET /api/health`: `ok`, `summary` ("All good", "1 problem", "N problems"), `problems` (records like those of `GET /api/next`) and `repos`. It holds no settings, tokens or paths, and links are only `https://…` or `#/…`.
+- **Version and update:** when the Foundry runs from a git checkout, the line ends with "Version abc1234 · date". With [self-update](#self-update) on, it adds "An update is waiting (abc1234): …" with the reason, or why self-update does nothing. This is information, not a problem: it does not change "All good".
+
+The same data is at `GET /api/health`: `ok`, `summary` ("All good", "1 problem", "N problems"), `problems` (records like those of `GET /api/next`), `repos`, and when there is one `version` (`commit`, `date`) and `update` (`waiting`, `commit`, `text`). It holds no settings, tokens or paths, and links are only `https://…` or `#/…`.
 
 ### The board
 
@@ -642,6 +644,7 @@ log; none calls an AI or GitHub.
 | Restart overdue | a new version is installed and the server has not restarted | major | more than 2 hours |
 | Develop is red | the tests after a merge into develop failed one after the other | critical | 2 in a row, looking back 24 hours |
 | Slow step | a step took much longer than its usual time (the times kept for estimates; needs 3 earlier runs and more than 2 minutes) | minor | more than 3 times, 3 times in 24 hours |
+| Self-update failed | an update failed and the old version keeps running (major); the new version did not start healthy, the Foundry could not go back, or `self-update.json` cannot be read (critical) | major / critical | always (only when a self-update was tried) |
 
 *Critical* means work has stopped, *major* means work is slowed or wrong, *minor* means wrong but
 harmless. A detector that crashes shows up as a finding "Detector X failed"; the others still run.
@@ -1124,6 +1127,26 @@ If you installed the service before, run `scf service install` once. It replaces
 `com.claude-factory.server` agent with `com.spaghetti-code-foundry.server`, and puts the old one
 back if the new one can't start.
 
+#### Self-update
+
+Off by default, because it lets merged code run on this machine without a person looking. For a Foundry that runs from a git checkout of its own repository. Switch it on in Settings → Safety and name the repository (`self_update: { enabled: true, repo: owner/name }` in `config.yaml`). After upgrading, stop and start the Foundry once, so that it can go back after a bad update.
+
+Every 5 minutes it checks, in this order, and stops at the first reason that applies (the Health line shows it):
+
+1. The record `self-update.json` can be read, and no earlier go-back failed.
+2. The Foundry runs from a git checkout, under the supervisor (`scf ui` / `scf serve`, or the service).
+3. The `origin` of the checkout is the repository in the setting.
+4. `main` can be read from GitHub. Nothing new: nothing to do.
+5. The checkout is on `main` and has no local changes (untracked files count). Only then does it fetch.
+6. The same commit did not fail before. It waits for a newer commit.
+7. The checkout can fast-forward to `main`.
+
+Then it builds and tests the new commit in a separate folder (`npm ci`, `npm run build`, `npm test`). If a step fails, the old version keeps running and the monitor gets a finding. When all pass, no new runs start (queued runs wait and start after the restart) and the server restarts when the active runs are done. Right before the install it checks everything again, including the tip of `main`. It never updates from a branch other than `main` or from another repository.
+
+If the new server stops or does not answer within 3 minutes, the supervisor puts the previous version back once and reports it (the monitor finding is critical). An install that was cut off is finished or undone at the next start. If you switch the setting off while an update waits, the server restarts on the unchanged version when the runs are done.
+
+When the Health line says "Self-update is stopped", the checkout needs a person: run `git status`, `npm ci`, `npm run build`, then delete `self-update.json` in the data folder. Going back does not undo changes the bad version made in the data folder.
+
 ---
 
 ## 7. Settings and safety
@@ -1145,6 +1168,9 @@ it; paused runs continue the next day. Flows can also cap one run (`limits.max_c
   reviews. This is the one exception to **Protected branches**: only the merge-to-`main` step of
   the unchanged built-in flow may push `main`; flows you write never can. Stored as
   `hotfix_to_main` in `config.yaml` (an older build rejects that key).
+- **Self-update** — off by default. When on, the Foundry builds and tests new commits of `main` of
+  the repository you name and restarts on them without a person (see [Self-update](#self-update)).
+  Stored as `self_update` in `config.yaml` (an older build rejects that key).
 - **Secret scan** — every push is checked for API keys, tokens, private keys, connection
   strings and `.env`/key files in the new commits. Findings are shown masked and the push is
   refused. A private-key header only counts when key data follows it, so code (or a test) that

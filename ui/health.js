@@ -22,7 +22,11 @@ export function renderHealth(el, health, { onCancel } = {}) {
     problems.length ? h("ul", { class: "holds" }, problems.map((n) => h("li", {},
       nextParts(n, { status: false }),
       n.kind === "closed_elsewhere" && n.runId ? h("button", { class: "small danger", onClick: () => onCancel?.(n.runId) }, "Cancel run") : null))) : null,
-    repos.length ? h("span", { class: "health-repos muted" }, repos.map((r) => h("span", {}, h("span", { class: "mono" }, r.repo), lastOkText({ lastOk: r.lastOk })))) : null);
+    repos.length ? h("span", { class: "health-repos muted" }, repos.map((r) => h("span", {}, h("span", { class: "mono" }, r.repo), lastOkText({ lastOk: r.lastOk })))) : null,
+    health.version || health.update ? h("span", { class: "health-version muted" },
+      health.version ? `Version ${String(health.version.commit).slice(0, 7)} · ${new Date(health.version.date).toLocaleString()}` : "",
+      health.version && health.update ? " · " : "",
+      health.update?.text ?? "") : null);
 }
 
 let gen = 0; // the newest request wins

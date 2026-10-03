@@ -158,3 +158,21 @@ describe("startHealth", () => {
     expect(calls).toHaveLength(3);
   });
 });
+
+describe("renderHealth: version and update", () => {
+  it("shows the running version and the update line, and no problem", () => {
+    const e = el();
+    const commit = "0123456789abcdef0123456789abcdef01234567";
+    ui.renderHealth(e, { ...good, version: { commit, date: "2026-10-01T10:00:00Z" }, update: { waiting: true, commit, text: "An update is waiting (abcdef0): the checkout has local changes." } });
+    const line = e.all("span").find((s) => s.attrs.class === "health-version muted")!;
+    expect(line.textContent).toContain("Version 0123456 · ");
+    expect(line.textContent).toContain("An update is waiting (abcdef0): the checkout has local changes.");
+    expect(e.attrs.class).toBe("health ok");
+  });
+
+  it("shows nothing extra without them", () => {
+    const e = el();
+    ui.renderHealth(e, good);
+    expect(e.all("span").filter((s) => s.attrs.class === "health-version muted")).toHaveLength(0);
+  });
+});

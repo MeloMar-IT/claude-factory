@@ -9,6 +9,7 @@ import type { RateReading } from "../github.js";
 import { parseInterval, type TrackedIssue, type WatcherStatus } from "../queue/watcher.js";
 import type { Scheduler } from "../queue/scheduler.js";
 import { runDetectors, type ActiveRun, type AreaLock, type Detector, type DetectorInput, type LogLine } from "./detectors.js";
+import { loadUpdateState, type UpdateState } from "../self-update-state.js";
 import { findingsFile, loadFindings, mergeFindings, saveFindings } from "./findings.js";
 import type { Reporter } from "./report.js";
 import { ALL_DETECTORS } from "./work-detectors.js";
@@ -31,6 +32,7 @@ export interface MonitorDeps {
   file?: string;
   detectors?: Detector[];
   now?: () => Date;
+  selfUpdate?: () => { state: UpdateState; broken: boolean };
 }
 
 /** At most this many runs are loaded in one check. */
@@ -226,6 +228,7 @@ export class Monitor {
       now: start, asleep, config, runs, watchers: this.d.watchers(), log: this.d.serverLog?.() ?? [], rate: this.d.rateLimit?.(), queue, monitorId: this.cfg.id,
       ...(this.wokeAt ? { wokeAt: this.wokeAt } : {}),
       active, areaLocks: this.areaLocks(start, queue.active.map((a) => a.runId)), lastStart: this.d.scheduler.lastStart?.(), restart: this.d.restart?.(), history,
+      update: (this.d.selfUpdate ?? loadUpdateState)(),
     });
     const stored = loadFindings(this.d.file ?? findingsFile());
     if (stored.broken) this.act("the findings file could not be read; it was kept as monitor-findings.json.broken");

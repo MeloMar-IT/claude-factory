@@ -100,3 +100,23 @@ describe("Settings → Safety", () => {
     expect(puts[0].hotfix_to_main).toBe(true);
   });
 });
+
+describe("Settings → Safety: self-update", () => {
+  const box = (main: FakeElement) => main.all("label").find((l) => l.textContent.includes("Self-update"))!.all("input")[0] as any;
+  const repo = (main: FakeElement) => main.all("input").find((i) => i.attrs.placeholder === "owner/name") as any;
+
+  it("is off and empty by default", async () => {
+    const { main } = await render({});
+    expect(!!box(main).checked).toBe(false);
+    expect(repo(main).value).toBe("");
+  });
+
+  it("saves the switch and the trimmed repository", async () => {
+    const { main, puts } = await render({});
+    box(main).checked = true;
+    repo(main).value = " acme/foundry ";
+    main.all("button").find((b) => b.textContent === "Save")!.click();
+    await flush();
+    expect(puts[0].self_update).toEqual({ enabled: true, repo: "acme/foundry" });
+  });
+});
