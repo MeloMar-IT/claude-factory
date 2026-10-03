@@ -75,7 +75,7 @@ else if (prompt.includes("CI failed on this branch")) {
 } else if (prompt.includes("Your finished change is being merged into the develop branch")) {
   // Resolve by keeping both sides: drop the conflict markers from every conflicted file.
   const files = execFileSync("git", ["diff", "--name-only", "--diff-filter=U"], { encoding: "utf8" }).split("\n").filter(Boolean);
-  for (const f of files) {
+  for (const f of process.env.FAKE_RESOLVE_NOOP ? [] : files) { // FAKE_RESOLVE_NOOP: the resolver changes nothing
     writeFileSync(f, readFileSync(f, "utf8").split("\n").filter((l) => !/^(<<<<<<<|=======|>>>>>>>)/.test(l)).join("\n"));
     execFileSync("git", ["add", f]);
   }

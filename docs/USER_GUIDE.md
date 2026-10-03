@@ -309,6 +309,17 @@ the code", what went wrong and the fix. The causes and fixes:
   the run page's log has the whole command.
 - A push to a protected branch was blocked: change **Protected branches** in Settings or the
   flow's branch, then resume.
+- A hotfix: GitHub refuses the push to `main` ("only accepts pull requests"): allow direct pushes
+  for the Foundry's account on GitHub, or remove the `bug` label so the issue is built as a
+  feature. Nothing was pushed.
+- A hotfix: `main` changed in the same places while the run worked ("changed in the same
+  places"): nothing was pushed and the branch is kept. Delete the `hotfix/…` branch and start the
+  issue again.
+- A hotfix: the tests fail on `main` with the fix merged in (`red_main`): nothing was pushed to
+  `main`. Fix the cause on the hotfix branch and resume, or remove the label and build it as a
+  feature.
+- A hotfix: `develop` could not take the fix: the fix is on `main` and the issue is closed; see
+  "Hotfix" under Branches for what to do.
 - A marker the Foundry could not read (no `PLAN_STATUS` line, no questions to ask, no `SUBTASK`
   lines): resume the run to try the step again.
 - An internal error, an unknown step, or a run that failed before any step ran (workspace, bot
@@ -903,6 +914,9 @@ The label-driven flows do the same:
 `**What you need to do:** Add the code label to start coding.`
 - The result of `issue-code-daily`, `issue-deliver` and `issue-gitflow` starts with
 `**Nothing needed from you** — it goes to main with the release pull request.`
+- The result of a hotfix in `issue-gitflow` starts with
+`**Nothing needed from you** — the fix is on main and in develop.` or, when `develop` could not
+take the fix yet, with `**What you need to do:** Merge main into develop, because the fix is not there yet.`
 - The reply of `pr-feedback` after review comments starts with
 `**What you need to do:** Look at the changes.`
 - The daily report (`daily-pr`) and the release check (`release-daily`) start with
@@ -971,7 +985,39 @@ flowchart LR
   issues — a draft while the checks fail. **You merge it once a day.**
 - `develop` is created from `main` the first time, and kept up to date with `main` (for example
   after a hotfix) before new work starts. `develop` must not be in *Protected branches*
-  (Settings), since the Foundry pushes to it; `main` stays protected.
+  (Settings), since the Foundry pushes to it; `main` stays protected (the one exception is the
+  hotfix path below, and only when you switch it on).
+- **Hotfix — bug stories go to `main` at once.** An issue with a label in `hotfix_labels` (default
+  `bug`, any case) is built as a hotfix when an admin has switched on **Hotfixes** in Settings →
+  Safety (off by default). Without the setting, or in a changed copy of the flow, it is built as a
+  feature and the report says why in one line. The plan, plan review, size and risk checks, code
+  areas, build, tests, reviews and docs are the same. What differs:
+  - The branch is `hotfix/<issue>-<title>` (`hotfix_prefix`), made from the `main` commit the
+    tests passed on before the change.
+  - After the reviews the Foundry merges it into `main` (no fast-forward), **runs the tests on the
+    merge result and pushes `main` only when they pass.** If `main` moved meanwhile, it merges and
+    tests again. The issue is closed as soon as the fix is on `main`; it does not wait for the
+    release. No pull request, no tag.
+  - Then `main` goes into `develop` (conflicts are resolved by an agent and tested, like for a
+    feature), so the release has no conflicts from hotfixes. The merged `hotfix/…` branch is
+    deleted (`delete_merged_branches: no` keeps it; a branch that got new commits after the
+    merge is kept).
+  - A hotfix is never split by itself, and a plan above the risk threshold still waits for you.
+  - The comment on the issue says: fixed on `main` (with the commit), merged into `develop`, and
+    whether the running Foundry already has the fix (only when the issue belongs to the Foundry's
+    own repository).
+
+```mermaid
+flowchart LR
+    M[main] --> H["hotfix/42-…"]
+    H -->|"tests + reviews pass →<br/>merge, test, push"| M
+    M -->|"merge, test, push"| D[develop]
+```
+
+  If `develop` cannot take the fix (conflicts the agent cannot resolve, or red tests), the fix is
+  still on `main`; the comment starts with **Merge main into develop** and says why. The Foundry
+  tries again when it starts the next story (without conflicts only). To be sure, merge `main`
+  into `develop` yourself — until then the daily release pull request can show conflicts.
 - **Size limit:** a plan over 15 files or about 800 lines of production code (tests and docs
   don't count) is split into smaller issues instead — automatically when the split risk is low
   (`max_files`, `max_code_lines`).
@@ -1021,7 +1067,13 @@ it; paused runs continue the next day. Flows can also cap one run (`limits.max_c
 - **Protected branches** — pushes to these branches (default `main`, `master`, `develop`,
   `release/*`) are refused during runs, whoever tries. Claude Code is not allowed to run
   `git push` at all, and Codex's sandbox has no network access by default — pushing is a flow
-  step.
+  step. This stops ordinary pushes from steps and agents; for a hard block use branch protection
+  on GitHub (and allow the Foundry's account when hotfixes are on).
+- **Hotfixes** — off by default. When on, bug stories (label from `hotfix_labels`) of the
+  built-in `issue-gitflow` are merged into `main` and `develop` without a person, after tests and
+  reviews. This is the one exception to **Protected branches**: only the merge-to-`main` step of
+  the unchanged built-in flow may push `main`; flows you write never can. Stored as
+  `hotfix_to_main` in `config.yaml` (an older build rejects that key).
 - **Secret scan** — every push is checked for API keys, tokens, private keys, connection
   strings and `.env`/key files in the new commits. Findings are shown masked and the push is
   refused. A private-key header only counts when key data follows it, so code (or a test) that

@@ -262,7 +262,10 @@ these environment variables instead (always quote them: `"$FACTORY_TASK"`):
 | `$FACTORY_TOOLS` | Folder with helper scripts (below) |
 | `$FACTORY_NEXT_<REASON>` | The closing "what to do next" sentence for a comment on the issue. `<REASON>` is `QUESTIONS`, `PLANNER_QUESTIONS`, `APPROVE_PLAN`, `APPROVE_SPLIT` or `APPROVAL`; e.g. `$FACTORY_NEXT_APPROVAL` is "It waits for your approval — reply /approve or /reject." The sentence is fixed per reason. Write `"_${FACTORY_NEXT_APPROVAL}_"` with braces when `_` follows |
 | `$FACTORY_FIRST_<REASON>`, `$FACTORY_FIRST_NOTHING` | The bold first line of a comment on the issue. `<REASON>` is the same five as above; e.g. `$FACTORY_FIRST_APPROVE_PLAN` is `**What you need to do:** Reply /approve or /reject.` `$FACTORY_FIRST_NOTHING` is for a comment that needs no answer: `**Nothing needed from you** — it is being worked on.` Print it first, then an empty line (`echo "$FACTORY_FIRST_APPROVAL"; echo`), and always quote it because it contains `*` |
-| `$FACTORY_FIRST_INFO`, `_MERGE_PR`, `_OPEN_PR`, `_START_PARTS`, `_START_CODING`, `_SHIPS`, `_LOOK`, `_MERGE_RELEASE`, `_DRAFT` | First lines for comments that report something (plan, result, split, daily report). Also as `$SCF_FIRST_…`. `INFO` is `**Nothing needed from you**`; `MERGE_PR` is `**What you need to do:** Review and merge the pull request.`; `OPEN_PR` is `**What you need to do:** Open a pull request from the branch.`; `START_PARTS` is `**What you need to do:** Start the new issues when you want them built.`; `START_CODING` is `**What you need to do:** Add the code label to start coding.`; `SHIPS` is `**Nothing needed from you** — it goes to main with the release pull request.`; `LOOK` is `**What you need to do:** Look at the changes.`; `MERGE_RELEASE` is `**What you need to do:** Merge the release pull request when you like.`; `DRAFT` is `**Nothing needed from you** — it stays a draft until the checks pass.` Print one first, then an empty line. To choose, set `first="$FACTORY_FIRST_MERGE_PR"` and print `"$first"` |
+| `$FACTORY_FIRST_INFO`, `_MERGE_PR`, `_OPEN_PR`, `_START_PARTS`, `_START_CODING`, `_SHIPS`, `_LOOK`, `_MERGE_RELEASE`, `_DRAFT`, `_FIXED`, `_MERGE_BACK` | First lines for comments that report something (plan, result, split, daily report). Also as `$SCF_FIRST_…`. `INFO` is `**Nothing needed from you**`; `MERGE_PR` is `**What you need to do:** Review and merge the pull request.`; `OPEN_PR` is `**What you need to do:** Open a pull request from the branch.`; `START_PARTS` is `**What you need to do:** Start the new issues when you want them built.`; `START_CODING` is `**What you need to do:** Add the code label to start coding.`; `SHIPS` is `**Nothing needed from you** — it goes to main with the release pull request.`; `LOOK` is `**What you need to do:** Look at the changes.`; `MERGE_RELEASE` is `**What you need to do:** Merge the release pull request when you like.`; `DRAFT` is `**Nothing needed from you** — it stays a draft until the checks pass.` Print one first, then an empty line. To choose, set `first="$FACTORY_FIRST_MERGE_PR"` and print `"$first"` |
+| `$FACTORY_FIRST_FIXED`, `$FACTORY_FIRST_MERGE_BACK` | The hotfix report of `issue-gitflow`: `**Nothing needed from you** — the fix is on main and in develop.` and `**What you need to do:** Merge main into develop, because the fix is not there yet.` |
+| `$FACTORY_HOTFIX` | `on`, `off` or `other`: whether this run may take the hotfix path. `off`: the **Hotfixes** setting is off. `other`: the flow is not the unchanged built-in `issue-gitflow`. Set by the engine, for every step |
+| `$FACTORY_SELF_SHA`, `$FACTORY_SELF_REPO` | The commit the running Foundry's own checkout was at when it started, and its GitHub repository (`owner/name`, lower case). Empty when the Foundry does not run from a git checkout with a GitHub origin |
 | `$FACTORY_LEARNINGS_FILE` | File where lessons for this repository are kept |
 
 Every `FACTORY_…` variable is also set as `SCF_…` (e.g. `$SCF_TASK`); the built-in flows use `FACTORY_…`.
@@ -277,6 +280,23 @@ Every `FACTORY_…` variable is also set as `SCF_…` (e.g. `$SCF_TASK`); the bu
 
 The Foundry always blocks pushes to protected branches (`main`, `master`, …) and pushes that
 contain secrets — a flow cannot turn that off. Push to a new branch and open a pull request.
+
+There is one exception. When an admin switches on **Hotfixes** in Settings, the step `push_main` of
+the **unchanged built-in `issue-gitflow`** may push `main` (never delete it), and only that step.
+The engine gives it a one-time token for the push; the hook ignores anything else, such as a
+`FACTORY_PUSH_ALLOW` set by a step. A flow you write, or a copy of `issue-gitflow` with any change
+(a step, a variable default, a limit), never gets this; there `$FACTORY_HOTFIX` is `other`. The
+exception is a guard against mistakes, not a wall: a command that skips git hooks still gets
+through, so also use branch protection on GitHub for a hard block.
+
+```text
+hotfix (an issue with a hotfix label, default `bug`):
+
+  main ──► hotfix/42-… ──► merge ──► tests ──► push main ──► merge main into develop ──► push develop
+   │        (tests on main      (main, no fast-forward)        (the issue is closed)       (tests first)
+   │         before the change)
+feature (everything else):  develop ──► feature/42-… ──► develop      (main: with the daily release)
+```
 
 ## Patterns
 

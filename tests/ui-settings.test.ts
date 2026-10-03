@@ -87,3 +87,16 @@ describe("Settings → Network", () => {
     expect(main.textContent).toContain("invalid config: nope");
   });
 });
+
+describe("Settings → Safety", () => {
+  const hotfixBox = (main: FakeElement) => main.all("label").find((l) => l.textContent.includes("Hotfixes"))!.all("input")[0] as any;
+
+  it("shows the hotfix switch unchecked and saves it when switched on", async () => {
+    const { main, puts } = await render({});
+    expect(!!hotfixBox(main).checked).toBe(false);
+    hotfixBox(main).checked = true;
+    main.all("button").find((b) => b.textContent === "Save")!.click();
+    await flush();
+    expect(puts[0].hotfix_to_main).toBe(true);
+  });
+});

@@ -207,6 +207,11 @@ export const ConfigSchema = z
     /** Pushes to these branches are refused (glob patterns). */
     protected_branches: z.array(z.string()).default(["main", "master", "develop", "release/*"]),
     /**
+     * Build bug stories of the built-in issue-gitflow as hotfixes: after the reviews and a green test run
+     * they are merged into main (and develop) without a person. Off: bug stories are built as features.
+     */
+    hotfix_to_main: z.boolean().default(false),
+    /**
      * Run agent steps without your personal Claude Code setup (MCP servers, plugins, skills,
      * hooks, user settings). Smaller context every turn and no off-task detours.
      */

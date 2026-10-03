@@ -262,6 +262,7 @@ export async function renderSettings(main) {
   const keyPath = input(c.github_app?.private_key_path ?? "", { class: "mono", placeholder: "/path/to/app.private-key.pem" });
   const sbxClaude = check(c.sandbox.claude, "Sandbox agents' shell commands by default");
   const secrets = check(c.secret_scan !== false, "Block pushes that add secrets (API keys, tokens, private keys, .env files)");
+  const hotfix = check(c.hotfix_to_main === true, "Hotfixes: build bug stories on a hotfix branch and merge them into main without a person (only the unchanged built-in issue-gitflow)");
   const sbxImage = input(c.sandbox.docker_image ?? "", { class: "mono", placeholder: "e.g. node:22" });
   const net = c.server ?? { listen: "127.0.0.1", allowed_hosts: [], allow_insecure_http: false };
   const listenSel = h("select", {}, ["127.0.0.1", "::1", "0.0.0.0", "::"].map((a) => h("option", { value: a }, a)));
@@ -279,6 +280,7 @@ export async function renderSettings(main) {
       concurrency: Number(conc.value) || 1,
       protected_branches: protectedB.value.split(",").map((s) => s.trim()).filter(Boolean),
       secret_scan: secrets.el.checked,
+      hotfix_to_main: hotfix.el.checked,
       notify: notifyFrom({
         macos: macos.el.checked, slack: slack.value, command: cmd.value, on: on.filter(([, x]) => x.el.checked).map(([s]) => s),
         successes: successes.el.checked, throttle: throttle.value, quietFrom: quietFrom.value, quietTo: quietTo.value, summaryAt: summaryAt.value,
@@ -317,6 +319,7 @@ export async function renderSettings(main) {
     section("Safety",
       f("Protected branches", protectedB, "Pushes to these are refused during runs (glob patterns, comma-separated). Also enable branch protection on GitHub."),
       secrets.row,
+      hotfix.row,
       sbxClaude.row,
       f("Docker image for sandboxed shell steps", sbxImage, "Steps marked “Run in Docker” (like tests) run in this image with only the workspace mounted.")),
     section("Notifications",
