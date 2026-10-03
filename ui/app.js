@@ -9,6 +9,7 @@ import { renderSettings, renderWatchers } from "./admin.js";
 import { refreshModelLists, renderModels } from "./models.js";
 import { renderDashboard } from "./dashboard.js";
 import { renderRunDetail, renderRunsList } from "./runs.js";
+import { renderRefinement } from "./refinement.js";
 import { renderRepos } from "./repos.js";
 import { renderBoard } from "./board.js";
 import { loadHealth, startHealth } from "./health.js";
@@ -388,6 +389,7 @@ async function route() {
     else if (section === "watchers") await renderWatchers(main);
     else if (section === "settings") await renderSettings(main);
     else if (section === "models") await renderModels(main);
+    else if (section === "refinement") S.cleanup = await renderRefinement(main, { admin: S.admin, id: arg });
     else if (section === "repos") S.cleanup = await renderRepos(main, { admin: S.admin });
     else if (section === "runs" && arg) S.cleanup = renderRunDetail(main, arg, { admin: S.admin });
     else if (section === "runs") S.cleanup = await renderRunsList(main, { admin: S.admin });

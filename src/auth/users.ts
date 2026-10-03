@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { z } from "zod";
 import { removeCredentialsLocked } from "../credentials/store.js";
 import { prepareAuditLocked, type AuditEvent } from "./audit.js";
+import { checkRefinements, removeRefinementsLocked } from "../refinement/store.js";
 import { removeReposLocked } from "./repos.js";
 import { addSessionLocked, removeSessionsLocked, sessionId } from "./sessions.js";
 import { dataHome, readJsonFile, withAuthLock, writeJsonFile } from "./store.js";
@@ -448,8 +449,11 @@ export function deleteUser(id: string, opts: ChangeOptions = {}): DeletedUser {
     if (!user) throw new UserError("not-found", "no such account");
     if (isLastAdmin(file.users, user)) throw new UserError("last-admin", LAST_ADMIN);
     return audited(opts.by, { action: "delete", userId: id }, () => {
-      // The repository list first: a repos.json that cannot be read stops the delete before anything else changes.
+      // A refinements.json that cannot be read stops the delete before anything changes; then the repository list
+      // (a repos.json that cannot be read stops it too), then the refinement sessions.
+      checkRefinements();
       removeReposLocked(id);
+      removeRefinementsLocked(id);
       removeSessionsLocked((s) => s.userId === id);
       const wiped = removeCredentialsLocked(id);
       writeJsonFile(usersPath(), { ...file, users: file.users.filter((u) => u.id !== id) });

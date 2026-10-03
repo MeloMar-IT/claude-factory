@@ -71,12 +71,18 @@ export const RULES: Rule[] = [
   r("POST", "users/:id/block", "no", "block an account, end its sessions and cancel its queued jobs"),
   r("POST", "users/:id/unblock", "no", "unblock an account"),
   r("POST", "users/:id/link", "no", "a new set-password token for an account without a password"),
-  r("DELETE", "users/:id", "no", "delete an account with its sessions, repositories and stored credentials"),
+  r("DELETE", "users/:id", "no", "delete an account with its sessions, repositories, refinement sessions and stored credentials"),
   r("GET", "repos", "yes", "your repositories"),
   r("POST", "repos", "yes", "add a repository (a URL, and a token for it)"),
   r("PUT", "repos/:id/auth", "yes", "change the method, user name, token or address of your repository"),
   r("DELETE", "repos/:id", "yes", "remove your repository and its stored token"),
   r("DELETE", "repos/:owner/:name", "yes", "remove a GitHub repository by name (old form)"),
+  r("GET", "refinement", "yes", "your refinement sessions and the repositories a new one can use (an admin: the sessions of all accounts, with the owner)"),
+  r("POST", "refinement", "yes", "start a refinement session on one of your GitHub repositories"),
+  r("GET", "refinement/:id", "yes", "read your refinement session (an admin: any session)"),
+  r("PUT", "refinement/:id", "yes", "rename your refinement session"),
+  r("POST", "refinement/:id/drop", "yes", "drop your refinement session (an admin: any session); it is removed after 30 days"),
+  r("POST", "refinement/:id/restore", "yes", "restore your dropped refinement session"),
 ];
 
 /** The key of a rule, e.g. "POST runs/:id/approve". */

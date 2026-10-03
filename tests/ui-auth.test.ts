@@ -434,6 +434,10 @@ describe("roles in the page", () => {
     expect(auth.userHash("#/repos")).toBe("#/repos");
     expect(auth.userHash("#/repos/x")).toBe("#/runs");
     expect(auth.userHash("#/reposx")).toBe("#/runs");
+    expect(auth.userHash("#/refinement")).toBe("#/refinement");
+    expect(auth.userHash("#/refinement/abc-1")).toBe("#/refinement/abc-1");
+    expect(auth.userHash("#/refinement/a/b")).toBe("#/runs");
+    expect(auth.userHash("#/refinementx")).toBe("#/runs");
     expect(auth.userHash("#/runs")).toBe("#/runs");
     expect(auth.userHash("#/runs/abc")).toBe("#/runs/abc");
     expect(auth.userHash("#/runs/abc/x")).toBe("#/runs");

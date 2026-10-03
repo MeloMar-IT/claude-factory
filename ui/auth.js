@@ -178,9 +178,9 @@ export async function ensureSignedIn(a = api, reload = () => location.reload(), 
 /** True for an account with the role admin. */
 export const isAdmin = (user) => user?.role === "admin";
 
-/** The pages a user may open: Runs, a run page and My repositories. Anything else becomes the Runs list. */
+/** The pages a user may open: Refinement (and one session), Runs, a run page and My repositories. Anything else becomes the Runs list. */
 export function userHash(hash) {
-  return /^#\/(runs(\/[\w-]+)?|repos)$/.test(hash ?? "") ? hash : "#/runs";
+  return /^#\/(runs(\/[\w-]+)?|refinement(\/[\w-]+)?|repos)$/.test(hash ?? "") ? hash : "#/runs";
 }
 
 /** The hash to draw. A user never gets a page they may not open; `replace(to)` puts the allowed hash in the address bar. */

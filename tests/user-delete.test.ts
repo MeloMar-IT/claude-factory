@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { addRepo, listRepos, reposPath } from "../src/auth/repos.js";
 import { StoreError } from "../src/auth/store.js";
+import { createSession, listSessions, refinementsPath } from "../src/refinement/store.js";
 import { readSessions } from "../src/auth/sessions.js";
 import { randomUUID } from "node:crypto";
 import { createUser, deleteUser, hashPassword, listUsers, startSession, usersPath, UserError, type User } from "../src/auth/users.js";
@@ -92,6 +93,41 @@ describe("deleteUser", () => {
     expect(listCredentials(ann.id)).toHaveLength(1);
     writeFileSync(reposPath(), JSON.stringify({ version: 1, repos: {} }));
     expect(deleteUser(ann.id).credentials).toBe(1);
+  });
+
+  it("removes the refinement sessions of the account and keeps the other one", () => {
+    const ok = { ownerOk: () => true, repoName: (_o: string, n: string) => n };
+    createSession(ann.id, { repo: "acme/app", idea: "one" }, ok);
+    createSession(bob.id, { repo: "acme/web", idea: "two" }, ok);
+    deleteUser(ann.id);
+    expect(listSessions().map((s) => s.owner)).toEqual([bob.id]);
+  });
+
+  it("stops with nothing changed when refinements.json cannot be read, and works once it is fixed", () => {
+    const ok = { ownerOk: () => true, repoName: (_o: string, n: string) => n };
+    createSession(ann.id, { repo: "acme/app", idea: "one" }, ok);
+    startSession(ann.id, ann.passwordHash);
+    cred(ann, "a", "Aa1");
+    addRepo(ann.id, "acme/app");
+    writeFileSync(refinementsPath(), "not json");
+    const users = readFileSync(usersPath());
+    const repos = readFileSync(reposPath());
+    expect(code(() => deleteUser(ann.id))).toBeInstanceOf(StoreError);
+    expect(readFileSync(usersPath())).toEqual(users);
+    expect(readFileSync(reposPath())).toEqual(repos);
+    expect(readSessions().filter((s) => s.userId === ann.id)).toHaveLength(1);
+    expect(listCredentials(ann.id)).toHaveLength(1);
+    writeFileSync(refinementsPath(), JSON.stringify({ version: 1, sessions: [] }));
+    expect(deleteUser(ann.id).credentials).toBe(1);
+  });
+
+  it("leaves refinements.json alone when repos.json cannot be read", () => {
+    const ok = { ownerOk: () => true, repoName: (_o: string, n: string) => n };
+    createSession(ann.id, { repo: "acme/app", idea: "one" }, ok);
+    writeFileSync(reposPath(), "not json");
+    const sessions = readFileSync(refinementsPath());
+    expect(code(() => deleteUser(ann.id))).toBeInstanceOf(StoreError);
+    expect(readFileSync(refinementsPath())).toEqual(sessions);
   });
 
   it("reports an unknown account", () => {
