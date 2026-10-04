@@ -113,6 +113,8 @@ const MonitorSchema = z
     report_limits: z.object({ per_day: z.number().int().min(1).max(50).default(3), per_check: z.number().int().min(1).max(3).default(1) }).strict().prefault({}),
     /** For this many minutes after the server started no bug story is made and none becomes owed (0: no quiet time). */
     cooldown_minutes: z.number().int().min(0).max(1440).default(10),
+    /** The circuit breaker: bug stories stop when more than `new_findings` different findings first appear within `within_minutes`, or when the newest `failed_fixes` finished runs of bug stories all failed. */
+    breaker: z.object({ new_findings: z.number().int().min(1).max(499).default(5), within_minutes: z.number().int().min(1).max(1440).default(60), failed_fixes: z.number().int().min(1).max(100).default(3) }).strict().prefault({}),
   })
   .strict();
 

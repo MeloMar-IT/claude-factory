@@ -79,6 +79,7 @@ const GLOSSARY: Record<NextKind, Words> = {
     },
   },
   watcher_error: { status: "watcher error", help: "The watcher could not do its check, so its issues do not move. Look at the error on the Watchers page and fix the cause, it then tries again at the next check." },
+  monitor_stopped: { status: "bug stories stopped", help: "The monitor stopped making bug stories, because many new problems appeared at once or its fixes kept failing. Look at what went wrong, then switch bug stories on again on the Watchers page." },
   watcher_stale: { status: "watcher silent", help: "The watcher has not finished a check for a long time, so its issues do not move. Press Check now on the Watchers page." },
   closed_elsewhere: { status: "closed on GitHub, run still busy", help: "The issue was closed on GitHub, but its run is still working or waits for approval and nothing was changed. Cancel the run on its page if the work is no longer wanted." },
   restart: { status: "restarting soon", help: "The server waits to restart and starts nothing new until then. Nothing to do — it restarts when the active runs are done." },

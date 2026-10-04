@@ -7,8 +7,8 @@ const BANNED = ["hold", "precheck", "area lock", "jump_only"];
 const EXPLAIN = "how risky it is to create the smaller issues without you looking, 0–100";
 
 describe("glossary", () => {
-  it("has 26 distinct kinds", () => {
-    expect(new Set(KINDS).size).toBe(26);
+  it("has 27 distinct kinds", () => {
+    expect(new Set(KINDS).size).toBe(27);
   });
 
   const rows: [NextKind, WordFacts, string][] = [
@@ -34,6 +34,7 @@ describe("glossary", () => {
     ["cancelled", {}, "cancelled"],
     ["failed", {}, "failed"],
     ["watcher_error", {}, "watcher error"],
+    ["monitor_stopped", {}, "bug stories stopped"],
     ["restart", {}, "restarting soon"],
     ["superseded", {}, "replaced by a newer run"],
     ["done", {}, "done"],

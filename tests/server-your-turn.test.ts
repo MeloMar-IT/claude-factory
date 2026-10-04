@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ConfigSchema } from "../src/config.js";
+import { saveGuard, switchStories } from "../src/monitor/guard.js";
 import { nextStep, type NextStep } from "../src/next-step.js";
 import type { Notice } from "../src/notify.js";
 import { TurnNotifier } from "../src/server/notifier.js";
@@ -25,7 +26,7 @@ const run = (runId: string, over: Record<string, unknown> = {}) => ({
 
 type Tracked = { watcher: unknown; status: Record<string, unknown>; issues: { issue: number; title: string; runId?: string }[] };
 
-function stub(o: { config?: ReturnType<typeof cfg>; runs?: ReturnType<typeof run>[]; tracked?: Tracked[]; listed?: number } = {}) {
+function stub(o: { config?: ReturnType<typeof cfg>; runs?: ReturnType<typeof run>[]; tracked?: Tracked[]; statuses?: unknown[]; listed?: number } = {}) {
   const runs = o.runs ?? [];
   const config = o.config ?? cfg();
   return {
@@ -36,7 +37,7 @@ function stub(o: { config?: ReturnType<typeof cfg>; runs?: ReturnType<typeof run
       briefs: () => runs.map((r) => ({ runId: r.runId, flow: r.flow, status: r.status, startedAt: r.startedAt, finishedAt: r.finishedAt, source: r.source, runDir: r.runDir })),
       queue: () => ({ pending: [], active: [] }),
     },
-    watchers: { tracked: () => o.tracked ?? [] },
+    watchers: { tracked: () => o.tracked ?? [], statuses: () => o.statuses ?? [] },
   } as unknown as ApiContext;
 }
 
@@ -160,6 +161,29 @@ describe("Your turn dismissals", () => {
     expect(items(stub({ runs: [run("old-eval"), run("manual")] })).map((i) => i.next.runId)).toEqual(["manual"]);
   });
 
+  describe("the circuit breaker", () => {
+    const monitor = (enabled = true) => ({ id: "mon", source: "monitor", every: "1h", enabled });
+    const openIt = (at: string) => saveGuard({ version: 1, breaker: { open: { since: at, reason: "findings", count: 7, minutes: 60 } } });
+
+    it("shows one item that cannot be dismissed, and none once it is closed", () => {
+      openIt(ago(0.5));
+      const ctx = stub({ statuses: [monitor()] });
+      const out = items(ctx);
+      expect(out).toHaveLength(1);
+      expect(out[0]).toMatchObject({ dismissable: false, since: ago(0.5), next: { kind: "monitor_stopped", where: { url: "#/watchers" } } });
+      expect(out[0]!.next.text).toContain("7 new findings within 60 minutes");
+      expect(() => dismissTurn(ctx, out[0]!.key, NOW)).toThrow(expect.objectContaining({ status: 404 }));
+      switchStories("on", "cli");
+      expect(items(ctx)).toEqual([]);
+    });
+
+    it("shows nothing without a monitor or with a disabled one", () => {
+      openIt(ago(0.5));
+      expect(items(stub())).toEqual([]);
+      expect(items(stub({ statuses: [monitor(false)] }))).toEqual([]);
+    });
+  });
+
   it("keeps an earlier dismissal when the watchers are not there yet", () => {
     const both = withHolds(failedHold(ago(1)), q(3, { since: ago(2) }));
     const [a, b] = [items(both).find((i) => i.next.issue === 8)!, items(both).find((i) => i.next.issue === 3)!];
@@ -240,7 +264,7 @@ describe("Your turn notifications", () => {
     const state = { config: ConfigSchema.parse({ watchers: [issuesWatcher], notify: { ...channel, ...notify } }), runs: [] as ReturnType<typeof run>[], tracked: [] as Tracked[] };
     const ctx = stub({ config: state.config, runs: state.runs });
     (ctx as unknown as { config: () => unknown }).config = () => state.config;
-    (ctx as unknown as { watchers: unknown }).watchers = { tracked: () => state.tracked };
+    (ctx as unknown as { watchers: unknown }).watchers = { tracked: () => state.tracked, statuses: () => [] };
     const sent: Notice[] = [];
     const slow = { ms: 0 };
     const make = () =>

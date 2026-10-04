@@ -1,4 +1,4 @@
-import { currentState, switchStories } from "./guard.js";
+import { breakerWhy, currentState, switchStories } from "./guard.js";
 
 export const MONITOR_USAGE = `usage: scf monitor off      Stop the monitor from making bug stories
        scf monitor on       Let it make bug stories again
@@ -16,7 +16,8 @@ export function monitorCommand(positionals: string[], out: (line: string) => voi
       out(`bug stories are stopped: ${UNREADABLE} (scf monitor on starts a fresh file)`);
       return 1;
     }
-    out(s.state === "off" ? `bug stories: off since ${s.since} (by ${s.by})` : "bug stories: on");
+    if (s.state === "breaker") out(`bug stories: stopped by the circuit breaker since ${s.since} (${breakerWhy(s)}); scf monitor on switches them on again`);
+    else out(s.state === "off" ? `bug stories: off since ${s.since} (by ${s.by})` : "bug stories: on");
     return 0;
   }
   const r = switchStories(sub, "cli");
@@ -29,6 +30,7 @@ export function monitorCommand(positionals: string[], out: (line: string) => voi
     return 0;
   }
   out(`bug stories are ${r.state}`);
+  if ("closed" in r && r.closed) out("the circuit breaker is closed; the counts start anew");
   if ("reset" in r && r.reset) out(`the state file could not be read: it was kept as monitor-guard.json.broken and a fresh one was started`);
   return 0;
 }

@@ -64,6 +64,17 @@ describe("scf monitor", () => {
     expect(lines().map((l) => [l.event, l.by])).toEqual([["off", "cli"], ["on", "cli"]]);
   });
 
+  it("status prints the circuit breaker, and on closes it", () => {
+    writeFileSync(join(home, "monitor-guard.json"), JSON.stringify({ version: 1, breaker: { open: { since: "2026-10-01T10:00:00.000Z", reason: "failed_fixes", count: 3 } } }));
+    const s = run("monitor", "status");
+    expect(s.code).toBe(0);
+    expect(s.out).toBe("bug stories: stopped by the circuit breaker since 2026-10-01T10:00:00.000Z (the newest 3 runs of bug stories all failed); scf monitor on switches them on again\n");
+    expect(run("monitor", "on").out).toBe("bug stories are on\nthe circuit breaker is closed; the counts start anew\n");
+    expect(JSON.parse(readFileSync(join(home, "monitor-guard.json"), "utf8")).breaker.from).toEqual(expect.any(String));
+    expect(run("monitor", "status").out).toBe("bug stories: on\n");
+    expect(lines().map((l) => l.event)).toEqual(["on", "breaker-closed"]);
+  });
+
   it("no or an unknown sub-command exits 1 with the usage; --help lists it", () => {
     for (const args of [["monitor"], ["monitor", "now"], ["monitor", "off", "extra"]]) {
       const r = run(...args);

@@ -21,11 +21,26 @@ export const logFile = (): string => join(home(), "monitor-log.jsonl");
 export const olderLogFile = (): string => join(home(), "monitor-log.1.jsonl");
 export const lockDir = (): string => join(home(), "monitor.lock");
 
+/** Why the circuit breaker opened. */
+export type BreakerWhy = { reason: "findings"; count: number; minutes: number } | { reason: "failed_fixes"; count: number };
+/** An open breaker as it is stored. */
+export type BreakerOpen = BreakerWhy & { since: string };
+
+/** One plain sentence for a reason. */
+export function breakerWhy(w: { reason: string; count: number; minutes?: number }): string {
+  return w.reason === "findings" ? `${w.count} new findings within ${w.minutes} minutes` : `the newest ${w.count} runs of bug stories all failed`;
+}
+
 /** The state file. Keys that this version does not know are kept. */
 export interface GuardData {
   version: number;
   /** Bug stories are switched off. `by` is `cli` or an account id. */
   off?: { since: string; by: string };
+  /**
+   * The circuit breaker. `from` is when it was last switched on: nothing from before counts. `open` is set while it is open.
+   * A `from` can be missing (never switched on).
+   */
+  breaker?: { from?: string; open?: BreakerOpen };
   /** When the file was last started fresh after it could not be read. */
   reset?: string;
   [key: string]: unknown;
@@ -51,6 +66,18 @@ function parseGuard(text: string): GuardData | undefined {
     if (!o || typeof o !== "object" || !isTime(o.since) || typeof o.by !== "string" || !BY_RE.test(o.by)) return undefined;
   }
   if (x.reset !== undefined && !isTime(x.reset)) return undefined;
+  if (x.breaker !== undefined) {
+    const b = x.breaker as unknown as Record<string, unknown>;
+    if (!b || typeof b !== "object" || Array.isArray(b)) return undefined;
+    if (b.from !== undefined && !isTime(b.from)) return undefined;
+    if (b.open !== undefined) {
+      const o = b.open as Record<string, unknown>;
+      const pos = (n: unknown) => Number.isInteger(n) && (n as number) > 0;
+      if (!o || typeof o !== "object" || !isTime(o.since) || (o.reason !== "findings" && o.reason !== "failed_fixes") || !pos(o.count)) return undefined;
+      if (o.minutes !== undefined && !pos(o.minutes)) return undefined;
+      if (o.reason === "findings" && o.minutes === undefined) return undefined;
+    }
+  }
   return x;
 }
 
@@ -91,6 +118,7 @@ export type StoriesState =
   | { state: "on"; reset?: string }
   | { state: "off"; since: string; by: string; reset?: string }
   | { state: "quiet"; until: string; reset?: string }
+  | ({ state: "breaker"; reset?: string } & BreakerOpen)
   | { state: "unreadable" };
 
 export interface StateOptions {
@@ -102,22 +130,32 @@ export interface StateOptions {
   file?: string;
 }
 
-/** Pure on its input: unreadable wins over off, off wins over quiet. */
+/** Is `now` within `cooldownMinutes` after the server started? */
+export function inQuietTime(now: Date, startedAt?: Date, cooldownMinutes = 0): boolean {
+  return !!startedAt && cooldownMinutes > 0 && now.getTime() < startedAt.getTime() + cooldownMinutes * 60_000;
+}
+
+/** Pure on its input: unreadable wins over off, off over the breaker, the breaker over quiet. */
 export function storiesState(loaded: Loaded, o: StateOptions = {}): StoriesState {
   if (!loaded.ok) return { state: "unreadable" };
   const reset = loaded.data.reset ? { reset: loaded.data.reset } : {};
   if (loaded.data.off) return { state: "off", since: loaded.data.off.since, by: loaded.data.off.by, ...reset };
-  if (o.startedAt && (o.cooldownMinutes ?? 0) > 0) {
-    const until = o.startedAt.getTime() + o.cooldownMinutes! * 60_000;
-    if ((o.now ?? new Date()).getTime() < until) return { state: "quiet", until: new Date(until).toISOString(), ...reset };
-  }
+  if (loaded.data.breaker?.open) return { state: "breaker", ...loaded.data.breaker.open, ...reset };
+  const now = o.now ?? new Date();
+  if (inQuietTime(now, o.startedAt, o.cooldownMinutes)) return { state: "quiet", until: new Date(o.startedAt!.getTime() + o.cooldownMinutes! * 60_000).toISOString(), ...reset };
   return { state: "on", ...reset };
+}
+
+/** The open breaker now, if any (reads the file). */
+export function breakerNow(file = guardFile()): BreakerOpen | undefined {
+  const l = loadGuard(file);
+  return l.ok ? l.data.breaker?.open : undefined; // the off switch does not close it: only "on" does
 }
 
 /** Reads the file now and says what the state is. */
 export const currentState = (o: StateOptions = {}): StoriesState => storiesState(loadGuard(o.file), o);
 
-export type Reason = "off" | "cooldown" | "unreadable";
+export type Reason = "off" | "cooldown" | "unreadable" | "breaker";
 export type Verdict = { go: true } | { go: false; reason: Reason; note: string };
 
 /** May the monitor make bug stories now? Reads the file at every call. */
@@ -125,6 +163,7 @@ export function storiesVerdict(o: StateOptions = {}): Verdict {
   const s = currentState(o);
   if (s.state === "on") return { go: true };
   if (s.state === "off") return { go: false, reason: "off", note: "bug stories are switched off" };
+  if (s.state === "breaker") return { go: false, reason: "breaker", note: "the circuit breaker is open" };
   if (s.state === "quiet") return { go: false, reason: "cooldown", note: "quiet time after the restart" };
   return { go: false, reason: "unreadable", note: "the state file monitor-guard.json cannot be read" };
 }
@@ -132,8 +171,11 @@ export function storiesVerdict(o: StateOptions = {}): Verdict {
 // ── the log ──
 
 export interface LogEntry {
-  event: "off" | "on" | "story-made" | "story-skipped";
+  event: "off" | "on" | "story-made" | "story-skipped" | "breaker-open" | "breaker-closed" | "fix-failed";
   by?: string;
+  /** breaker-open: findings or failed_fixes (in `reason`), how many, and within how many minutes. fix-failed: how many times. */
+  count?: number;
+  minutes?: number;
   reset?: boolean;
   /** Why a story was skipped: off, cooldown, unreadable, day_limit, check_limit, request_limit, github. */
   reason?: string;
@@ -154,11 +196,18 @@ export function describeEntry(e: LogEntry): string {
       return "bug stories switched on";
     case "story-made":
       return `bug story #${e.issue ?? "?"} made (${e.detector ?? ""})`;
+    case "breaker-open":
+      return `circuit breaker opened: ${breakerWhy({ reason: e.reason ?? "", count: e.count ?? 0, minutes: e.minutes })}`;
+    case "breaker-closed":
+      return "circuit breaker closed";
+    case "fix-failed":
+      return `the fix failed: bug story #${e.issue ?? "?"} (${e.detector ?? ""}), ${e.count ?? 1} ${e.count === 1 ? "time" : "times"}`;
     default: {
       const why: Record<string, string> = {
         off: "bug stories are off",
         cooldown: "quiet time after the restart",
         unreadable: "the state file cannot be read",
+        breaker: "the circuit breaker is open",
         day_limit: "the limit for a day is used up",
         check_limit: "the limit for one check is reached",
         request_limit: "GitHub's request limit is used up",
@@ -186,6 +235,8 @@ export function logLine(e: LogEntry, at: Date): string {
   if (e.fingerprint !== undefined) o.fingerprint = cut(e.fingerprint, 200);
   if (e.repo !== undefined) o.repo = cut(e.repo, 100);
   if (e.issue !== undefined && Number.isInteger(e.issue)) o.issue = e.issue;
+  if (e.count !== undefined && Number.isInteger(e.count)) o.count = e.count;
+  if (e.minutes !== undefined && Number.isInteger(e.minutes)) o.minutes = e.minutes;
   let line = JSON.stringify(o);
   if (Buffer.byteLength(line) >= MAX_LINE_BYTES) {
     delete o.fingerprint;
@@ -251,7 +302,7 @@ export interface SwitchOptions {
 }
 
 export type SwitchResult =
-  | { changed: boolean; state: "on" | "off"; since?: string; reset?: string }
+  | { changed: boolean; state: "on" | "off"; since?: string; reset?: string; closed?: boolean }
   | { changed: false; state: "unreadable" };
 
 /**
@@ -347,7 +398,7 @@ export function switchStories(sub: "off" | "on", by: string, o: SwitchOptions = 
     check();
     if (!loaded.ok) {
       if (sub === "off") return { changed: false, state: "unreadable" } as SwitchResult;
-      recover(file, { version: GUARD_VERSION, reset: at }, rename, check);
+      recover(file, { version: GUARD_VERSION, reset: at, breaker: { from: at } }, rename, check);
       return { changed: true, state: "on", reset: at } as SwitchResult;
     }
     const d = { ...loaded.data };
@@ -362,14 +413,44 @@ export function switchStories(sub: "off" | "on", by: string, o: SwitchOptions = 
       saveGuard(d, file);
       return { changed: true, state: "off", since: at } as SwitchResult;
     }
-    if (!d.off) return { changed: false, state: "on" } as SwitchResult;
+    // Every switch-on starts the counts anew (`from`); it is a change only when something was off or open.
+    if (!d.off && !d.breaker?.open) return { changed: false, state: "on" } as SwitchResult;
+    const closed = !!d.breaker?.open;
     delete d.off;
+    d.breaker = { from: at };
     saveGuard(d, file, check);
-    return { changed: true, state: "on" } as SwitchResult;
+    return { changed: true, state: "on", ...(closed ? { closed: true } : {}) } as SwitchResult;
   }, o.waitMs ?? LOCK_WAIT_MS, sub === "off"); // "off" always gets the lock, from a stuck holder too
   if (result.changed) {
     const reset = result.state === "on" && "reset" in result && !!result.reset;
     writeLog({ event: sub, by, ...(reset ? { reset: true } : {}) }, { now: o.now, onError: o.onLogError, file: o.logFile });
+    if ("closed" in result && result.closed) writeLog({ event: "breaker-closed", by }, { now: o.now, onError: o.onLogError, file: o.logFile });
   }
   return result;
+}
+
+/** How long opening the breaker waits for monitor.lock (the monitor's check must not stall). */
+export const BREAKER_LOCK_WAIT_MS = 200;
+
+/**
+ * Opens the circuit breaker, under monitor.lock. `from` is the `from` the decision was made on: when the file has another
+ * one, a switch-on came in between and nothing is opened. Returns the open breaker (also an existing one), or undefined
+ * when nothing was opened (off, unreadable, or another `from`). Throws when the lock is not free.
+ */
+export function openBreaker(why: BreakerWhy, from: string | undefined, o: SwitchOptions = {}): BreakerOpen | undefined {
+  const file = o.file ?? guardFile();
+  const since = (o.now ?? new Date()).toISOString();
+  return withMonitorLock((locked, own) => {
+    if (!locked) throw new Error("monitor.lock is held by another process; the circuit breaker could not be opened");
+    const loaded = loadGuard(file);
+    if (!loaded.ok || loaded.data.off) return undefined;
+    if (loaded.data.breaker?.open) return loaded.data.breaker.open;
+    if (loaded.data.breaker?.from !== from) return undefined;
+    const open: BreakerOpen = { ...why, since };
+    saveGuard({ ...loaded.data, breaker: { ...loaded.data.breaker, open } }, file, () => {
+      if (!own()) throw new Error("monitor.lock was taken over; the circuit breaker was not opened");
+    });
+    writeLog({ event: "breaker-open", reason: why.reason, count: why.count, ...(why.reason === "findings" ? { minutes: why.minutes } : {}) }, { now: o.now, onError: o.onLogError, file: o.logFile });
+    return open;
+  }, o.waitMs ?? BREAKER_LOCK_WAIT_MS);
 }

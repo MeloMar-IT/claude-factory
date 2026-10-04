@@ -27,7 +27,7 @@ export const RULES: Rule[] = [
   r("PUT", "config", "no", "change the settings"),
   r("GET", "watchers", "no", "list the watchers"),
   r("POST", "watchers/:id/tick", "no", "run a watcher now"),
-  r("GET", "monitor", "no", "whether the monitor makes bug stories (on, off, or quiet after a restart)"),
+  r("GET", "monitor", "no", "whether the monitor makes bug stories (on, off, quiet after a restart, or stopped by the circuit breaker)"),
   r("POST", "monitor/off", "no", "stop the monitor from making bug stories"),
   r("POST", "monitor/on", "no", "let the monitor make bug stories again"),
   r("POST", "clean", "no", "clean up old runs"),

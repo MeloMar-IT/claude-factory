@@ -5,7 +5,7 @@ import { ConfigSchema, WatcherSchema } from "../src/config.js";
 import { saveRun, type RunSummary } from "../src/engine/state.js";
 import { parseFlow } from "../src/flow/load.js";
 import { Monitor, areaLockDir, logRing, readAreaLocks } from "../src/monitor/monitor.js";
-import { loadFindings } from "../src/monitor/findings.js";
+import { loadFindings, saveFindings } from "../src/monitor/findings.js";
 import type { DetectorInput } from "../src/monitor/detectors.js";
 import { Scheduler } from "../src/queue/scheduler.js";
 import { WatcherManager } from "../src/queue/watchers.js";
@@ -49,6 +49,20 @@ describe("monitor", () => {
     makeRun({ status: "stopped", reason: 'stopped at step "wait_for_area"', resumeLog: Array.from({ length: 24 }, (_, i) => ({ at: ago((23 - i) * 25 * SEC), from: "claim_areas" })), ...over });
   const monitor = (over: Partial<ConstructorParameters<typeof Monitor>[1]> = {}, cfg = mcfg()) =>
     new Monitor(cfg, { scheduler, watchers: () => [], thresholds: () => config.monitor, log: (m) => lines.push(m), file, ...over });
+
+  it("makes no finding from a failed or looping run of a bug story, but does for the same runs of another issue", async () => {
+    const story = { repo: "acme/app", issue: 12, url: "u", at: ago(60 * MIN), seen: 1 };
+    saveFindings([{ detector: "x", fingerprint: "x|1", severity: "major", summary: "s", evidence: {}, about: "foundry", firstSeen: ago(MIN), lastSeen: ago(MIN), count: 1, gone: false, report: story }], file);
+    const failing = { error: "weird", reason: "weird failure nobody explained" };
+    makeRun({ vars: { github_repo: "acme/app", issue: "12" }, ...failing });
+    loop({ vars: { github_repo: "acme/app", issue: "12" } });
+    await monitor().tick();
+    expect(loadFindings(file).findings.map((f) => f.fingerprint)).toEqual(["x|1"]);
+    makeRun({ vars: { github_repo: "acme/app", issue: "13" } });
+    loop({ vars: { github_repo: "acme/app", issue: "13" } });
+    await monitor().tick();
+    expect(loadFindings(file).findings.length).toBeGreaterThan(1);
+  });
 
   it("finds the restart loop and keeps the finding over a restart (the second check counts 2)", async () => {
     loop();

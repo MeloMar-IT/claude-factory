@@ -340,7 +340,7 @@ export class Scheduler {
     const live = this.active.get(b.runId)?.summary;
     if (live) return { ...b, status: live.status };
     // An interrupted run ended when its run.json was last written: a time that stays the same.
-    return b.status === "running" && !this.active.has(b.runId) ? { ...b, status: "failed" as const, finishedAt: b.finishedAt ?? b.updatedAt } : b;
+    return b.status === "running" && !this.active.has(b.runId) ? { ...b, status: "failed" as const, finishedAt: b.finishedAt ?? b.updatedAt, interrupted: true } : b;
   }
 
   /** A "running" run.json with no live process was interrupted (e.g. the server died). */

@@ -50,7 +50,7 @@ export function scenarioCtx(w: World): ApiContext {
       queue: () => ({ pending: (w.pending ?? []).map((runId) => ({ runId, kind: "run", enqueuedAt: ago(0.01) })), active: (w.active ?? []).map((runId) => ({ runId })) }),
       isActive: (id: string) => (w.active ?? []).includes(id),
     },
-    watchers: { tracked: () => w.tracked },
+    watchers: { tracked: () => w.tracked, statuses: () => [] },
   } as unknown as ApiContext;
 }
 

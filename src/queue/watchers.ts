@@ -113,6 +113,7 @@ export class WatcherManager {
       rateLimit: () => this.rate,
       beforeCheck: () => this.noteRateLimit(),
       log: this.o.log,
+      guard: { startedAt: this.o.startedAt, onLogError: (m) => this.o.log(`[${cfg.id}] ${m}`) },
       reporter: new Reporter({
         config: () => this.o.config().monitor,
         buildLabel: (r) => buildLabelFor(this.o.config().watchers, r),

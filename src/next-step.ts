@@ -8,7 +8,7 @@ import { statusHelp, statusName } from "./words.js";
 export type NextKind =
   | "questions" | "planner_questions" | "approve_plan" | "approve_split" | "approval"
   | "dependency" | "one_at_a_time" | "area_lock" | "usage_limit" | "daily_budget" | "release"
-  | "failed" | "restart" | "watcher_error" | "watcher_stale" | "closed_elsewhere"
+  | "failed" | "restart" | "watcher_error" | "monitor_stopped" | "watcher_stale" | "closed_elsewhere"
   | "running" | "queued" | "checking" | "starting" | "interrupted" | "cancelled" | "stopped" | "done"
   | "superseded" | "bug_first";
 
@@ -454,6 +454,14 @@ export function nextStep(kind: NextKind, base: NextBase = {}, d: NextData = {}):
       why = `${what}: ${e.why}`;
       action = e.todo;
       say = lowerFirst(e.todo);
+      w = WATCHERS;
+      break;
+    }
+    case "monitor_stopped": {
+      who = "Something is wrong";
+      why = `The monitor stopped making bug stories${d.reason ? `: ${clean(d.reason)}` : ""}`;
+      action = "Switch bug stories on again on the Watchers page";
+      say = "look at what went wrong, then switch bug stories on again on the Watchers page";
       w = WATCHERS;
       break;
     }

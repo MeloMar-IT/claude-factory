@@ -60,6 +60,9 @@ describe("storiesLine", () => {
     expect(admin.storiesLine({ state: "quiet", until: iso(14, 45) }, NOW)).toMatch(/^Bug stories: quiet until .* after the restart$/);
     expect(admin.storiesLine({ state: "unreadable" }, NOW)).toBe("Bug stories: stopped. The state file monitor-guard.json cannot be read.");
   });
+  it("says stopped by the circuit breaker, with the reason", () => {
+    expect(admin.storiesLine({ state: "breaker", since: iso(14, 5), why: "7 new findings within 60 minutes" }, NOW)).toMatch(/^Bug stories: stopped by the circuit breaker since .* \(7 new findings within 60 minutes\)$/);
+  });
   it("adds the day when the time is on another day, and the reset sentence", () => {
     const other = new Date(2026, 9, 3, 9, 0, 0).toISOString();
     expect(admin.storiesLine({ state: "off", since: other }, NOW)).toMatch(/off since .*(Oct|10).*3/);
@@ -90,6 +93,17 @@ describe("the monitor's card", () => {
 
   it("from off the button switches on", async () => {
     state = { state: "off", since: iso(14, 5) };
+    const main = await draw();
+    const b = buttonOf(cards(main)[0]!)!;
+    expect(b.textContent).toBe("Switch bug stories on");
+    sent = [];
+    b.click();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(sent[0]!.url).toBe("/api/monitor/on");
+  });
+
+  it("from the circuit breaker the button switches on", async () => {
+    state = { state: "breaker", since: iso(14, 5), why: "x" };
     const main = await draw();
     const b = buttonOf(cards(main)[0]!)!;
     expect(b.textContent).toBe("Switch bug stories on");
