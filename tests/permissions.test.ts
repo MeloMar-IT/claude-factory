@@ -126,6 +126,8 @@ const EXAMPLES: Record<string, Example> = {
   "GET monitor": no("monitor", 200),
   "POST monitor/off": no("monitor/off", 200, {}),
   "POST monitor/on": no("monitor/on", 200, {}),
+  "POST monitor/mutes": no("monitor/mutes", 400, {}),
+  "DELETE monitor/mutes/:id": no("monitor/mutes/0000000000000000", 404),
   "POST clean": no("clean", 200, {}),
   "GET providers": no("providers", 200),
   "POST providers/test": no("providers/test", 400, {}),
@@ -204,6 +206,8 @@ describe("the table", () => {
   it("finds a rule only for the exact method and number of segments", () => {
     expect(findRule("GET", ["info"])?.path).toBe("info");
     expect(findRule("GET", ["info", "extra"])).toBeUndefined();
+    expect(findRule("POST", ["monitor", "mutes"])?.path).toBe("monitor/mutes");
+    expect(findRule("DELETE", ["monitor", "mutes", "0000000000000000"])?.path).toBe("monitor/mutes/:id");
     expect(findRule("POST", ["flows"])).toBeUndefined();
     expect(findRule("GET", [])).toBeUndefined();
     expect(findRule("GET", ["runs", "a", "b"])).toBeUndefined();

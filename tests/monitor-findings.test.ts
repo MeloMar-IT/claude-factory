@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { dayOf, loadFindings, mergeFindings, saveFindings, type FindingInput } from "../src/monitor/findings.js";
+import { dayOf, loadFindings, mergeFindings, readFindings, saveFindings, type FindingInput } from "../src/monitor/findings.js";
 
 const HOUR = 3_600_000;
 const T0 = new Date("2026-10-01T12:00:00Z");
@@ -229,6 +229,15 @@ describe("the findings file", () => {
       expect(existsSync(file)).toBe(false);
       expect(readFileSync(`${file}.broken`, "utf8")).toBe(bytes);
     }
+  });
+
+  it("readFindings on a broken file says broken and leaves the file alone", () => {
+    const file = join(dir, "f.json");
+    writeFileSync(file, "{not json");
+    expect(readFindings(file)).toEqual({ findings: [], broken: true });
+    expect(readFileSync(file, "utf8")).toBe("{not json");
+    expect(existsSync(`${file}.broken`)).toBe(false);
+    expect(readFindings(join(dir, "missing.json"))).toEqual({ findings: [], broken: false });
   });
 
   it("save then load gives the same data, and no .tmp file is left", () => {

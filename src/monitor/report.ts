@@ -4,7 +4,8 @@ import { commentOnIssue, createIssue, createLabelIfMissing, listIssuesByLabel, r
 import { LABEL_WORDS } from "../words.js";
 import { cleanLines, type CleanDeps, type Names } from "./clean.js";
 import { dayOf, type Finding, type Severity, type StoryRef } from "./findings.js";
-import type { LogEntry, Verdict } from "./guard.js";
+import type { LogEntry, Mute, Verdict } from "./guard.js";
+import { muteFor } from "./mutes.js";
 import { buildStory, hashIn, markerHash, seenAgainComment, type BuiltinSteps } from "./story.js";
 
 const HOUR = 3_600_000;
@@ -16,6 +17,8 @@ export const COMMENT_EVERY_MS = 6 * HOUR;
 /** At most this many calls to GitHub in one check (the manager's own reads of the request limit come on top). */
 export const CALL_BUDGET = 6;
 const CALL_TIMEOUT_MS = 20_000;
+/** The skip reason of a finding that an admin muted. */
+const MUTED = "muted";
 const BUG = { name: "bug", color: "d73a4a", description: "Something isn't working" };
 
 /** Pure helper for the watcher manager: the label of the issue watcher of a repository that builds its stories. */
@@ -35,6 +38,8 @@ export interface ReporterDeps {
   guard?: () => Verdict;
   /** Writes one line to the monitor's own log (a story made or skipped, with the reason). */
   record?: (entry: LogEntry) => void;
+  /** The admin's mutes in force at a time. Asked at the top of a check and again right before a story or a comment. Without it, nothing is muted. */
+  mutes?: (now: Date) => Mute[];
   /** The server log: only a cleaned error line goes there. */
   log?: (msg: string) => void;
   /** For tests. */
@@ -120,17 +125,27 @@ export class Reporter {
       }
       return !shut;
     };
+    /** The admin's mutes: read at the top, and again right before a story or a comment (a mute may come in during the check). */
+    let mutes = this.d.mutes?.(now) ?? [];
+    const muteOf = (f: Finding) => muteFor(mutes, f);
     const markDue = (f: Finding) => {
-      if (shut || f.due || !owes(f)) return;
+      if (shut || f.due || !owes(f) || muteOf(f)) return;
       f.due = stamp;
       touched = true;
     };
     /** Writes a skipped story to the log, once per finding and reason. */
-    const skip = (f: Finding, reason: string) => {
-      if (f.skipped?.includes(reason)) return;
-      f.skipped = [...(f.skipped ?? []), reason];
+    const skip = (f: Finding, reason: string, by?: Mute) => {
+      // A mute is remembered with its id (`muted:<id>`): another mute that takes over is logged again with its own reason.
+      const key = by ? `${reason}:${by.id}` : reason;
+      if (f.skipped?.includes(key)) return;
+      f.skipped = [...(f.skipped ?? []).filter((r) => !by || !r.startsWith(`${reason}:`)), key];
       touched = true;
-      this.d.record?.({ event: "story-skipped", reason, detector: f.detector, fingerprint: f.fingerprint, repo: target });
+      this.d.record?.({ event: "story-skipped", reason, detector: f.detector, fingerprint: f.fingerprint, repo: target, ...(by ? { mute: by.id, text: by.reason, ...(by.until ? { until: by.until } : {}) } : {}) });
+    };
+    /** A muted finding that would be owed a story (or is owed one): the reason is logged once; nothing else happens. */
+    const skipMuted = (f: Finding) => {
+      const m = muteOf(f);
+      if (m && (owes(f) || (f.due && !muted(f) && !open(f)))) skip(f, MUTED, m);
     };
 
     go(); // 1. May stories be made at all? A closed gate owes nothing new.
@@ -146,11 +161,22 @@ export class Reporter {
     // 3. What is owed now.
     for (const f of findings) markDue(f);
 
-    const queueOf = () => findings.filter((f) => f.due && !muted(f) && !open(f)).sort((a, b) => RANK[a.severity] - RANK[b.severity] || Date.parse(a.due!) - Date.parse(b.due!));
+    for (const f of findings) {
+      // A mute that ended: the reason is written again if the finding is muted again.
+      if (f.skipped?.some((r) => r.startsWith(`${MUTED}:`)) && !muteOf(f)) {
+        const left = f.skipped.filter((r) => !r.startsWith(`${MUTED}:`));
+        if (left.length) f.skipped = left;
+        else delete f.skipped;
+        touched = true;
+      }
+      skipMuted(f);
+    }
+
+    const queueOf = () => findings.filter((f) => f.due && !muted(f) && !open(f) && !muteOf(f)).sort((a, b) => RANK[a.severity] - RANK[b.severity] || Date.parse(a.due!) - Date.parse(b.due!));
     const madeToday = () => findings.filter((f) => f.report && dayOf(new Date(f.report.at)) === dayOf(now)).length;
     const allowedNow = () => Math.max(0, Math.min(per_check, per_day - madeToday()));
     let queue = queueOf();
-    const look = findings.filter((f) => seenNow(f) && mine(f) && t - Date.parse(mine(f)!.lookedAt ?? mine(f)!.at) >= COMMENT_EVERY_MS);
+    const look = findings.filter((f) => seenNow(f) && !muteOf(f) && mine(f) && t - Date.parse(mine(f)!.lookedAt ?? mine(f)!.at) >= COMMENT_EVERY_MS);
 
     // 6. Notes that need no call.
     const label = this.d.buildLabel(target);
@@ -159,7 +185,7 @@ export class Reporter {
     const shutNote = (n: number) => `${plural(n)}: ${shut!.note}.`;
     if (shut) {
       // No call to GitHub, no comment. Findings that are owed (or would be) wait; each reason is logged once.
-      const waiting = findings.filter((f) => queue.includes(f) || owes(f));
+      const waiting = findings.filter((f) => !muteOf(f) && (queue.includes(f) || owes(f)));
       for (const f of waiting) skip(f, shut.reason);
       if (waiting.length) notes.push(shutNote(waiting.length));
       return done();
@@ -218,7 +244,7 @@ export class Reporter {
         f.report = r;
         touched = true;
       };
-      const syncing = findings.filter((f) => queue.includes(f) || (seenNow(f) && mine(f)));
+      const syncing = findings.filter((f) => !muteOf(f) && (queue.includes(f) || (seenNow(f) && mine(f))));
       for (const f of syncing) {
         const match = byHash.get(markerHash(f.fingerprint));
         if (match) {
@@ -279,6 +305,13 @@ export class Reporter {
         const previous = mine(f)?.issue;
         const story = buildStory(f, { lines, previous, builtinSteps: this.d.builtinSteps() });
         if (!go()) break; // asked again right before the call, after the awaits and the building of the text
+        // A mute may have come in during the check (another process): no story. The slot is not given to another finding.
+        mutes = this.d.mutes?.(now) ?? mutes;
+        const late = muteOf(f);
+        if (late) {
+          skip(f, MUTED, late);
+          continue;
+        }
         let issue: RestIssue;
         try {
           issue = await createIssue(target, { title: story.title, body: story.body, labels: wanted.map((l) => l.name) }, CALL_TIMEOUT_MS);
@@ -309,7 +342,8 @@ export class Reporter {
       }
       open1.sort((a, b) => Date.parse(mine(a)!.lookedAt ?? mine(a)!.at) - Date.parse(mine(b)!.lookedAt ?? mine(b)!.at));
       const next = open1[0];
-      if (next && go() && spend(1)) {
+      if (next) mutes = this.d.mutes?.(now) ?? mutes;
+      if (next && !muteOf(next) && go() && spend(1)) {
         const before = mine(next)!;
         next.report = { ...before, lookedAt: stamp };
         commit(); // saved first: a lost answer must not mean a second comment

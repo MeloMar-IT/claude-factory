@@ -1,8 +1,9 @@
-import { breakerWhy, currentState, switchStories } from "./guard.js";
+import { breakerWhy, currentState, loadGuard, switchStories } from "./guard.js";
+import { activeMutes, muteLine } from "./mutes.js";
 
 export const MONITOR_USAGE = `usage: scf monitor off      Stop the monitor from making bug stories
        scf monitor on       Let it make bug stories again
-       scf monitor status   Print the state`;
+       scf monitor status   Print the state and the mutes`;
 
 const UNREADABLE = "monitor-guard.json cannot be read";
 
@@ -18,6 +19,11 @@ export function monitorCommand(positionals: string[], out: (line: string) => voi
     }
     if (s.state === "breaker") out(`bug stories: stopped by the circuit breaker since ${s.since} (${breakerWhy(s)}); scf monitor on switches them on again`);
     else out(s.state === "off" ? `bug stories: off since ${s.since} (by ${s.by})` : "bug stories: on");
+    const mutes = activeMutes(loadGuard(), new Date());
+    if (mutes.length) {
+      out(`mutes: ${mutes.length}`);
+      for (const m of mutes) out(`  ${muteLine(m)}`);
+    }
     return 0;
   }
   const r = switchStories(sub, "cli");

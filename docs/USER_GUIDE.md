@@ -704,8 +704,9 @@ detector, a fingerprint (the same problem gives the same one), a severity, one s
 evidence, when it was first and last seen and how often. A finding not seen for 24 hours becomes
 *gone* (kept 30 days; at most 500 findings are kept, not counting those with a bug story or an
 owed one). A file that cannot be read is kept as `monitor-findings.json.broken`. If the monitor's
-own check fails, the Health line says so. Findings are not shown in the app yet; the monitor's card
-on the Watchers page shows what waits or is wrong with its bug stories.
+own check fails, the Health line says so. The monitor's card on the Watchers page shows what waits
+or is wrong with its bug stories, and lists the findings and the mutes (see
+[Mute a detector or a finding](#mute-a-detector-or-a-finding)).
 
 #### Bug stories from the monitor
 
@@ -734,7 +735,7 @@ monitor:
   comment "Seen again: N times since …" is added at most every 6 hours.
 - **Came back.** If the story was closed as completed and the problem returns (at least 24 hours
   after the close, with new proof), a new story links the old one. Closed as *not planned* means
-  muted: reopen the story to unmute it.
+  muted: reopen the story to unmute it. (That is not an admin's mute; see below.)
 - **Limits.** 3 new stories a day, 1 per check (most severe first). The rest waits and the card
   says how many. At most 6 GitHub calls per check. If GitHub cannot be reached or its request limit
   is used up, nothing is lost; the stories are made at a later check.
@@ -771,11 +772,12 @@ One switch stops the monitor from making bug stories. It needs no GitHub.
 - **A state file that cannot be read.** Stories stop and the card says so. `scf monitor on` or the
   button keeps the old file as `monitor-guard.json.broken` (older ones as `.broken.1`, `.broken.2`,
   …), starts a fresh file and switches on. Later parts add other state to this file; it is reset
-  too, and the card and the log say so. "Off" does nothing on an unreadable file.
+  too (the mutes as well), and the card and the log say so. "Off" does nothing on an unreadable file.
 - **The log.** `monitor-log.jsonl` in the data folder has one JSON line per event: `off`, `on`,
-  `story-made`, `story-skipped`, `breaker-open`, `breaker-closed` and `fix-failed`, with the reason
-  for a skipped story (`off`, `cooldown`, `unreadable`, `breaker`, `day_limit`, `check_limit`,
-  `request_limit`, `github`). A skipped story is written once per finding and reason, not at every
+  `story-made`, `story-skipped`, `breaker-open`, `breaker-closed`, `fix-failed`, `mute-made` and
+  `mute-ended`, with the reason for a skipped story (`off`, `cooldown`, `unreadable`, `breaker`,
+  `muted`, `day_limit`, `check_limit`, `request_limit`, `github`). A story skipped because of a
+  mute also has the mute's id and its reason text. A skipped story is written once per finding and reason, not at every
   check (and again each time the circuit breaker opens). The file moves to `monitor-log.1.jsonl` at 512 KiB, so it keeps
   between 512 KiB and 1 MiB of history. Lines from the server also show in the card's recent
   activity; a switch made on the command line does not.
@@ -802,6 +804,30 @@ The monitor stops making stories by itself when many things go wrong at once. It
 - **Switch on again.** Only an admin: the button on the monitor's card or `scf monitor on`. The log
   gets `on` and `breaker-closed`. Every switch-on starts the counts anew: findings and failed runs
   from before do not open the breaker again. Look at what went wrong first.
+
+#### Mute a detector or a finding
+
+Some problems are known noise. An admin can mute one detector (by name) or one finding, so that it
+does not become a bug story.
+
+- **Make a mute.** On the monitor's card (Watchers page) open **Findings (N) · Mutes (M)**. Press
+  **Mute** on a finding, or **Mute a detector**. Give a reason (required, at most 200 characters)
+  and choose how long: for good, 1 hour, 1 day, 1 week or 30 days. The API takes any number of
+  hours up to 8760 (one year).
+- **See and end mutes.** The list shows each mute with its reason, since when and until when.
+  **End mute** ends it at once. An admin can end any mute. A mute for a time ends by itself; the
+  log gets `mute-ended` with the reason `expired`. `scf monitor status` lists the mutes too.
+- **What a mute stops.** No story is owed or made, and no "seen again" comment is written, for a
+  muted finding. A story that was owed before the mute is not made while the mute lasts; it is
+  made at the next check after the mute ends (if the problem still lasts).
+- **What it does not stop.** Findings are still recorded (count, last seen) and shown. A story that
+  already exists keeps its build label, so it is still built. Muted findings do not count for the
+  circuit breaker, and neither do the failed runs of their stories.
+- **The log.** `mute-made` and `mute-ended` (with who, and the reason text), and one
+  `story-skipped` line with reason `muted` for a story that a mute held back.
+- **Limits.** One mute per detector and one per finding at a time (a finding can be muted next to
+  its detector; the mute of the finding wins). At most 200 mutes. Mutes are kept in
+  `monitor-guard.json` as account ids, never names or e-mail addresses.
 
 ### How issue watchers use labels
 
@@ -1666,9 +1692,11 @@ Change a role with `scf user role <e-mail> admin|user`, or create an admin with
 | `PUT /api/config` | yes | no | change the settings |
 | `GET /api/watchers` | yes | no | list the watchers |
 | `POST /api/watchers/:id/tick` | yes | no | run a watcher now |
-| `GET /api/monitor` | yes | no | whether the monitor makes bug stories (on, off, quiet after a restart, or stopped by the circuit breaker) |
+| `GET /api/monitor` | yes | no | whether the monitor makes bug stories (on, off, quiet after a restart, or stopped by the circuit breaker), its findings and its mutes |
 | `POST /api/monitor/off` | yes | no | stop the monitor from making bug stories |
 | `POST /api/monitor/on` | yes | no | let the monitor make bug stories again |
+| `POST /api/monitor/mutes` | yes | no | mute one detector or one finding of the monitor, with a reason, for a time or for good |
+| `DELETE /api/monitor/mutes/:id` | yes | no | end a mute |
 | `POST /api/clean` | yes | no | clean up old runs |
 | `GET /api/providers` | yes | no | agent providers |
 | `POST /api/providers/test` | yes | no | test a provider |
@@ -1959,7 +1987,7 @@ The command is `scf`. `factory` still works as an alias and prints a short note.
 | `scf user delete <e-mail>` | Delete an account, its sessions and its stored credentials (not the last admin) |
 | `scf credential rotate-key` | Re-encrypt all stored credentials under a new key |
 | `scf credential check` | Check that the macOS Keychain can store, read and remove the key |
-| `scf monitor off` / `on` / `status` | Stop the monitor from making bug stories, let it make them again (this also closes the circuit breaker), or print the state. Works when the server is not running |
+| `scf monitor off` / `on` / `status` | Stop the monitor from making bug stories, let it make them again (this also closes the circuit breaker), or print the state and the mutes. Works when the server is not running |
 
 The password is asked twice on a terminal, or read from the first line of stdin; it is never an
 option or an environment variable. A password has 12 to 200 characters and must not be a common

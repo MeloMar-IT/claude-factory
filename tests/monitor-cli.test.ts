@@ -53,6 +53,24 @@ describe("scf monitor", () => {
     expect(run("monitor", "status")).toMatchObject({ code: 0, out: "bug stories: on\n" });
   });
 
+  it("status lists the mutes in force, the finding by its hash, and leaves out an expired one", () => {
+    const base = { since: "2026-10-01T10:00:00.000Z", by: "cli", reason: "noise" };
+    writeFileSync(join(home, "monitor-guard.json"), JSON.stringify({ version: 1, mutes: [
+      { ...base, id: "0000000000000001", kind: "detector", detector: "slow-step" },
+      { ...base, id: "0000000000000002", kind: "finding", detector: "restart-loop", fingerprint: "restart-loop|secret", until: "2999-01-01T00:00:00.000Z" },
+      { ...base, id: "0000000000000003", kind: "detector", detector: "stuck-run", until: "2026-10-01T11:00:00.000Z" },
+    ] }));
+    const s = run("monitor", "status");
+    expect(s.code).toBe(0);
+    const out = s.out.split("\n");
+    expect(out[0]).toBe("bug stories: on");
+    expect(out[1]).toBe("mutes: 2");
+    expect(out[2]).toBe("  detector slow-step: noise (since 2026-10-01T10:00:00.000Z, for good, by cli)");
+    expect(out[3]).toMatch(/^ {2}finding [0-9a-f]{16} of restart-loop: noise/);
+    expect(s.out).not.toContain("secret");
+    expect(s.out).not.toContain("stuck-run");
+  });
+
   it("off writes by cli, a second off says already off, status shows it, on switches back", () => {
     expect(run("monitor", "off")).toMatchObject({ code: 0, out: "bug stories are off\n" });
     expect(state().off?.by).toBe("cli");
