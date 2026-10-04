@@ -38,7 +38,7 @@ function stub(o: { config?: ReturnType<typeof cfg>; runs?: ReturnType<typeof run
       briefs: () => runs.map((r) => ({ runId: r.runId, flow: r.flow, status: r.status, startedAt: r.startedAt, finishedAt: r.finishedAt, source: r.source, runDir: r.runDir })),
       queue: () => ({ pending: [], active: [] }),
     },
-    watchers: { tracked: () => o.tracked ?? [] },
+    watchers: { tracked: () => o.tracked ?? [], statuses: () => [] },
   } as unknown as ApiContext;
 }
 

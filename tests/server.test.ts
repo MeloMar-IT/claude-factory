@@ -138,6 +138,20 @@ describe("ui server", () => {
       expect((await json("PUT", "/api/config", { ...cfg, watchers: [] })).status).toBe(200);
     });
 
+    it("an open circuit breaker shows with its reason; on closes it, logs it, and the Your turn item goes", async () => {
+      const cfg = (await (await json("GET", "/api/config")).json()) as { watchers: unknown[] };
+      expect((await json("PUT", "/api/config", { ...cfg, watchers: [{ id: "mon", source: "monitor", every: "1h" }] })).status).toBe(200);
+      writeFileSync(join(home(), "monitor-guard.json"), JSON.stringify({ version: 1, breaker: { open: { since: new Date().toISOString(), reason: "findings", count: 7, minutes: 60 } } }));
+      expect(await get()).toMatchObject({ state: "breaker", why: "7 new findings within 60 minutes", count: 7 });
+      const turn = async () => ((await (await json("GET", "/api/your-turn")).json()) as { groups: { items: { next: { kind: string } }[] }[] }).groups.flatMap((g) => g.items.map((i) => i.next.kind));
+      expect(await turn()).toContain("monitor_stopped");
+      expect(await (await json("POST", "/api/monitor/on", {})).json()).toMatchObject({ changed: true, closed: true });
+      expect(logLines().map((l) => l.event).slice(-2)).toEqual(["on", "breaker-closed"]);
+      expect((await activity())[0]).toContain("circuit breaker closed");
+      expect(await turn()).not.toContain("monitor_stopped");
+      expect((await json("PUT", "/api/config", { ...cfg, watchers: [] })).status).toBe(200);
+    });
+
     it("a broken file reads as unreadable; on resets it and keeps .broken", async () => {
       writeFileSync(join(home(), "monitor-guard.json"), "{nope");
       expect(await get()).toMatchObject({ state: "unreadable" });

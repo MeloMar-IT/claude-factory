@@ -378,6 +378,7 @@ Every status in the app has a **?** that shows the two sentences from this table
 | cancelled | Someone cancelled the run. A watched issue resumes by itself at the next check, any other run you resume on its page if you still want it. |
 | failed | A step failed and the run could not go on. Fix the cause if needed, then start over or resume the run at the failed step. When the Foundry itself failed: The Foundry itself failed, not the code: a blocked command, a marker it could not read or a broken setting. Follow the suggested fix, then start over or resume the run. |
 | watcher error | The watcher could not do its check, so its issues do not move. Look at the error on the Watchers page and fix the cause, it then tries again at the next check. |
+| bug stories stopped | The monitor stopped making bug stories, because many new problems appeared at once or its fixes kept failing. Look at what went wrong, then switch bug stories on again on the Watchers page. |
 | watcher silent | The watcher has not finished a check for a long time, so its issues do not move. Press Check now on the Watchers page. |
 | closed on GitHub, run still busy | The issue was closed on GitHub, but its run is still working or waits for approval and nothing was changed. Cancel the run on its page if the work is no longer wanted. |
 | restarting soon | The server waits to restart and starts nothing new until then. Nothing to do — it restarts when the active runs are done. |
@@ -717,6 +718,7 @@ monitor:
   report_to: your-name/your-foundry-repo
   report_limits: { per_day: 3, per_check: 1 }   # per_check: at most 3
   cooldown_minutes: 10                          # quiet time after a server start; 0: none
+  breaker: { new_findings: 5, within_minutes: 60, failed_fixes: 3 }   # the circuit breaker
 ```
 
 - **When.** Critical and major findings: after 2 checks in a row. Minor: after 3 different days. A
@@ -736,6 +738,11 @@ monitor:
 - **Limits.** 3 new stories a day, 1 per check (most severe first). The rest waits and the card
   says how many. At most 6 GitHub calls per check. If GitHub cannot be reached or its request limit
   is used up, nothing is lost; the stories are made at a later check.
+
+- **Never a story about a story.** A run that builds a bug story of the monitor is never a finding,
+  whether it fails, hangs, is slow, loops, holds a lock or its label is wrong. This also holds for a
+  story that a newer one replaced. A failed run of a bug story is written on the finding as "the
+  fix failed" (how often and when) and in the log.
 
 *Unexplained* is strict: no rule in the Foundry's failure rules matched (an AI's summary does not
 count). An ordinary failing command (`exit code 1`) is explained. The request-limit numbers come
@@ -766,14 +773,35 @@ One switch stops the monitor from making bug stories. It needs no GitHub.
   …), starts a fresh file and switches on. Later parts add other state to this file; it is reset
   too, and the card and the log say so. "Off" does nothing on an unreadable file.
 - **The log.** `monitor-log.jsonl` in the data folder has one JSON line per event: `off`, `on`,
-  `story-made` and `story-skipped`, with the reason (`off`, `cooldown`, `unreadable`, `day_limit`,
-  `check_limit`, `request_limit`, `github`). A skipped story is written once per finding and
-  reason, not at every check. The file moves to `monitor-log.1.jsonl` at 512 KiB, so it keeps
+  `story-made`, `story-skipped`, `breaker-open`, `breaker-closed` and `fix-failed`, with the reason
+  for a skipped story (`off`, `cooldown`, `unreadable`, `breaker`, `day_limit`, `check_limit`,
+  `request_limit`, `github`). A skipped story is written once per finding and reason, not at every
+  check (and again each time the circuit breaker opens). The file moves to `monitor-log.1.jsonl` at 512 KiB, so it keeps
   between 512 KiB and 1 MiB of history. Lines from the server also show in the card's recent
   activity; a switch made on the command line does not.
 - **Lock.** Changes take `monitor.lock` in the data folder for a moment. If `scf monitor on` says
   the lock is held, try again; if no process uses it, remove the folder `monitor.lock`. "Off" never
   waits for it: it takes the lock over.
+
+#### The circuit breaker
+
+The monitor stops making stories by itself when many things go wrong at once. It only works when
+`report_to` is set and bug stories are not switched off.
+
+- **When it opens.** More than `new_findings` (default 5) different findings first appear within
+  `within_minutes` (60), or the newest `failed_fixes` (3) finished runs of bug stories all failed.
+  A succeeded run between failed ones resets the count; cancelled, stopped and interrupted runs
+  neither count nor reset. Findings first seen in the quiet time after a restart do not count.
+- **What stops.** No story, as with the off switch. Findings are still recorded. The log has a
+  `breaker-open` line and one `story-skipped` line (reason `breaker`) for each story that is owed.
+  The reason and the time are kept in `monitor-guard.json`, so a restart does not close it.
+- **Your turn.** An admin sees one item, "The monitor stopped making bug stories", with the reason
+  and the way back: switch bug stories on again on the Watchers page. It cannot be dismissed and
+  goes away when the breaker is closed. The card says "Bug stories: stopped by the circuit
+  breaker since …"; `scf monitor status` says so too.
+- **Switch on again.** Only an admin: the button on the monitor's card or `scf monitor on`. The log
+  gets `on` and `breaker-closed`. Every switch-on starts the counts anew: findings and failed runs
+  from before do not open the breaker again. Look at what went wrong first.
 
 ### How issue watchers use labels
 
@@ -1638,7 +1666,7 @@ Change a role with `scf user role <e-mail> admin|user`, or create an admin with
 | `PUT /api/config` | yes | no | change the settings |
 | `GET /api/watchers` | yes | no | list the watchers |
 | `POST /api/watchers/:id/tick` | yes | no | run a watcher now |
-| `GET /api/monitor` | yes | no | whether the monitor makes bug stories (on, off, or quiet after a restart) |
+| `GET /api/monitor` | yes | no | whether the monitor makes bug stories (on, off, quiet after a restart, or stopped by the circuit breaker) |
 | `POST /api/monitor/off` | yes | no | stop the monitor from making bug stories |
 | `POST /api/monitor/on` | yes | no | let the monitor make bug stories again |
 | `POST /api/clean` | yes | no | clean up old runs |
@@ -1931,7 +1959,7 @@ The command is `scf`. `factory` still works as an alias and prints a short note.
 | `scf user delete <e-mail>` | Delete an account, its sessions and its stored credentials (not the last admin) |
 | `scf credential rotate-key` | Re-encrypt all stored credentials under a new key |
 | `scf credential check` | Check that the macOS Keychain can store, read and remove the key |
-| `scf monitor off` / `on` / `status` | Stop the monitor from making bug stories, let it make them again, or print the state. Works when the server is not running |
+| `scf monitor off` / `on` / `status` | Stop the monitor from making bug stories, let it make them again (this also closes the circuit breaker), or print the state. Works when the server is not running |
 
 The password is asked twice on a terminal, or read from the first line of stdin; it is never an
 option or an environment variable. A password has 12 to 200 characters and must not be a common

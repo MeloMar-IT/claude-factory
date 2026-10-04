@@ -140,6 +140,7 @@ describe("next-step records, one per kind", () => {
     ["restart", {}, "Foundry", "Nothing — it continues by itself", "#/watchers"],
     ["watcher_error", { reason: "gh failed" }, "Something is wrong", "Look at Error details on the Watchers page", "#/watchers"],
     ["closed_elsewhere", {}, "You", "Cancel the run if the work is no longer wanted", "#/runs/r1"],
+    ["monitor_stopped", { reason: "7 new findings within 60 minutes" }, "Something is wrong", "Switch bug stories on again on the Watchers page", "#/watchers"],
     ["watcher_stale", { lastCheck: "2026-10-01T11:20:00Z", timeZone: "UTC" }, "Something is wrong", "Press Check now on the Watchers page", "#/watchers"],
     ["running", data, "Foundry", "Nothing — it continues by itself", ISSUE],
     ["queued", {}, "Foundry", "Nothing — it continues by itself", "#/runs/r1"],
@@ -244,7 +245,7 @@ describe("next-step records, one per kind", () => {
   });
 
   it("has a kind in the table for every kind", () => {
-    expect(new Set(cases.map((c) => c[0])).size).toBe(26);
+    expect(new Set(cases.map((c) => c[0])).size).toBe(27);
   });
 
   it("says why a closed issue and a silent watcher need attention", () => {

@@ -112,6 +112,27 @@ describe("bug story state in findings", () => {
     }
   });
 
+  it("fixFailed, quietStart and earlier are carried; quietStart is dropped when a gone finding comes back; bad ones are dropped on load", () => {
+    const extra = { fixFailed: { count: 2, at: T0.toISOString() }, quietStart: true, earlier: [{ repo: "a/b", issue: 3 }] };
+    const f = [{ ...base()[0]!, ...extra }];
+    expect(mergeFindings(f, [input("x")], at(HOUR)).findings[0]).toMatchObject(extra);
+    const gone = mergeFindings(f, [], at(25 * HOUR)).findings;
+    const back = mergeFindings(gone, [input("x")], at(26 * HOUR)).findings[0]!;
+    expect(back.quietStart).toBeUndefined();
+    expect(back).toMatchObject({ fixFailed: extra.fixFailed, earlier: extra.earlier });
+    const dir = mkdtempSync(join(tmpdir(), "monitor-findings-"));
+    try {
+      const file = join(dir, "f.json");
+      const good = base()[0]!;
+      writeFileSync(file, JSON.stringify({ version: 1, findings: [{ ...good, ...extra }, { ...good, fingerprint: "m", fixFailed: { count: 0, at: "x" }, earlier: "no", quietStart: "yes" }, { ...good, fingerprint: "n", earlier: [{ repo: 1 }] }] }));
+      const r = loadFindings(file).findings;
+      expect(r[0]).toMatchObject(extra);
+      expect(r.slice(1).map((x) => [x.fixFailed, x.earlier, x.quietStart])).toEqual([[undefined, undefined, undefined], [undefined, undefined, undefined]]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("a stored finding with a report that is not seen gets missedAt; one without is unchanged", () => {
     const withReport = { ...base()[0]!, report };
     const plain = { ...mergeFindings([], [input("y")], T0).findings[0]! };

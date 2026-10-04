@@ -1,4 +1,4 @@
-import { currentState, describeEntry, switchStories, type StoriesState } from "../monitor/guard.js";
+import { breakerWhy, currentState, describeEntry, switchStories, type StoriesState } from "../monitor/guard.js";
 import { HttpError, send } from "./http.js";
 import type { ApiContext, Route } from "./server.js";
 
@@ -6,7 +6,7 @@ import type { ApiContext, Route } from "./server.js";
 function view(ctx: ApiContext) {
   const monitor = ctx.config().monitor;
   const state: StoriesState = currentState({ startedAt: ctx.watchers.startedAt, cooldownMinutes: monitor.cooldown_minutes });
-  return { ...state, reportTo: !!monitor.report_to };
+  return { ...state, ...(state.state === "breaker" ? { why: breakerWhy(state) } : {}), reportTo: !!monitor.report_to };
 }
 
 /** The off switch of the monitor's bug stories (admin only; the rules are in permissions.ts). */
@@ -25,5 +25,6 @@ export const monitorRoutes: Route = async (ctx, _req, res, seg, method, user) =>
     throw new HttpError(409, (e as Error).message);
   }
   if (r.changed) ctx.watchers.monitorAct(describeEntry({ event: sub }));
-  return send(res, 200, { ...view(ctx), changed: r.changed, ...("reset" in r && r.reset ? { reset: r.reset } : {}) }), true;
+  if ("closed" in r && r.closed) ctx.watchers.monitorAct(describeEntry({ event: "breaker-closed" }));
+  return send(res, 200, { ...view(ctx), changed: r.changed, ...("closed" in r && r.closed ? { closed: true } : {}), ...("reset" in r && r.reset ? { reset: r.reset } : {}) }), true;
 };

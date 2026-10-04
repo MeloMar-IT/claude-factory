@@ -8,7 +8,7 @@ import { loadFindings } from "../src/monitor/findings.js";
 import type { Names } from "../src/monitor/clean.js";
 import {
   currentState, describeEntry, guardFile, loadGuard, logFile, logLine, lockDir, HARD_LOG_BYTES, MAX_LINE_BYTES, MAX_LOG_BYTES, olderLogFile, saveGuard, storiesState,
-  storiesVerdict, switchStories, withMonitorLock, writeLog, type LogEntry, type Verdict,
+  breakerNow, openBreaker, storiesVerdict, switchStories, withMonitorLock, writeLog, type LogEntry, type Verdict,
 } from "../src/monitor/guard.js";
 import { Monitor } from "../src/monitor/monitor.js";
 import { Reporter } from "../src/monitor/report.js";
@@ -53,11 +53,11 @@ describe("the state file", () => {
   });
 
   it("keeps unknown keys over off and on, and keeps the first `since` of a second off", () => {
-    saveGuard({ version: 1, breaker: { open: false } });
+    saveGuard({ version: 1, extra: 7 });
     expect(switchStories("off", "cli", { now: at(0) })).toMatchObject({ changed: true, state: "off" });
     expect(switchStories("off", UUID, { now: at(1) })).toEqual({ changed: false, state: "off", since: at(0).toISOString() });
-    expect(switchStories("on", UUID)).toMatchObject({ changed: true, state: "on" });
-    expect(loadGuard()).toEqual({ ok: true, data: { version: 1, breaker: { open: false } } });
+    expect(switchStories("on", UUID, { now: at(2) })).toMatchObject({ changed: true, state: "on" });
+    expect(loadGuard()).toEqual({ ok: true, data: { version: 1, extra: 7, breaker: { from: at(2).toISOString() } } });
     expect(switchStories("on", UUID)).toEqual({ changed: false, state: "on" });
   });
 
@@ -87,7 +87,7 @@ describe("a state file that cannot be read", () => {
       const r = switchStories("on", "cli", { now: at(0) });
       expect(r).toMatchObject({ changed: true, state: "on", reset: at(0).toISOString() });
       expect(lstatSync(`${guardFile()}.broken`)).toBeDefined();
-      expect(loadGuard()).toEqual({ ok: true, data: { version: 1, reset: at(0).toISOString() } });
+      expect(loadGuard()).toEqual({ ok: true, data: { version: 1, reset: at(0).toISOString(), breaker: { from: at(0).toISOString() } } });
       expect(logLines()).toMatchObject([{ event: "on", by: "cli", reset: true }]);
       expect(leftovers()).toEqual([]);
       expect(switchStories("off", "cli", { now: at(1) })).toMatchObject({ changed: true });
@@ -522,5 +522,81 @@ describe("the reporter with the guard", () => {
     found = [fi("a"), fi("b"), fi("c"), fi("d")];
     await check(3);
     expect(skips("day_limit").length).toBeGreaterThan(0);
+  });
+});
+
+describe("the circuit breaker in the state file", () => {
+  const open = { since: at(0).toISOString(), reason: "findings", count: 7, minutes: 60 };
+
+  it("reads valid shapes and refuses malformed ones", () => {
+    saveGuard({ version: 1, breaker: { from: at(0).toISOString(), open: open as never } });
+    expect(loadGuard().ok).toBe(true);
+    saveGuard({ version: 1, breaker: { open: { since: at(0).toISOString(), reason: "failed_fixes", count: 3 } } });
+    expect(loadGuard().ok).toBe(true);
+    const bad: unknown[] = [5, [], { from: "x" }, { open: 1 }, { open: { ...open, count: 0 } }, { open: { ...open, count: 1.5 } }, { open: { ...open, reason: "other" } },
+      { open: { ...open, minutes: -1 } }, { open: { ...open, since: "x" } }, { open: { since: open.since, reason: "findings", count: 7 } }];
+    for (const breaker of bad) {
+      writeFileSync(guardFile(), JSON.stringify({ version: 1, breaker }));
+      expect(loadGuard()).toEqual({ ok: false });
+    }
+  });
+
+  it("the states and the verdict: off wins over the breaker, the breaker over quiet", () => {
+    const data = { version: 1, breaker: { open: open as never } };
+    const o = { startedAt: at(0), cooldownMinutes: 10, now: at(0) };
+    expect(storiesState({ ok: true, data }, o)).toMatchObject({ state: "breaker", reason: "findings", count: 7 });
+    expect(storiesState({ ok: true, data: { ...data, off: { since: at(0).toISOString(), by: "cli" } } }, o).state).toBe("off");
+    saveGuard({ ...data, off: { since: at(0).toISOString(), by: "cli" } });
+    expect(breakerNow()).toMatchObject({ reason: "findings" }); // off does not hide the open breaker
+    saveGuard(data);
+    expect(storiesVerdict()).toEqual({ go: false, reason: "breaker", note: "the circuit breaker is open" });
+  });
+
+  it("openBreaker opens once, keeps unknown keys and `from`, and logs one line", () => {
+    saveGuard({ version: 1, extra: 7, breaker: { from: at(0).toISOString() } });
+    const why = { reason: "findings" as const, count: 7, minutes: 60 };
+    expect(openBreaker(why, at(0).toISOString(), { now: at(1) })).toEqual({ ...why, since: at(1).toISOString() });
+    expect(openBreaker({ reason: "failed_fixes", count: 3 }, at(0).toISOString(), { now: at(2) })).toMatchObject({ since: at(1).toISOString(), reason: "findings" });
+    expect(loadGuard()).toMatchObject({ ok: true, data: { extra: 7, breaker: { from: at(0).toISOString(), open: { count: 7 } } } });
+    expect(logLines()).toMatchObject([{ event: "breaker-open", reason: "findings", count: 7, minutes: 60 }]);
+    expect(leftovers()).toEqual([]);
+  });
+
+  it("openBreaker opens nothing when off, or when the file has another `from`", () => {
+    const why = { reason: "failed_fixes" as const, count: 3 };
+    saveGuard({ version: 1, off: { since: at(0).toISOString(), by: "cli" } });
+    expect(openBreaker(why, undefined)).toBeUndefined();
+    saveGuard({ version: 1, breaker: { from: at(1).toISOString() } });
+    expect(openBreaker(why, undefined)).toBeUndefined();
+    expect(openBreaker(why, at(2).toISOString())).toBeUndefined();
+    saveGuard({ version: 1 });
+    expect(openBreaker(why, at(2).toISOString())).toBeUndefined();
+    expect(readFileSync(guardFile(), "utf8")).not.toContain("open");
+    expect(logLines()).toEqual([]);
+  });
+
+  it("openBreaker throws when monitor.lock is held", () => {
+    mkdirSync(lockDir());
+    writeFileSync(join(lockDir(), "pid"), String(process.pid));
+    expect(() => openBreaker({ reason: "failed_fixes", count: 3 }, undefined, { waitMs: 0 })).toThrow("monitor.lock");
+  });
+
+  it("on closes the breaker (changed and closed), starts the counts anew and logs breaker-closed", () => {
+    saveGuard({ version: 1, breaker: { open: open as never } });
+    expect(switchStories("on", UUID, { now: at(3) })).toEqual({ changed: true, state: "on", closed: true });
+    expect(loadGuard()).toEqual({ ok: true, data: { version: 1, breaker: { from: at(3).toISOString() } } });
+    expect(logLines().map((l) => l.event)).toEqual(["on", "breaker-closed"]);
+    expect(switchStories("on", UUID)).toEqual({ changed: false, state: "on" });
+  });
+
+  it("describeEntry and logLine for the new events", () => {
+    expect(describeEntry({ event: "breaker-open", reason: "findings", count: 7, minutes: 60 })).toBe("circuit breaker opened: 7 new findings within 60 minutes");
+    expect(describeEntry({ event: "breaker-open", reason: "failed_fixes", count: 3 })).toBe("circuit breaker opened: the newest 3 runs of bug stories all failed");
+    expect(describeEntry({ event: "breaker-closed" })).toBe("circuit breaker closed");
+    expect(describeEntry({ event: "fix-failed", issue: 12, detector: "restart-loop", count: 2 })).toBe("the fix failed: bug story #12 (restart-loop), 2 times");
+    expect(describeEntry({ event: "fix-failed", issue: 12, detector: "restart-loop", count: 1 })).toBe("the fix failed: bug story #12 (restart-loop), 1 time");
+    expect(describeEntry({ event: "story-skipped", reason: "breaker", detector: "d" })).toBe("bug story skipped (d): the circuit breaker is open");
+    expect(JSON.parse(logLine({ event: "fix-failed", count: 2, minutes: 1.5 }, at(0)))).toMatchObject({ count: 2 });
+    expect(JSON.parse(logLine({ event: "fix-failed", count: 2, minutes: 1.5 }, at(0))).minutes).toBeUndefined();
   });
 });

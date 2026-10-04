@@ -25,6 +25,7 @@ export function storiesLine(m, now = new Date()) {
   let line;
   if (m.state === "off") line = `Bug stories: off since ${storyTime(m.since, now)}`;
   else if (m.state === "quiet") line = `Bug stories: quiet until ${storyTime(m.until, now)} after the restart`;
+  else if (m.state === "breaker") line = `Bug stories: stopped by the circuit breaker since ${storyTime(m.since, now)}${m.why ? ` (${m.why})` : ""}`;
   else if (m.state === "unreadable") line = "Bug stories: stopped. The state file monitor-guard.json cannot be read.";
   else line = `Bug stories: on${m.reportTo === false ? " (no repository is set: monitor.report_to)" : ""}`;
   if (m.reset) line += ` The state file could not be read at ${storyTime(m.reset, now)}; it was kept as monitor-guard.json.broken and started fresh.`;
@@ -35,7 +36,7 @@ export function storiesLine(m, now = new Date()) {
 export function storiesRow(m, reload) {
   if (!m) return null;
   const isOn = m.state === "on" || m.state === "quiet";
-  const wantOn = m.state === "off" || m.state === "unreadable";
+  const wantOn = m.state === "off" || m.state === "unreadable" || m.state === "breaker";
   const click = async () => {
     if (m.state === "unreadable" && !confirm("The state file cannot be read. Switching on keeps it as monitor-guard.json.broken and starts a fresh one. Go on?")) return;
     try {

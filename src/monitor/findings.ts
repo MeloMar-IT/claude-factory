@@ -73,7 +73,15 @@ export interface Finding extends FindingInput {
   streak?: number;
   /** The reasons a story for this finding was skipped and written to the monitor's log already (once per finding and reason). */
   skipped?: string[];
+  /** The fix failed: runs of its bug stories ended as failed. `at` is when the newest of them finished. */
+  fixFailed?: { count: number; at: string };
+  /** First seen during the quiet time after a restart: it does not count for the circuit breaker. */
+  quietStart?: boolean;
+  /** Bug stories this finding had before, which a newer story replaced (newest last, at most 10). */
+  earlier?: { repo: string; issue: number }[];
 }
+
+export const MAX_EARLIER = 10;
 
 export const GONE_AFTER_MS = 24 * 3_600_000;
 export const PRUNE_AFTER_MS = 30 * 86_400_000;
@@ -106,10 +114,10 @@ export function mergeFindings(stored: Finding[], found: FindingInput[], now: Dat
     if (seen.has(input.fingerprint)) continue;
     seen.add(input.fingerprint);
     const have = old.get(input.fingerprint);
-    const carry = have ? { ...(have.report ? { report: have.report } : {}), ...(have.due ? { due: have.due } : {}), ...(have.missedAt ? { missedAt: have.missedAt } : {}), ...(have.skipped ? { skipped: have.skipped } : {}) } : {};
+    const carry = have ? { ...(have.report ? { report: have.report } : {}), ...(have.due ? { due: have.due } : {}), ...(have.missedAt ? { missedAt: have.missedAt } : {}), ...(have.skipped ? { skipped: have.skipped } : {}), ...(have.fixFailed ? { fixFailed: have.fixFailed } : {}), ...(have.earlier ? { earlier: have.earlier } : {}) } : {};
     const days = [...new Set([...(have?.days ?? []), dayOf(now)])].slice(-3);
     if (have && !have.gone) {
-      out.push({ ...input, firstSeen: have.firstSeen, lastSeen: at, count: have.count + 1, gone: false, streak: (have.streak ?? have.count) + 1, days, ...carry });
+      out.push({ ...input, firstSeen: have.firstSeen, lastSeen: at, count: have.count + 1, gone: false, streak: (have.streak ?? have.count) + 1, days, ...(have.quietStart ? { quietStart: true } : {}), ...carry });
     } else {
       const f: Finding = { ...input, firstSeen: at, lastSeen: at, count: 1, gone: false, streak: 1, days, ...carry };
       fresh.push(f);
@@ -172,7 +180,7 @@ const validReport = (r: unknown): r is StoryRef => {
 };
 /** The optional fields of a stored finding: a malformed one is dropped, the finding stays. */
 function tidy(f: Finding): Finding {
-  const { days, due, report, missedAt, streak, skipped, ...rest } = f;
+  const { days, due, report, missedAt, streak, skipped, fixFailed, quietStart, earlier, ...rest } = f;
   return {
     ...rest,
     ...(Number.isInteger(streak) && streak! >= 0 ? { streak } : {}),
@@ -180,6 +188,9 @@ function tidy(f: Finding): Finding {
     ...(isTime(due) ? { due } : {}),
     ...(validReport(report) ? { report } : {}),
     ...(isTime(missedAt) ? { missedAt } : {}),
+    ...(fixFailed && typeof fixFailed === "object" && Number.isInteger(fixFailed.count) && fixFailed.count > 0 && isTime(fixFailed.at) ? { fixFailed: { count: fixFailed.count, at: fixFailed.at } } : {}),
+    ...(quietStart === true ? { quietStart } : {}),
+    ...(Array.isArray(earlier) && earlier.length <= MAX_EARLIER && earlier.every((e) => !!e && typeof e === "object" && typeof e.repo === "string" && Number.isInteger(e.issue)) ? { earlier: earlier.map((e) => ({ repo: e.repo, issue: e.issue })) } : {}),
     ...(Array.isArray(skipped) && skipped.length <= 10 && skipped.every((x) => typeof x === "string" && x.length <= 40) ? { skipped } : {}),
   };
 }
