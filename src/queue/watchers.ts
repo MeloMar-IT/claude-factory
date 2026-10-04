@@ -5,7 +5,8 @@ import { flowDir, parseFlow } from "../flow/load.js";
 import { readRateLimit, type RateReading } from "../github.js";
 import { collectNames } from "../monitor/clean.js";
 import type { DetectorInput, LogLine } from "../monitor/detectors.js";
-import { describeEntry, storiesVerdict, writeLog } from "../monitor/guard.js";
+import { describeEntry, loadGuard, storiesVerdict, writeLog } from "../monitor/guard.js";
+import { activeMutes } from "../monitor/mutes.js";
 import { Monitor } from "../monitor/monitor.js";
 import { buildLabelFor, Reporter } from "../monitor/report.js";
 import type { BuiltinSteps } from "../monitor/story.js";
@@ -121,6 +122,7 @@ export class WatcherManager {
         builtinSteps: () => this.builtinSteps(),
         rateLimit: () => this.rate,
         guard: () => storiesVerdict({ startedAt: this.o.startedAt, cooldownMinutes: this.o.config().monitor.cooldown_minutes }),
+        mutes: (now) => activeMutes(loadGuard(), now),
         record: (e) => {
           writeLog(e, { onError: (m) => this.o.log(`[${cfg.id}] ${m}`) });
           // A made story reaches the activity through the check's actions; only the log gets this line.

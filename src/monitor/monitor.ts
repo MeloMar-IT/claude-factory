@@ -13,6 +13,7 @@ import { loadUpdateState, type UpdateState } from "../self-update-state.js";
 import { decideBreaker, failedFixes, forgetSkip, isStoryRun, keepEarlier, storyKeys, withoutStoryRuns, type FixFailure } from "./breaker.js";
 import { findingsFile, loadFindings, mergeFindings, saveFindings } from "./findings.js";
 import { describeEntry, inQuietTime, loadGuard, openBreaker, storiesState, writeLog, type Loaded } from "./guard.js";
+import { activeMutes, expireMutes, muteFor } from "./mutes.js";
 import type { Reporter } from "./report.js";
 import { ALL_DETECTORS } from "./work-detectors.js";
 
@@ -257,6 +258,7 @@ export class Monitor {
     if (guard) {
       if (inQuietTime(start, guard.startedAt, config.cooldown_minutes)) for (const f of merged.fresh) f.quietStart = true;
       ({ findings, failed } = failedFixes(findings, storyRuns));
+      for (const m of expireMutes(start, { now: start, onLogError: guard.onLogError })) this.act(describeEntry({ event: "mute-ended", reason: "expired", detector: m.detector }));
       loaded = loadGuard();
       // The breaker is closed again: stories that were skipped because of it are written to the log again if it reopens.
       if (loaded.ok && !loaded.data.breaker?.open) findings = forgetSkip(findings, "breaker");
@@ -273,10 +275,18 @@ export class Monitor {
       const state = storiesState(loaded, { startedAt: guard.startedAt, cooldownMinutes: config.cooldown_minutes, now: start });
       if (state.state === "on" || state.state === "quiet") {
         const from = loaded.data.breaker?.from;
-        const why = decideBreaker({ findings, storyRuns, config: config.breaker, now: start, from });
+        // Muted findings, and the runs of their stories, do not count.
+        const decide = (l: Loaded) => {
+          const mutes = activeMutes(l, start);
+          if (!mutes.length) return decideBreaker({ findings, storyRuns, config: config.breaker, now: start, from });
+          const muted = findings.filter((f) => muteFor(mutes, f));
+          const keys = storyKeys(muted);
+          return decideBreaker({ findings: findings.filter((f) => !muted.includes(f)), storyRuns: storyRuns.filter((b) => !isStoryRun(b, keys)), config: config.breaker, now: start, from });
+        };
+        const why = decide(loaded);
         if (why) {
           guard.beforeOpen?.();
-          const open = openBreaker(why, from, { now: start, onLogError: guard.onLogError });
+          const open = openBreaker(why, from, { now: start, onLogError: guard.onLogError, recheck: (data) => decide({ ok: true, data }) });
           if (open && open.since === start.toISOString()) this.act(describeEntry({ event: "breaker-open", reason: open.reason, count: open.count, minutes: "minutes" in open ? open.minutes : undefined }));
         }
       }

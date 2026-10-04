@@ -31,6 +31,27 @@ export function breakerWhy(w: { reason: string; count: number; minutes?: number 
   return w.reason === "findings" ? `${w.count} new findings within ${w.minutes} minutes` : `the newest ${w.count} runs of bug stories all failed`;
 }
 
+/** A mute made by an admin: one detector (by name) or one finding (by fingerprint), for a time or for good. `by` is an account id. */
+export interface Mute {
+  id: string;
+  kind: "detector" | "finding";
+  detector: string;
+  /** Only for a finding mute. Never leaves the server. */
+  fingerprint?: string;
+  reason: string;
+  since: string;
+  until?: string;
+  by: string;
+}
+
+/** The longest a mute may last, in hours (one year). */
+export const MAX_MUTE_HOURS = 8760;
+/** At most this many mutes are stored. */
+export const MAX_MUTES = 200;
+const CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
+/** A reason: 1 to 200 characters, trimmed, without control characters (the rule of the audit log). */
+export const validReason = (s: unknown): s is string => typeof s === "string" && s.length >= 1 && s.length <= 200 && s === s.trim() && !CONTROL.test(s);
+
 /** The state file. Keys that this version does not know are kept. */
 export interface GuardData {
   version: number;
@@ -41,6 +62,8 @@ export interface GuardData {
    * A `from` can be missing (never switched on).
    */
   breaker?: { from?: string; open?: BreakerOpen };
+  /** The admin's mutes of a detector or a finding. */
+  mutes?: Mute[];
   /** When the file was last started fresh after it could not be read. */
   reset?: string;
   [key: string]: unknown;
@@ -49,7 +72,17 @@ export interface GuardData {
 export type Loaded = { ok: true; data: GuardData } | { ok: false };
 
 const isTime = (x: unknown): x is string => typeof x === "string" && !Number.isNaN(Date.parse(x));
-const BY_RE = /^(cli|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+export const BY_RE = /^(cli|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+
+const validMute = (m: unknown): boolean => {
+  const x = m as Record<string, unknown>;
+  if (!x || typeof x !== "object" || Array.isArray(x)) return false;
+  if (typeof x.id !== "string" || !/^[0-9a-f]{16}$/.test(x.id)) return false;
+  if (x.kind !== "detector" && x.kind !== "finding") return false;
+  if (typeof x.detector !== "string" || !x.detector || x.detector.length > 80) return false;
+  if (x.kind === "finding" ? typeof x.fingerprint !== "string" || !x.fingerprint : x.fingerprint !== undefined) return false;
+  return validReason(x.reason) && isTime(x.since) && (x.until === undefined || isTime(x.until)) && typeof x.by === "string" && BY_RE.test(x.by);
+};
 
 function parseGuard(text: string): GuardData | undefined {
   let d: unknown;
@@ -66,6 +99,7 @@ function parseGuard(text: string): GuardData | undefined {
     if (!o || typeof o !== "object" || !isTime(o.since) || typeof o.by !== "string" || !BY_RE.test(o.by)) return undefined;
   }
   if (x.reset !== undefined && !isTime(x.reset)) return undefined;
+  if (x.mutes !== undefined && (!Array.isArray(x.mutes) || x.mutes.length > MAX_MUTES || !x.mutes.every(validMute))) return undefined;
   if (x.breaker !== undefined) {
     const b = x.breaker as unknown as Record<string, unknown>;
     if (!b || typeof b !== "object" || Array.isArray(b)) return undefined;
@@ -171,14 +205,18 @@ export function storiesVerdict(o: StateOptions = {}): Verdict {
 // ── the log ──
 
 export interface LogEntry {
-  event: "off" | "on" | "story-made" | "story-skipped" | "breaker-open" | "breaker-closed" | "fix-failed";
+  event: "off" | "on" | "story-made" | "story-skipped" | "breaker-open" | "breaker-closed" | "fix-failed" | "mute-made" | "mute-ended";
   by?: string;
   /** breaker-open: findings or failed_fixes (in `reason`), how many, and within how many minutes. fix-failed: how many times. */
   count?: number;
   minutes?: number;
   reset?: boolean;
-  /** Why a story was skipped: off, cooldown, unreadable, day_limit, check_limit, request_limit, github. */
+  /** Why a story was skipped: off, cooldown, unreadable, muted, day_limit, check_limit, request_limit, github. mute-ended: `expired` for a mute that ran out. */
   reason?: string;
+  /** The id of a mute, its reason text, and when it ends (for mute-made, mute-ended and a story skipped because of a mute). */
+  mute?: string;
+  text?: string;
+  until?: string;
   detector?: string;
   fingerprint?: string;
   repo?: string;
@@ -202,6 +240,10 @@ export function describeEntry(e: LogEntry): string {
       return "circuit breaker closed";
     case "fix-failed":
       return `the fix failed: bug story #${e.issue ?? "?"} (${e.detector ?? ""}), ${e.count ?? 1} ${e.count === 1 ? "time" : "times"}`;
+    case "mute-made":
+      return `muted ${e.fingerprint ? `a finding of ${e.detector ?? ""}` : (e.detector ?? "")} ${e.until ? `until ${e.until}` : "for good"}: ${e.text ?? ""}`;
+    case "mute-ended":
+      return `mute ended (${e.detector ?? ""})${e.reason === "expired" ? ": it ran out" : ""}`;
     default: {
       const why: Record<string, string> = {
         off: "bug stories are off",
@@ -212,8 +254,9 @@ export function describeEntry(e: LogEntry): string {
         check_limit: "the limit for one check is reached",
         request_limit: "GitHub's request limit is used up",
         github: "GitHub did not answer",
+        muted: "muted",
       };
-      return `bug story skipped (${e.detector ?? ""}): ${why[e.reason ?? ""] ?? e.reason ?? ""}`;
+      return `bug story skipped (${e.detector ?? ""}): ${why[e.reason ?? ""] ?? e.reason ?? ""}${e.reason === "muted" && e.text ? `: ${e.text}` : ""}`;
     }
   }
 }
@@ -233,6 +276,9 @@ export function logLine(e: LogEntry, at: Date): string {
   if (e.reason !== undefined) o.reason = cut(e.reason, 40);
   if (e.detector !== undefined) o.detector = cut(e.detector, 80);
   if (e.fingerprint !== undefined) o.fingerprint = cut(e.fingerprint, 200);
+  if (e.mute !== undefined) o.mute = cut(e.mute, 40);
+  if (e.text !== undefined) o.text = cut(e.text, 200);
+  if (e.until !== undefined) o.until = cut(e.until, 40);
   if (e.repo !== undefined) o.repo = cut(e.repo, 100);
   if (e.issue !== undefined && Number.isInteger(e.issue)) o.issue = e.issue;
   if (e.count !== undefined && Number.isInteger(e.count)) o.count = e.count;
@@ -437,7 +483,7 @@ export const BREAKER_LOCK_WAIT_MS = 200;
  * one, a switch-on came in between and nothing is opened. Returns the open breaker (also an existing one), or undefined
  * when nothing was opened (off, unreadable, or another `from`). Throws when the lock is not free.
  */
-export function openBreaker(why: BreakerWhy, from: string | undefined, o: SwitchOptions = {}): BreakerOpen | undefined {
+export function openBreaker(why: BreakerWhy, from: string | undefined, o: SwitchOptions & { recheck?: (data: GuardData) => BreakerWhy | undefined } = {}): BreakerOpen | undefined {
   const file = o.file ?? guardFile();
   const since = (o.now ?? new Date()).toISOString();
   return withMonitorLock((locked, own) => {
@@ -446,11 +492,14 @@ export function openBreaker(why: BreakerWhy, from: string | undefined, o: Switch
     if (!loaded.ok || loaded.data.off) return undefined;
     if (loaded.data.breaker?.open) return loaded.data.breaker.open;
     if (loaded.data.breaker?.from !== from) return undefined;
-    const open: BreakerOpen = { ...why, since };
+    // Asked again under the lock: a mute made since the decision may take the reason away (or change it).
+    const now = o.recheck ? o.recheck(loaded.data) : why;
+    if (!now) return undefined;
+    const open: BreakerOpen = { ...now, since };
     saveGuard({ ...loaded.data, breaker: { ...loaded.data.breaker, open } }, file, () => {
       if (!own()) throw new Error("monitor.lock was taken over; the circuit breaker was not opened");
     });
-    writeLog({ event: "breaker-open", reason: why.reason, count: why.count, ...(why.reason === "findings" ? { minutes: why.minutes } : {}) }, { now: o.now, onError: o.onLogError, file: o.logFile });
+    writeLog({ event: "breaker-open", reason: now.reason, count: now.count, ...(now.reason === "findings" ? { minutes: now.minutes } : {}) }, { now: o.now, onError: o.onLogError, file: o.logFile });
     return open;
   }, o.waitMs ?? BREAKER_LOCK_WAIT_MS);
 }

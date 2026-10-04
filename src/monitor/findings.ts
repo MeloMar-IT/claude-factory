@@ -203,21 +203,29 @@ const valid = (f: unknown): f is Finding => {
     && typeof x.count === "number" && typeof x.gone === "boolean" && !!x.evidence && typeof x.evidence === "object";
 };
 
-/** Reads the findings. A missing file is empty. A broken file is kept as `<file>.broken` and reads as empty. */
-export function loadFindings(file = findingsFile()): { findings: Finding[]; broken: boolean } {
+/** Reads the findings and changes nothing. A missing file is empty; a file that cannot be read is empty and `broken`. */
+export function readFindings(file = findingsFile()): { findings: Finding[]; broken: boolean } {
   if (!existsSync(file)) return { findings: [], broken: false };
   try {
     const data = JSON.parse(readFileSync(file, "utf8")) as { findings?: unknown };
     if (!Array.isArray(data.findings) || !data.findings.every(valid)) throw new Error("wrong shape");
     return { findings: data.findings.map(tidy), broken: false };
   } catch {
+    return { findings: [], broken: true };
+  }
+}
+
+/** Reads the findings. A missing file is empty. A broken file is kept as `<file>.broken` and reads as empty. */
+export function loadFindings(file = findingsFile()): { findings: Finding[]; broken: boolean } {
+  const r = readFindings(file);
+  if (r.broken) {
     try {
       renameSync(file, `${file}.broken`);
     } catch {
       // nothing more to do: the file is read as empty anyway
     }
-    return { findings: [], broken: true };
   }
+  return r;
 }
 
 /** Writes through a temporary file, so a crash never leaves half a file. */

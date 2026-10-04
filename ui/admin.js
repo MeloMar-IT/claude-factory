@@ -1,5 +1,6 @@
 import { api } from "./api.js";
 import { h, modal, mount, timeAgo, toast } from "./dom.js";
+import { monitorLists } from "./monitor.js";
 import { nextList, statusMark, watcherNext } from "./next.js";
 
 const f = (label, el, hint) => h("label", { class: "field" }, h("span", {}, label), el, hint ? h("small", {}, hint) : null);
@@ -247,6 +248,7 @@ export async function renderWatchers(main) {
           st?.nextTick ? ` · next ${new Date(st.nextTick).toLocaleTimeString()}` : ""),
         w.enabled && watcherNext(w).length ? h("div", {}, h("div", { class: "muted", style: { fontSize: "12.5px", marginTop: "6px" } }, "What happens next:"), nextList(watcherNext(w))) : null,
         w.source === "monitor" ? storiesRow(mon, reload) : null,
+        w.source === "monitor" ? monitorLists(mon, reload) : null,
         watcherNotes(st),
         st?.lastError ? h("details", {}, h("summary", {}, "Error details"), h("pre", { class: "mono" }, st.lastError)) : null,
         st?.lastActions?.length ? h("details", {}, h("summary", {}, `Recent activity (${st.lastActions.length})`), h("pre", { class: "mono" }, st.lastActions.join("\n"))) : null);
